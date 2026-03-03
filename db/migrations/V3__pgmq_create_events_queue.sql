@@ -1,0 +1,1 @@
+select pgmq.create('events');

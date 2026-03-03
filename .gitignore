@@ -1,0 +1,25 @@
+# Local environment files
+.env.local
+.env
+.env.*
+!.env.example
+**/.env.local
+**/.env
+**/.env.*
+!**/.env.example
+
+# Generated local Worker secret bindings
+worker/.dev.vars
+worker/.env
+worker/.env.*
+**/.dev.vars
+**/.dev.vars.*
+
+# Generated build artifacts
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+**/coverage/
+**/.wrangler/
+**/*.tsbuildinfo
