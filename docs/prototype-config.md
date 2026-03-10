@@ -6,7 +6,8 @@ This prototype uses Cloudflare Worker ingestion, Neon Postgres queue storage, an
 
 | Variable | Used By | Purpose |
 |----------|---------|---------|
-| `TRELLO_WEBHOOK_SECRET` | Worker | Validates webhook authenticity header.
+| `TRELLO_API_SECRET` | Worker | Trello API secret used for HMAC-SHA1 webhook signature verification.
+| `TRELLO_WEBHOOK_CALLBACK_URL` | Worker | The registered webhook callback URL (part of HMAC input).
 | `NEON_DATABASE_URL` | Worker, Lambda | Postgres connection string for queue/idempotency tables.
 | `LAMBDA_KICK_URL` | Worker | Optional function URL for `POST /drain` kick. If omitted/blank, Worker skips kick.
 | `INTERNAL_KICK_SECRET` | Worker, Lambda | Required only when `LAMBDA_KICK_URL` is configured.
@@ -84,7 +85,7 @@ Notes:
 Use Wrangler secrets for sensitive values:
 
 ```bash
-wrangler secret put TRELLO_WEBHOOK_SECRET
+wrangler secret put TRELLO_API_SECRET
 wrangler secret put NEON_DATABASE_URL
 wrangler secret put INTERNAL_KICK_SECRET
 ```
@@ -92,6 +93,7 @@ wrangler secret put INTERNAL_KICK_SECRET
 Set non-secret vars in `worker/wrangler.toml`:
 
 - `LAMBDA_KICK_URL` (optional for local-only queueing flow)
+- `TRELLO_WEBHOOK_CALLBACK_URL` (the registered callback URL for HMAC verification)
 - `PGMQ_QUEUE_NAME` (optional, defaults to `events`)
 
 Kick behavior:

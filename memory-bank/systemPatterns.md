@@ -43,6 +43,14 @@ Every agent returns a structured JSON payload:
 ```
 Agents do NOT move cards. The orchestrator owns all transitions.
 
+### Webhook Authentication
+Trello webhooks are validated using HMAC-SHA1 signature verification:
+- Trello sends `x-trello-webhook` header with Base64-encoded HMAC-SHA1 digest
+- Digest is computed over `(request body + callback URL)` using `TRELLO_API_SECRET` as key
+- Worker performs constant-time comparison to prevent timing attacks
+- HEAD requests to `/webhooks/trello` return 200 (Trello URL verification)
+- Non-card events (board, list, member changes) are accepted but not enqueued
+
 ### Idempotency
 Idempotency key: **Trello `actionId`** (from webhook payload) — unique per event at source.  
 A unique constraint on the `processed_events` table enforces exactly-once execution.  

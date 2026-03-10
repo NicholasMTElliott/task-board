@@ -1,7 +1,8 @@
 import { neon } from "@neondatabase/serverless";
 
 export interface Env {
-  TRELLO_WEBHOOK_SECRET: string;
+  TRELLO_API_SECRET: string;
+  TRELLO_WEBHOOK_CALLBACK_URL: string;
   NEON_DATABASE_URL: string;
   PGMQ_QUEUE_NAME?: string;
   LAMBDA_KICK_URL?: string;
@@ -11,8 +12,15 @@ export interface Env {
 interface TrelloWebhookPayload {
   action?: {
     id?: string;
+    type?: string;
     data?: {
       card?: {
+        id?: string;
+      };
+      listBefore?: {
+        id?: string;
+      };
+      listAfter?: {
         id?: string;
       };
     };
@@ -27,14 +35,49 @@ const jsonResponse = (status: number, body: unknown): Response =>
     }
   });
 
-const hasValidWebhookSecret = (request: Request, env: Env): boolean => {
-  const providedSecret = request.headers.get("x-trello-webhook-secret");
-  return Boolean(env.TRELLO_WEBHOOK_SECRET) && providedSecret === env.TRELLO_WEBHOOK_SECRET;
+const verifyTrelloWebhook = async (
+  body: string,
+  signatureHeader: string | null,
+  callbackUrl: string,
+  apiSecret: string
+): Promise<boolean> => {
+  if (!signatureHeader) return false;
+
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(apiSecret),
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"]
+  );
+
+  const signed = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    encoder.encode(body + callbackUrl)
+  );
+
+  const expectedSignature = btoa(
+    String.fromCharCode(...new Uint8Array(signed))
+  );
+
+  // Constant-time comparison to prevent timing attacks
+  if (expectedSignature.length !== signatureHeader.length) return false;
+  const a = encoder.encode(expectedSignature);
+  const b = encoder.encode(signatureHeader);
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) {
+    mismatch |= a[i] ^ b[i];
+  }
+  return mismatch === 0;
 };
 
-const extractActionId = (payload: TrelloWebhookPayload): string | null => payload.action?.id ?? null;
+const extractActionId = (payload: TrelloWebhookPayload): string | null =>
+  payload.action?.id ?? null;
 
-const extractCardId = (payload: TrelloWebhookPayload): string | null => payload.action?.data?.card?.id ?? null;
+const extractCardId = (payload: TrelloWebhookPayload): string | null =>
+  payload.action?.data?.card?.id ?? null;
 
 const getLambdaKickUrl = (env: Env): string | null => {
   const configuredUrl = env.LAMBDA_KICK_URL?.trim();
@@ -108,18 +151,33 @@ export default {
       return jsonResponse(200, { ok: true, service: "task-board-webhook-worker" });
     }
 
+    // Trello sends HEAD to verify the webhook callback URL exists
+    if (request.method === "HEAD" && url.pathname === "/webhooks/trello") {
+      return new Response(null, { status: 200 });
+    }
+
     if (request.method !== "POST" || url.pathname !== "/webhooks/trello") {
       return jsonResponse(404, { error: "Not found" });
     }
 
-    if (!hasValidWebhookSecret(request, env)) {
-      return jsonResponse(401, { error: "Unauthorized" });
+    // Read body as text first — needed for HMAC signature verification
+    const bodyText = await request.text();
+
+    const isValid = await verifyTrelloWebhook(
+      bodyText,
+      request.headers.get("x-trello-webhook"),
+      env.TRELLO_WEBHOOK_CALLBACK_URL,
+      env.TRELLO_API_SECRET
+    );
+
+    if (!isValid) {
+      return jsonResponse(401, { error: "Invalid webhook signature" });
     }
 
     let payload: TrelloWebhookPayload;
 
     try {
-      payload = (await request.json()) as TrelloWebhookPayload;
+      payload = JSON.parse(bodyText) as TrelloWebhookPayload;
     } catch {
       return jsonResponse(400, { error: "Invalid JSON payload" });
     }
@@ -130,7 +188,19 @@ export default {
       return jsonResponse(400, { error: "Missing action.id" });
     }
 
+    // Only process events that involve a card — ignore board/list/member events
     const cardId = extractCardId(payload);
+
+    if (!cardId) {
+      console.log(
+        JSON.stringify({
+          message: "Webhook ignored — no card in event",
+          actionId,
+          actionType: payload.action?.type ?? "unknown"
+        })
+      );
+      return jsonResponse(200, { accepted: false, reason: "no_card", actionId });
+    }
 
     let messageId: number;
 

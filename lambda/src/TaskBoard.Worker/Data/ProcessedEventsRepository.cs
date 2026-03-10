@@ -2,7 +2,7 @@ using Npgsql;
 
 namespace TaskBoard.Worker.Data;
 
-public sealed class ProcessedEventsRepository(NpgsqlDataSource dataSource)
+public sealed class ProcessedEventsRepository(NpgsqlDataSource dataSource) : IProcessedEventsRepository
 {
     private readonly NpgsqlDataSource _dataSource = dataSource;
 

@@ -38,7 +38,8 @@ Get-Content -Path $EnvFile | ForEach-Object {
 }
 
 $workerKeys = @(
-    "TRELLO_WEBHOOK_SECRET",
+    "TRELLO_API_SECRET",
+    "TRELLO_WEBHOOK_CALLBACK_URL",
     "NEON_DATABASE_URL",
     "LAMBDA_KICK_URL",
     "INTERNAL_KICK_SECRET"

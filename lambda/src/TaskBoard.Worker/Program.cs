@@ -26,8 +26,8 @@ builder.Services.AddSingleton<NpgmqClient>(serviceProvider =>
     return new NpgmqClient(dataSource);
 });
 
-builder.Services.AddSingleton<QueueRepository>();
-builder.Services.AddSingleton<ProcessedEventsRepository>();
+builder.Services.AddSingleton<IQueueRepository, QueueRepository>();
+builder.Services.AddSingleton<IProcessedEventsRepository, ProcessedEventsRepository>();
 builder.Services.Configure<QueueProcessingOptions>(builder.Configuration.GetSection(QueueProcessingOptions.SectionName));
 builder.Services.AddSingleton<EventProcessor>();
 builder.Services.AddSingleton<DrainHandler>();

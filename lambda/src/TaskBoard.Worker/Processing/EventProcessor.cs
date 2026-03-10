@@ -5,13 +5,13 @@ using TaskBoard.Worker.Models;
 namespace TaskBoard.Worker.Processing;
 
 public sealed class EventProcessor(
-    QueueRepository queueRepository,
-    ProcessedEventsRepository processedEventsRepository,
+    IQueueRepository queueRepository,
+    IProcessedEventsRepository processedEventsRepository,
     IOptions<QueueProcessingOptions> queueOptions,
     ILogger<EventProcessor> logger)
 {
-    private readonly QueueRepository _queueRepository = queueRepository;
-    private readonly ProcessedEventsRepository _processedEventsRepository = processedEventsRepository;
+    private readonly IQueueRepository _queueRepository = queueRepository;
+    private readonly IProcessedEventsRepository _processedEventsRepository = processedEventsRepository;
     private readonly QueueProcessingOptions _queueOptions = queueOptions.Value;
     private readonly ILogger<EventProcessor> _logger = logger;
 

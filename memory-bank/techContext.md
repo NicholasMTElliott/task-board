@@ -88,5 +88,5 @@
 - [ ] IaC toolchain (Terraform vs. SAM vs. CDK)
 - [ ] OpenAI model per role (all gpt-4.1, or mix with gpt-4o-mini for cheaper roles)
 - [ ] Structured output strategy (JSON mode vs. response_format schema)
-- [ ] Trello webhook auth model finalization in Worker
+- [x] ~~Trello webhook auth model finalization in Worker~~ (HMAC-SHA1 implemented)
 - [ ] Max retry and dead-letter policy for selected queue backend

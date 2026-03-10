@@ -1,0 +1,93 @@
+{
+  "states": {
+    "LIST_ID_BACKLOG": {
+      "name": "Backlog",
+      "role": null,
+      "gateType": "manual_entry",
+      "transitions": {}
+    },
+    "LIST_ID_REQUIREMENTS": {
+      "name": "Requirements",
+      "role": "business_analyst",
+      "gateType": "agent_run",
+      "transitions": {
+        "COMPLETE": "LIST_ID_REQUIREMENTS_REVIEW",
+        "NEEDS_INFO": "LIST_ID_QUESTIONS"
+      }
+    },
+    "LIST_ID_REQUIREMENTS_REVIEW": {
+      "name": "Requirements Review",
+      "role": null,
+      "gateType": "manual_gate",
+      "transitions": {}
+    },
+    "LIST_ID_DESIGN": {
+      "name": "Design",
+      "role": "senior_engineer",
+      "gateType": "agent_run",
+      "transitions": {
+        "COMPLETE": "LIST_ID_DESIGN_REVIEW",
+        "NEEDS_INFO": "LIST_ID_QUESTIONS"
+      }
+    },
+    "LIST_ID_DESIGN_REVIEW": {
+      "name": "Design Review",
+      "role": null,
+      "gateType": "manual_gate",
+      "transitions": {}
+    },
+    "LIST_ID_IMPLEMENTATION": {
+      "name": "Implementation",
+      "role": "senior_engineer",
+      "gateType": "agent_run",
+      "transitions": {
+        "COMPLETE": "LIST_ID_CODE_REVIEW",
+        "NEEDS_INFO": "LIST_ID_QUESTIONS"
+      }
+    },
+    "LIST_ID_CODE_REVIEW": {
+      "name": "Code Review",
+      "role": null,
+      "gateType": "manual_gate",
+      "transitions": {}
+    },
+    "LIST_ID_TESTING": {
+      "name": "Testing",
+      "role": "qa",
+      "gateType": "agent_run",
+      "transitions": {
+        "COMPLETE": "LIST_ID_DONE",
+        "NEEDS_INFO": "LIST_ID_QUESTIONS"
+      }
+    },
+    "LIST_ID_DONE": {
+      "name": "Done",
+      "role": null,
+      "gateType": "terminal",
+      "transitions": {}
+    },
+    "LIST_ID_QUESTIONS": {
+      "name": "Questions",
+      "role": null,
+      "gateType": "holding",
+      "transitions": {}
+    }
+  },
+  "roles": {
+    "business_analyst": {
+      "model": "gpt-4.1",
+      "systemPrompt": "You are a Business Analyst. Extract, clarify, and document requirements from the card description. Produce structured Requirements, Open Questions, and Acceptance Criteria sections.",
+      "sections": ["Requirements", "Open Questions", "Acceptance Criteria"]
+    },
+    "senior_engineer": {
+      "model": "gpt-4.1",
+      "systemPrompt": "You are a Senior Software Engineer. Produce structured Technical Design, identify edge cases, and create implementation breakdowns.",
+      "sections": ["Technical Design", "Decisions"]
+    },
+    "qa": {
+      "model": "gpt-4.1",
+      "systemPrompt": "You are a QA Engineer. Generate a comprehensive test plan based on the requirements and technical design documented on the card.",
+      "sections": ["Test Plan"]
+    }
+  }
+}

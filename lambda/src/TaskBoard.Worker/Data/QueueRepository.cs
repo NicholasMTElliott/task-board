@@ -4,7 +4,7 @@ using TaskBoard.Worker.Models;
 
 namespace TaskBoard.Worker.Data;
 
-public sealed class QueueRepository(NpgmqClient npgmqClient, ILogger<QueueRepository> logger)
+public sealed class QueueRepository(NpgmqClient npgmqClient, ILogger<QueueRepository> logger) : IQueueRepository
 {
     private readonly NpgmqClient _npgmqClient = npgmqClient;
     private readonly ILogger<QueueRepository> _logger = logger;
@@ -26,17 +26,20 @@ public sealed class QueueRepository(NpgmqClient npgmqClient, ILogger<QueueReposi
 
     public async Task MarkSucceededAsync(long messageId, CancellationToken cancellationToken)
     {
-        var deleted = await _npgmqClient.DeleteAsync(_queueName, messageId, cancellationToken);
-        if (deleted)
+        // Archive first to preserve audit trail, fall back to delete if archive fails
+        var archived = await _npgmqClient.ArchiveAsync(_queueName, messageId, cancellationToken);
+        if (archived)
         {
             return;
         }
 
-        var archived = await _npgmqClient.ArchiveAsync(_queueName, messageId, cancellationToken);
-        if (!archived)
+        var deleted = await _npgmqClient.DeleteAsync(_queueName, messageId, cancellationToken);
+        if (!deleted)
         {
-            throw new InvalidOperationException("NpgmqClient does not expose DeleteAsync or ArchiveAsync compatible methods.");
+            throw new InvalidOperationException($"Failed to archive or delete message {messageId} from queue '{_queueName}'.");
         }
+
+        _logger.LogWarning("Message {MessageId} was deleted instead of archived — audit trail not preserved.", messageId);
     }
 
     public Task MarkFailedAsync(long messageId, string reason, CancellationToken cancellationToken)
