@@ -44,10 +44,18 @@ This sync does two things:
 Run local .NET processor with env loaded from `.env.local`:
 
 ```bash
-./scripts/local-secrets.ps1 -Action run-dotnet -DotnetArgs "--mode","one"
-./scripts/local-secrets.ps1 -Action run-dotnet -DotnetArgs "--mode","wait","--wait-seconds","30"
-./scripts/local-secrets.ps1 -Action run-dotnet -DotnetArgs "--mode","loop"
+./scripts/local-secrets.ps1 -Action run-dotnet -Mode one
+./scripts/local-secrets.ps1 -Action run-dotnet -Mode wait -WaitSeconds 30
+./scripts/local-secrets.ps1 -Action run-dotnet -Mode loop
 ```
+
+Optional timeout guard for local runs:
+
+```bash
+./scripts/local-secrets.ps1 -Action run-dotnet -RunTimeoutSeconds 30 -Mode one
+```
+
+When timeout is configured and exceeded, the script terminates the process and exits non-zero (`124`).
 
 `NEON_DATABASE_URL` supports both Npgsql key/value format and Neon URI format. A direct Neon copy/paste URI is valid:
 
@@ -135,6 +143,36 @@ dotnet run --project lambda/src/TaskBoard.Worker -- --mode loop
 - `one` pulls and processes up to one message.
 - `wait` polls up to the wait window for one message.
 - `loop` runs continuously until stopped.
+
+## Local Webhook Simulation + Validation
+
+Run from repo root while Worker is running in another terminal (`cd worker && npx wrangler dev`):
+
+```bash
+pwsh -File scripts/run-local-webhook-smoke.ps1
+```
+
+The smoke script now performs queue cleanup before simulation by default via `scripts/reset-queue-state.ps1`.
+Default cleanup scope is synthetic local test IDs (`act_%`) in `pgmq.q_<queue>`, `pgmq.a_<queue>`, and `processed_events`.
+
+Optional flags:
+- `-SkipReset` to preserve existing queue state
+- `-SkipMigrate` to skip Flyway migrate
+
+Manual reset examples:
+
+```bash
+pwsh -File scripts/reset-queue-state.ps1
+pwsh -File scripts/reset-queue-state.ps1 -IncludeAll
+```
+
+Contract-only checks:
+
+```bash
+pwsh -File scripts/run-worker-contract-tests.ps1
+```
+
+See `docs/local-webhook-smoke.md` for detailed steps and utility scripts.
 
 ## Security Notes
 

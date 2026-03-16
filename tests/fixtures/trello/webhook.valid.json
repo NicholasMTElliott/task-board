@@ -1,0 +1,10 @@
+{
+  "action": {
+    "id": "act_local_smoke_001",
+    "data": {
+      "card": {
+        "id": "card_local_smoke_001"
+      }
+    }
+  }
+}

@@ -9,6 +9,16 @@ export interface Env {
   INTERNAL_KICK_SECRET?: string;
 }
 
+export interface WebhookDependencies {
+  enqueueWebhookEvent: (
+    env: Env,
+    actionId: string,
+    cardId: string | null,
+    payload: TrelloWebhookPayload
+  ) => Promise<number>;
+  kickLambda: (env: Env, actionId: string) => Promise<void>;
+}
+
 interface TrelloWebhookPayload {
   action?: {
     id?: string;
@@ -108,11 +118,18 @@ const enqueueWebhookEvent = async (
 
   const messageId = (rows as Array<{ message_id: unknown }>)[0]?.message_id;
 
-  if (typeof messageId !== "number") {
+  const normalizedMessageId =
+    typeof messageId === "number"
+      ? messageId
+      : typeof messageId === "string"
+        ? Number.parseInt(messageId, 10)
+        : Number.NaN;
+
+  if (!Number.isFinite(normalizedMessageId)) {
     throw new Error("PGMQ enqueue did not return a message_id");
   }
 
-  return messageId;
+  return normalizedMessageId;
 };
 
 const kickLambda = async (env: Env, actionId: string): Promise<void> => {
@@ -143,7 +160,7 @@ const kickLambda = async (env: Env, actionId: string): Promise<void> => {
   }
 };
 
-export default {
+export const createWebhookHandler = (dependencies: WebhookDependencies) => ({
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
@@ -205,7 +222,7 @@ export default {
     let messageId: number;
 
     try {
-      messageId = await enqueueWebhookEvent(env, actionId, cardId, payload);
+      messageId = await dependencies.enqueueWebhookEvent(env, actionId, cardId, payload);
     } catch (error) {
       console.error(
         JSON.stringify({
@@ -241,7 +258,7 @@ export default {
       );
     } else {
       try {
-        await kickLambda(env, actionId);
+        await dependencies.kickLambda(env, actionId);
         console.log(
           JSON.stringify({
             message: "Lambda kick succeeded",
@@ -263,4 +280,9 @@ export default {
 
     return jsonResponse(200, { accepted: true, actionId });
   }
-};
+});
+
+export default createWebhookHandler({
+  enqueueWebhookEvent,
+  kickLambda
+});

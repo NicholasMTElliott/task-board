@@ -4,6 +4,10 @@ param(
     [string]$EnvFile = ".env.local",
     [string]$WorkerDevVarsPath = "worker/.dev.vars",
     [string]$DotnetProjectPath = "lambda/src/TaskBoard.Worker",
+    [int]$RunTimeoutSeconds = 0,
+    [ValidateSet("one", "wait", "loop")]
+    [string]$Mode,
+    [int]$WaitSeconds = 30,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$DotnetArgs
 )
@@ -53,7 +57,7 @@ foreach ($key in $workerKeys) {
 }
 
 $workerDir = Split-Path -Parent $WorkerDevVarsPath
-if (-not (Test-Path -Path $workerDir)) {
+if (-not [string]::IsNullOrWhiteSpace($workerDir) -and -not (Test-Path -Path $workerDir)) {
     New-Item -ItemType Directory -Path $workerDir | Out-Null
 }
 
@@ -61,6 +65,76 @@ Set-Content -Path $WorkerDevVarsPath -Value ($workerLines -join "`n")
 Write-Host "Generated $WorkerDevVarsPath from $EnvFile"
 
 if ($Action -eq "run-dotnet") {
-    & dotnet run --project $DotnetProjectPath -- @DotnetArgs
-    exit $LASTEXITCODE
+    if ([string]::IsNullOrWhiteSpace($Mode) -and (-not $DotnetArgs -or $DotnetArgs.Length -eq 0)) {
+        throw "Mode or DotnetArgs is required for run-dotnet. Example: -Mode one"
+    }
+
+    $dotnetArgsToRun = @("run", "--no-launch-profile", "--project", $DotnetProjectPath, "--")
+
+    if (-not [string]::IsNullOrWhiteSpace($Mode)) {
+        $dotnetArgsToRun += @("--mode", $Mode)
+
+        if ($Mode -eq "wait") {
+            $dotnetArgsToRun += @("--wait-seconds", $WaitSeconds)
+        }
+    }
+
+    if ($DotnetArgs -and $DotnetArgs.Length -gt 0) {
+        $dotnetArgsToRun += $DotnetArgs
+    }
+
+    if ($RunTimeoutSeconds -le 0) {
+        & dotnet @dotnetArgsToRun
+        exit $LASTEXITCODE
+    }
+
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+
+    try {
+        $process = Start-Process -FilePath "dotnet" -ArgumentList $dotnetArgsToRun -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+
+        try {
+            $null = $process | Wait-Process -Timeout $RunTimeoutSeconds -ErrorAction Stop
+        }
+        catch {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+
+            $stdout = if (Test-Path -Path $stdoutPath) { Get-Content -Path $stdoutPath -Raw } else { "" }
+            $stderr = if (Test-Path -Path $stderrPath) { Get-Content -Path $stderrPath -Raw } else { "" }
+
+            if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+                Write-Host $stdout
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+                Write-Error $stderr
+            }
+
+            Write-Error "dotnet run timed out after $RunTimeoutSeconds seconds."
+            exit 124
+        }
+
+        $stdout = if (Test-Path -Path $stdoutPath) { Get-Content -Path $stdoutPath -Raw } else { "" }
+        $stderr = if (Test-Path -Path $stderrPath) { Get-Content -Path $stderrPath -Raw } else { "" }
+
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+            Write-Host $stdout
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+            Write-Error $stderr
+        }
+
+        exit $process.ExitCode
+    }
+    finally {
+        if (Test-Path -Path $stdoutPath) {
+            Remove-Item -Path $stdoutPath -ErrorAction SilentlyContinue
+        }
+
+        if (Test-Path -Path $stderrPath) {
+            Remove-Item -Path $stderrPath -ErrorAction SilentlyContinue
+        }
+    }
 }

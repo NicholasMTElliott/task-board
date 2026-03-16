@@ -59,7 +59,8 @@
 - Template file committed: `/.env.example`
 - Sync/load helper: `scripts/local-secrets.ps1`
   - `-Action sync` loads env vars from `/.env.local` into process and generates `worker/.dev.vars`
-  - `-Action run-dotnet -DotnetArgs "--mode","one"` pattern is preferred in Windows PowerShell to avoid `--` argument-binding issues
+  - `-Action run-dotnet -Mode one|wait|loop` is preferred for local processor execution
+  - Optional guard: `-RunTimeoutSeconds <n>` terminates long-running local runs and exits with code `124`
 - `NEON_DATABASE_URL` supports both:
   - Neon URI format (preferred for copy/paste from Neon): `postgresql://...?...`
   - Npgsql key/value format
