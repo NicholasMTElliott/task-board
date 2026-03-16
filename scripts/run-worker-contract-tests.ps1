@@ -4,8 +4,9 @@ param(
 )
 
 $validActionId = "act_contract_valid_$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+$shellExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell" }
 
-pwsh -File scripts/simulate-trello-webhook.ps1 `
+& $shellExe -File scripts/simulate-trello-webhook.ps1 `
     -EnvFile $EnvFile `
     -PayloadPath "tests/fixtures/trello/webhook.valid.json" `
     -WorkerUrl $WorkerUrl `
@@ -16,7 +17,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Valid webhook contract test failed."
 }
 
-pwsh -File scripts/simulate-trello-webhook.ps1 `
+& $shellExe -File scripts/simulate-trello-webhook.ps1 `
     -EnvFile $EnvFile `
     -PayloadPath "tests/fixtures/trello/webhook.missing-action-id.json" `
     -WorkerUrl $WorkerUrl `
@@ -26,7 +27,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Missing action.id contract test failed."
 }
 
-pwsh -File scripts/simulate-trello-webhook.ps1 `
+& $shellExe -File scripts/simulate-trello-webhook.ps1 `
     -EnvFile $EnvFile `
     -PayloadPath "tests/fixtures/trello/webhook.valid.json" `
     -WorkerUrl $WorkerUrl `
