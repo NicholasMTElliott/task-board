@@ -30,13 +30,17 @@
 ### AI
 | Layer | Technology | Notes |
 |-------|------------|-------|
-| LLM provider | OpenAI | Model TBD per role (e.g., gpt-4.1) |
+| LLM provider (option 1) | OpenAI | Model TBD per role (e.g., gpt-4.1) |
+| LLM provider (option 2) | Claude CLI subprocess | Validated with `claude-haiku-4-5-20251001`; uses `--json-schema` for structured output |
+
+Both providers implement `ILlmClient`. Selection via DI configuration (`CLIENT_MODE`).
 
 ### External APIs
 | API | Purpose |
 |-----|---------|
 | Trello REST API | Read card state, write description sections, post/update comments, move cards |
 | OpenAI Chat Completions | Agent inference |
+| Claude CLI | Agent inference via subprocess (structured output with `--json-schema`) |
 
 ## Key Technical Constraints
 - Worker must return 200 to Trello within ~3 seconds; it should enqueue then return immediately

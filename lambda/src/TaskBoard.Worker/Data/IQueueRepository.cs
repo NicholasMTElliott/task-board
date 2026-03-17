@@ -7,4 +7,5 @@ public interface IQueueRepository
     Task<IReadOnlyList<QueueMessage>> ClaimBatchAsync(int maxBatchSize, int visibilityTimeoutSeconds, CancellationToken cancellationToken);
     Task MarkSucceededAsync(long messageId, CancellationToken cancellationToken);
     Task MarkFailedAsync(long messageId, string reason, CancellationToken cancellationToken);
+    Task MarkDeadLetteredAsync(long messageId, string actionId, string reason, CancellationToken cancellationToken);
 }

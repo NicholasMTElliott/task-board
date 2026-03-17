@@ -1,6 +1,8 @@
 using System.Text.Json;
+using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Data;
 using TaskBoard.Worker.Handlers;
+using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
 using Npgmq;
 using Npgsql;
@@ -28,6 +30,90 @@ builder.Services.AddSingleton<NpgmqClient>(serviceProvider =>
 
 builder.Services.AddSingleton<IQueueRepository, QueueRepository>();
 builder.Services.AddSingleton<IProcessedEventsRepository, ProcessedEventsRepository>();
+builder.Services.AddSingleton<ICardStateRepository, CardStateRepository>();
+builder.Services.AddSingleton<IRunLogRepository, RunLogRepository>();
+
+builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
+{
+    var logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("WorkflowConfig");
+    var workflowPath = Environment.GetEnvironmentVariable("WORKFLOW_CONFIG_PATH")
+        ?? Path.Combine(AppContext.BaseDirectory, "workflow.v1.json");
+
+    if (!File.Exists(workflowPath))
+    {
+        throw new InvalidOperationException(
+            $"Workflow config not found at '{workflowPath}'. Set WORKFLOW_CONFIG_PATH or ensure workflow.v1.json is in the output directory.");
+    }
+
+    logger.LogInformation("Loading workflow config from {WorkflowPath}", workflowPath);
+    var workflowJson = File.ReadAllText(workflowPath);
+    var config = JsonSerializer.Deserialize<WorkflowConfig>(workflowJson, new JsonSerializerOptions
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    }) ?? throw new InvalidOperationException("Failed to deserialize workflow.v1.json");
+
+    var errors = WorkflowConfigValidator.Validate(config);
+    if (errors.Count > 0)
+    {
+        throw new InvalidOperationException(
+            $"Workflow config validation failed:\n{string.Join("\n", errors)}");
+    }
+
+    return config;
+});
+
+var clientMode = Environment.GetEnvironmentVariable("CLIENT_MODE")?.ToLowerInvariant() ?? "stub";
+if (clientMode == "live")
+{
+    builder.Services.Configure<TrelloClientOptions>(builder.Configuration.GetSection(TrelloClientOptions.SectionName));
+    builder.Services.AddHttpClient<ITrelloClient, TrelloClient>(client =>
+    {
+        var baseUrl = builder.Configuration.GetSection("Trello")["BaseUrl"] ?? "https://api.trello.com";
+        client.BaseAddress = new Uri(baseUrl);
+    });
+}
+else
+{
+    builder.Services.AddSingleton<ITrelloClient, StubTrelloClient>();
+}
+
+var llmProvider = Environment.GetEnvironmentVariable("LLM_PROVIDER")?.ToLowerInvariant()
+    ?? builder.Configuration.GetSection("Llm")["Provider"]
+    ?? "stub";
+
+switch (llmProvider)
+{
+    case "anthropic":
+        builder.Services.Configure<AnthropicLlmOptions>(builder.Configuration.GetSection(AnthropicLlmOptions.SectionName));
+        builder.Services.AddHttpClient<ILlmClient, AnthropicLlmClient>(client =>
+        {
+            var baseUrl = builder.Configuration.GetSection("Anthropic")["BaseUrl"] ?? "https://api.anthropic.com";
+            client.BaseAddress = new Uri(baseUrl);
+        });
+        break;
+    case "openai":
+        builder.Services.Configure<OpenAiLlmOptions>(builder.Configuration.GetSection(OpenAiLlmOptions.SectionName));
+        builder.Services.AddHttpClient<ILlmClient, OpenAiLlmClient>(client =>
+        {
+            var baseUrl = builder.Configuration.GetSection("OpenAi")["BaseUrl"] ?? "https://api.openai.com";
+            client.BaseAddress = new Uri(baseUrl);
+        });
+        break;
+    case "claude-cli":
+        builder.Services.Configure<ClaudeCliLlmOptions>(builder.Configuration.GetSection(ClaudeCliLlmOptions.SectionName));
+        builder.Services.AddSingleton<ILlmClient, ClaudeCliLlmClient>();
+        break;
+    case "cline-cli":
+        builder.Services.Configure<ClineCliLlmOptions>(builder.Configuration.GetSection(ClineCliLlmOptions.SectionName));
+        builder.Services.AddSingleton<ILlmClient, ClineCliLlmClient>();
+        break;
+    default:
+        builder.Services.AddSingleton<ILlmClient, StubLlmClient>();
+        break;
+}
+
+builder.Services.AddSingleton<Orchestrator>();
+
 builder.Services.Configure<QueueProcessingOptions>(builder.Configuration.GetSection(QueueProcessingOptions.SectionName));
 builder.Services.AddSingleton<EventProcessor>();
 builder.Services.AddSingleton<DrainHandler>();

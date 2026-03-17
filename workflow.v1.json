@@ -10,9 +10,11 @@
       "name": "Requirements",
       "role": "business_analyst",
       "gateType": "agent_run",
+      "taskPrompt": "Analyze the card description. Extract and document structured Requirements, identify Open Questions that need human clarification, and define measurable Acceptance Criteria. If the description is too vague to produce requirements, return NEEDS_INFO with specific questions.",
       "transitions": {
         "COMPLETE": "LIST_ID_REQUIREMENTS_REVIEW",
-        "NEEDS_INFO": "LIST_ID_QUESTIONS"
+        "NEEDS_INFO": "LIST_ID_QUESTIONS",
+        "ERROR": "LIST_ID_ERROR"
       }
     },
     "LIST_ID_REQUIREMENTS_REVIEW": {
@@ -25,9 +27,11 @@
       "name": "Design",
       "role": "senior_engineer",
       "gateType": "agent_run",
+      "taskPrompt": "Using the approved requirements, produce a structured Technical Design. Identify architectural decisions, edge cases, and integration points. Document key Decisions with rationale.",
       "transitions": {
         "COMPLETE": "LIST_ID_DESIGN_REVIEW",
-        "NEEDS_INFO": "LIST_ID_QUESTIONS"
+        "NEEDS_INFO": "LIST_ID_QUESTIONS",
+        "ERROR": "LIST_ID_ERROR"
       }
     },
     "LIST_ID_DESIGN_REVIEW": {
@@ -40,9 +44,11 @@
       "name": "Implementation",
       "role": "senior_engineer",
       "gateType": "agent_run",
+      "taskPrompt": "Using the approved technical design, produce a detailed implementation breakdown: ordered tasks, file/module targets, API contracts, and data model changes. Flag any design gaps that need resolution before coding begins.",
       "transitions": {
         "COMPLETE": "LIST_ID_CODE_REVIEW",
-        "NEEDS_INFO": "LIST_ID_QUESTIONS"
+        "NEEDS_INFO": "LIST_ID_QUESTIONS",
+        "ERROR": "LIST_ID_ERROR"
       }
     },
     "LIST_ID_CODE_REVIEW": {
@@ -55,9 +61,11 @@
       "name": "Testing",
       "role": "qa",
       "gateType": "agent_run",
+      "taskPrompt": "Using the requirements, technical design, and implementation breakdown, generate a comprehensive test plan covering: functional tests, edge cases, integration scenarios, and acceptance criteria verification.",
       "transitions": {
         "COMPLETE": "LIST_ID_DONE",
-        "NEEDS_INFO": "LIST_ID_QUESTIONS"
+        "NEEDS_INFO": "LIST_ID_QUESTIONS",
+        "ERROR": "LIST_ID_ERROR"
       }
     },
     "LIST_ID_DONE": {
@@ -68,6 +76,12 @@
     },
     "LIST_ID_QUESTIONS": {
       "name": "Questions",
+      "role": null,
+      "gateType": "holding",
+      "transitions": {}
+    },
+    "LIST_ID_ERROR": {
+      "name": "Error",
       "role": null,
       "gateType": "holding",
       "transitions": {}

@@ -11,10 +11,12 @@ This prototype uses Cloudflare Worker ingestion, Neon Postgres queue storage, an
 | `NEON_DATABASE_URL` | Worker, Lambda | Postgres connection string for queue/idempotency tables.
 | `LAMBDA_KICK_URL` | Worker | Optional function URL for `POST /drain` kick. If omitted/blank, Worker skips kick.
 | `INTERNAL_KICK_SECRET` | Worker, Lambda | Required only when `LAMBDA_KICK_URL` is configured.
-| `PGMQ_QUEUE_NAME` | Worker, Lambda | Queue name for enqueue/read (default `events`).
+| `PGMQ_QUEUE_NAME` | Worker | Queue name for enqueue (default `events`).
+| `QueueProcessing__QueueName` | Lambda | Queue name for read/claim (default `events`).
 | `QueueProcessing__DefaultBatchSize` | Lambda | Default claim batch size when `batchSize` is not provided to `/drain`.
 | `QueueProcessing__DefaultVisibilityTimeoutSeconds` | Lambda | Default PGMQ visibility timeout used for reads.
 | `QueueProcessing__LoopIdleDelaySeconds` | Lambda | Delay between loop iterations when no messages are claimed.
+| `QueueProcessing__MaxRetries` | Lambda | Max read attempts before dead-lettering a message (default `3`).
 
 ## Local Development Secrets (Single Source)
 
@@ -116,10 +118,11 @@ Set environment variables on the Lambda function:
 
 - `INTERNAL_KICK_SECRET`
 - `NEON_DATABASE_URL`
-- `PGMQ_QUEUE_NAME` (optional, defaults to `events`)
+- `QueueProcessing__QueueName` (optional, defaults to `events`)
 - `QueueProcessing__DefaultBatchSize` (optional, defaults to `10`)
 - `QueueProcessing__DefaultVisibilityTimeoutSeconds` (optional, defaults to `30`)
 - `QueueProcessing__LoopIdleDelaySeconds` (optional, defaults to `1`)
+- `QueueProcessing__MaxRetries` (optional, defaults to `3`)
 
 `POST /drain` accepts optional query params:
 

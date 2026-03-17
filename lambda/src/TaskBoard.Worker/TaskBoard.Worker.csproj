@@ -10,4 +10,12 @@
     <PackageReference Include="Npgmq" Version="1.11.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="TaskBoard.Worker.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\..\workflow.v1.json" CopyToOutputDirectory="PreserveNewest" Link="workflow.v1.json" />
+  </ItemGroup>
+
 </Project>

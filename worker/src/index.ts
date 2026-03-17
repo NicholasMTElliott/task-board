@@ -9,9 +9,15 @@ export interface Env {
   INTERNAL_KICK_SECRET?: string;
 }
 
+export type SqlFunction = (
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => Promise<Record<string, unknown>[]>;
+
 export interface WebhookDependencies {
   enqueueWebhookEvent: (
-    env: Env,
+    sql: SqlFunction,
+    queueName: string,
     actionId: string,
     cardId: string | null,
     payload: TrelloWebhookPayload
@@ -19,7 +25,7 @@ export interface WebhookDependencies {
   kickLambda: (env: Env, actionId: string) => Promise<void>;
 }
 
-interface TrelloWebhookPayload {
+export interface TrelloWebhookPayload {
   action?: {
     id?: string;
     type?: string;
@@ -45,7 +51,7 @@ const jsonResponse = (status: number, body: unknown): Response =>
     }
   });
 
-const verifyTrelloWebhook = async (
+export const verifyTrelloWebhook = async (
   body: string,
   signatureHeader: string | null,
   callbackUrl: string,
@@ -83,26 +89,24 @@ const verifyTrelloWebhook = async (
   return mismatch === 0;
 };
 
-const extractActionId = (payload: TrelloWebhookPayload): string | null =>
+export const extractActionId = (payload: TrelloWebhookPayload): string | null =>
   payload.action?.id ?? null;
 
-const extractCardId = (payload: TrelloWebhookPayload): string | null =>
+export const extractCardId = (payload: TrelloWebhookPayload): string | null =>
   payload.action?.data?.card?.id ?? null;
 
-const getLambdaKickUrl = (env: Env): string | null => {
+export const getLambdaKickUrl = (env: Env): string | null => {
   const configuredUrl = env.LAMBDA_KICK_URL?.trim();
   return configuredUrl ? configuredUrl : null;
 };
 
-const enqueueWebhookEvent = async (
-  env: Env,
+export const enqueueWebhookEvent = async (
+  sql: SqlFunction,
+  queueName: string,
   actionId: string,
   cardId: string | null,
   payload: TrelloWebhookPayload
 ): Promise<number> => {
-  const queueName = env.PGMQ_QUEUE_NAME ?? "events";
-  const sql = neon(env.NEON_DATABASE_URL);
-
   const queuePayload = {
     actionId,
     cardId,
@@ -132,7 +136,7 @@ const enqueueWebhookEvent = async (
   return normalizedMessageId;
 };
 
-const kickLambda = async (env: Env, actionId: string): Promise<void> => {
+export const kickLambda = async (env: Env, actionId: string): Promise<void> => {
   const kickUrl = getLambdaKickUrl(env);
   if (!kickUrl) {
     throw new Error("LAMBDA_KICK_URL is not configured");
@@ -220,9 +224,11 @@ export const createWebhookHandler = (dependencies: WebhookDependencies) => ({
     }
 
     let messageId: number;
+    const sql = neon(env.NEON_DATABASE_URL) as SqlFunction;
+    const queueName = env.PGMQ_QUEUE_NAME ?? "events";
 
     try {
-      messageId = await dependencies.enqueueWebhookEvent(env, actionId, cardId, payload);
+      messageId = await dependencies.enqueueWebhookEvent(sql, queueName, actionId, cardId, payload);
     } catch (error) {
       console.error(
         JSON.stringify({

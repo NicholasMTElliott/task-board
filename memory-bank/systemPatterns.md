@@ -70,6 +70,12 @@ Current PGMQ semantics:
 Current implementation note:
 - .NET queue repository now uses strongly typed Npgmq methods (`ReadBatchAsync<string>`, `DeleteAsync`, `ArchiveAsync`) to avoid reflection and improve AOT/trimming compatibility.
 
+### Dead-Letter / Max-Retry
+Messages that exceed `MaxRetries` (default 3) are dead-lettered: archived to `pgmq.a_events` and removed from the active queue.
+Detection uses `NpgmqMessage<T>.ReadCt` (PGMQ's built-in read counter).
+Check happens before idempotency or processing — poison messages are caught early.
+Configurable via `QueueProcessing:MaxRetries` in appsettings / environment.
+
 ### Migration Pattern
 Schema migrations are SQL-first and versioned under `db/migrations` for Flyway execution.
 
@@ -81,6 +87,8 @@ Current tracked chain:
 - `V1__processed_events.sql`
 - `V2__pgmq_core.sql`
 - `V3__pgmq_create_events_queue.sql`
+- `V4__card_state.sql`
+- `V5__run_log.sql`
 
 Contingency fallback migration (`db/sql/0003_jobs_fallback.sql`) is intentionally manual and not part of the primary Flyway chain.
 
@@ -96,8 +104,9 @@ After execution: release lock.
 Prevents duplicate agent runs from concurrent worker instances claiming different jobs for the same card.
 
 ### Human-in-the-Loop
-`NEEDS_INFO` outcome → card moved to Questions sidebar list, `WaitingOnHuman = true` set in `card_state`.  
-**Re-trigger (v1 rule):** operator moves card back to prior agent state. Comment-marker re-trigger is explicitly out of scope for v1.
+`NEEDS_INFO` outcome → card moved to Questions sidebar list, `WaitingOnHuman = true` and `origin_list_id` set in `card_state`.
+**Re-trigger (v1 rule):** operator moves card back to prior agent state. `origin_list_id` enables the orchestrator to validate the return move.
+Comment-marker re-trigger is explicitly out of scope for v1.
 
 ### Manual Gates
 Requirements Review, Design Review, and Code Review are passive lists. The orchestrator takes no action on cards in these states. Only operator card movement triggers the next agent.
@@ -115,6 +124,35 @@ Agents update only their designated sections.
 
 ### Comment Strategy
 One "Agent Status" comment per run — upserted, not appended. Prevents notification spam.
+
+### Claude CLI Subprocess Pattern
+The .NET worker can invoke the Claude CLI (`claude`) as a subprocess via `ClaudeCliLlmClient`.
+
+**Windows invocation:**
+- Set `startInfo.FileName = "claude.cmd"` directly with `ArgumentList` — .NET handles argument escaping correctly
+- Do NOT use `cmd.exe /c claude` (mangles quoted arguments) or PowerShell wrappers (unnecessary indirection)
+- Remove `CLAUDECODE` env var from subprocess environment or the CLI refuses to run as a subprocess
+
+**CLI flags (required for structured output):**
+- `--output-format json` — returns JSON envelope with `result` and `structured_output` fields
+- `--json-schema <minified-json>` — schema must be single-line (minified); produces `structured_output` object in response
+- `--max-budget-usd` — cost control per invocation (preferred over `--max-turns`)
+- `--permission-mode bypassPermissions --allowedTools *` — headless execution without permission prompts
+- Do NOT use `--max-turns` — causes premature termination before structured output is produced
+
+**Prompt constraints:**
+- Prompts passed as CLI arguments must not contain literal newlines — escape them as `\\n`
+- Schema instruction in system prompt is redundant when `--json-schema` is used (the CLI handles structured output natively)
+
+**Output parsing (`ExtractStructuredOutput`):**
+- Primary path: parse `structured_output` object from JSON envelope
+- Fallback: parse `result` string field, stripping markdown fences if present
+- Last resort: treat raw stdout as content, strip markdown fences
+
+**Timeout observability:**
+- Use event-based capture (`OutputDataReceived`/`ErrorDataReceived` + `StringBuilder`) instead of `ReadToEndAsync`
+- `ReadToEndAsync` blocks until the process exits — unusable for partial output on timeout
+- On timeout, partial stdout/stderr is included in the exception message for diagnostics
 
 ## Component Relationships
 
@@ -172,25 +210,27 @@ In both paths, `actionId` uniqueness is enforced by application-layer `processed
 ### processed_events (idempotency)
 | Column | Description |
 |--------|-------------|
-| actionId | Trello action ID (PK) |
-| processedAt | Timestamp |
+| action_id | Trello action ID (PK) |
+| processed_at_utc | Timestamp (default `now()`) |
 
 ### card_state
 | Column | Description |
 |--------|-------------|
-| cardId | Trello card ID |
-| lastProcessedEvent | Idempotency key |
-| currentLock | Active run lock |
-| lastKnownList | Last confirmed list ID |
-| waitingOnHuman | Boolean flag |
+| card_id | Trello card ID (PK) |
+| last_processed_event | Last processed action ID |
+| current_lock | Active run lock ID |
+| last_known_list | Last confirmed list ID |
+| origin_list_id | List the card was in before moving to Questions (for return-path validation) |
+| waiting_on_human | Boolean flag |
+| updated_at_utc | Last update timestamp |
 
 ### run_log
 | Column | Description |
 |--------|-------------|
-| runId | UUID |
-| cardId | Trello card ID |
+| run_id | UUID (PK) |
+| card_id | Trello card ID |
 | role | Agent role executed |
-| inputHash | Hash of card state at execution time |
-| outputHash | Hash of agent output |
-| outcome | COMPLETE / NEEDS_INFO / BLOCKED |
-| timestamp | Execution time |
+| input_hash | Hash of card state at execution time |
+| output_hash | Hash of agent output |
+| outcome | COMPLETE / NEEDS_INFO / BLOCKED / ERROR |
+| created_at_utc | Execution time |

@@ -5,4 +5,5 @@ public sealed record QueueMessage(
     string ActionId,
     string? CardId,
     string PayloadJson,
-    DateTimeOffset EnqueuedAtUtc);
+    DateTimeOffset EnqueuedAtUtc,
+    int ReadCount);

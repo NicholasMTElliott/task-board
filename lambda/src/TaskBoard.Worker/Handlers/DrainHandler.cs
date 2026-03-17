@@ -21,6 +21,7 @@ public sealed class DrainHandler(
             processorResult.Processed,
             processorResult.Duplicates,
             processorResult.Failed,
+            processorResult.DeadLettered,
             processorResult.ProcessedAtUtc);
     }
 }
@@ -30,4 +31,5 @@ public sealed record DrainResult(
     int Processed,
     int Duplicates,
     int Failed,
+    int DeadLettered,
     DateTimeOffset ProcessedAtUtc);

@@ -10,6 +10,12 @@ public sealed class QueueProcessingOptions
 
     public int LoopIdleDelaySeconds { get; init; } = 1;
 
+    public int MaxRetries { get; init; } = 3;
+
+    public string QueueName { get; init; } = "events";
+
+    public int LockTtlSeconds { get; init; } = 300;
+
     public int ResolveBatchSize(int? value)
     {
         var candidate = value ?? DefaultBatchSize;
