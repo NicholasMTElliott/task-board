@@ -17,7 +17,8 @@
       "Bash(dotnet:*)",
       "Bash(npx vitest:*)",
       "Bash(docker info:*)",
-      "WebFetch(domain:docs.cline.bot)"
+      "WebFetch(domain:docs.cline.bot)",
+      "Bash(AGENT_INTEGRATION_TESTS=true dotnet test lambda/tests/TaskBoard.Worker.Tests/TaskBoard.Worker.Tests.csproj --filter \"Integration_Design_ClearSpec\" --no-restore -l \"console;verbosity=detailed\")"
     ]
   }
 }

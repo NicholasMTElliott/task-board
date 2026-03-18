@@ -161,7 +161,20 @@ public sealed class Orchestrator(
         try
         {
             using var doc = JsonDocument.Parse(payloadJson);
-            if (doc.RootElement.TryGetProperty("action", out var action)
+            var root = doc.RootElement;
+
+            // Try nested path first: payload.action.data.listAfter.id (webhook envelope)
+            if (root.TryGetProperty("payload", out var payload)
+                && payload.TryGetProperty("action", out var nestedAction)
+                && nestedAction.TryGetProperty("data", out var nestedData)
+                && nestedData.TryGetProperty("listAfter", out var nestedListAfter)
+                && nestedListAfter.TryGetProperty("id", out var nestedId))
+            {
+                return nestedId.GetString();
+            }
+
+            // Fallback: action.data.listAfter.id at root
+            if (root.TryGetProperty("action", out var action)
                 && action.TryGetProperty("data", out var data)
                 && data.TryGetProperty("listAfter", out var listAfter)
                 && listAfter.TryGetProperty("id", out var id))
@@ -182,7 +195,20 @@ public sealed class Orchestrator(
         try
         {
             using var doc = JsonDocument.Parse(payloadJson);
-            if (doc.RootElement.TryGetProperty("action", out var action)
+            var root = doc.RootElement;
+
+            // Try nested path first: payload.action.data.card.id (webhook envelope)
+            if (root.TryGetProperty("payload", out var payload)
+                && payload.TryGetProperty("action", out var nestedAction)
+                && nestedAction.TryGetProperty("data", out var nestedData)
+                && nestedData.TryGetProperty("card", out var nestedCard)
+                && nestedCard.TryGetProperty("id", out var nestedId))
+            {
+                return nestedId.GetString();
+            }
+
+            // Fallback: action.data.card.id at root
+            if (root.TryGetProperty("action", out var action)
                 && action.TryGetProperty("data", out var data)
                 && data.TryGetProperty("card", out var card)
                 && card.TryGetProperty("id", out var id))

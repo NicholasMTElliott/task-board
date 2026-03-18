@@ -13,8 +13,8 @@
       "taskPrompt": "Analyze the card description. Extract and document structured Requirements, identify Open Questions that need human clarification, and define measurable Acceptance Criteria. If the description is too vague to produce requirements, return NEEDS_INFO with specific questions.",
       "transitions": {
         "COMPLETE": "LIST_ID_REQUIREMENTS_REVIEW",
-        "NEEDS_INFO": "LIST_ID_QUESTIONS",
-        "ERROR": "LIST_ID_ERROR"
+        "NEEDS_INFO": "69bac6d8981fecf53493f69f",
+        "ERROR": "69bac71b142085ed522f3309"
       }
     },
     "LIST_ID_REQUIREMENTS_REVIEW": {
@@ -23,18 +23,18 @@
       "gateType": "manual_gate",
       "transitions": {}
     },
-    "LIST_ID_DESIGN": {
+    "69babbd339f6fccefafc73c7": {
       "name": "Design",
       "role": "senior_engineer",
       "gateType": "agent_run",
-      "taskPrompt": "Using the approved requirements, produce a structured Technical Design. Identify architectural decisions, edge cases, and integration points. Document key Decisions with rationale.",
+      "taskPrompt": "You are working on the task \"{TaskName}\" ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context. Your job is to update ONLY the file for this task to add a detailed technical design approach. Include: architecture decisions, component interactions, data flow, edge cases, and implementation notes. Do not modify any other file.",
       "transitions": {
-        "COMPLETE": "LIST_ID_DESIGN_REVIEW",
-        "NEEDS_INFO": "LIST_ID_QUESTIONS",
-        "ERROR": "LIST_ID_ERROR"
+        "COMPLETE": "69babc43a79b65c19ea4b4c1",
+        "NEEDS_INFO": "69bac6d8981fecf53493f69f",
+        "ERROR": "69bac71b142085ed522f3309"
       }
     },
-    "LIST_ID_DESIGN_REVIEW": {
+    "69babc43a79b65c19ea4b4c1": {
       "name": "Design Review",
       "role": null,
       "gateType": "manual_gate",
@@ -47,8 +47,8 @@
       "taskPrompt": "Using the approved technical design, produce a detailed implementation breakdown: ordered tasks, file/module targets, API contracts, and data model changes. Flag any design gaps that need resolution before coding begins.",
       "transitions": {
         "COMPLETE": "LIST_ID_CODE_REVIEW",
-        "NEEDS_INFO": "LIST_ID_QUESTIONS",
-        "ERROR": "LIST_ID_ERROR"
+        "NEEDS_INFO": "69bac6d8981fecf53493f69f",
+        "ERROR": "69bac71b142085ed522f3309"
       }
     },
     "LIST_ID_CODE_REVIEW": {
@@ -64,8 +64,8 @@
       "taskPrompt": "Using the requirements, technical design, and implementation breakdown, generate a comprehensive test plan covering: functional tests, edge cases, integration scenarios, and acceptance criteria verification.",
       "transitions": {
         "COMPLETE": "LIST_ID_DONE",
-        "NEEDS_INFO": "LIST_ID_QUESTIONS",
-        "ERROR": "LIST_ID_ERROR"
+        "NEEDS_INFO": "69bac6d8981fecf53493f69f",
+        "ERROR": "69bac71b142085ed522f3309"
       }
     },
     "LIST_ID_DONE": {
@@ -74,13 +74,13 @@
       "gateType": "terminal",
       "transitions": {}
     },
-    "LIST_ID_QUESTIONS": {
+    "69bac6d8981fecf53493f69f": {
       "name": "Questions",
       "role": null,
       "gateType": "holding",
       "transitions": {}
     },
-    "LIST_ID_ERROR": {
+    "69bac71b142085ed522f3309": {
       "name": "Error",
       "role": null,
       "gateType": "holding",
@@ -89,17 +89,17 @@
   },
   "roles": {
     "business_analyst": {
-      "model": "gpt-4.1",
+      "model": "opus-4.6",
       "systemPrompt": "You are a Business Analyst. Extract, clarify, and document requirements from the card description. Produce structured Requirements, Open Questions, and Acceptance Criteria sections.",
       "sections": ["Requirements", "Open Questions", "Acceptance Criteria"]
     },
     "senior_engineer": {
-      "model": "gpt-4.1",
+      "model": "opus-4.6",
       "systemPrompt": "You are a Senior Software Engineer. Produce structured Technical Design, identify edge cases, and create implementation breakdowns.",
       "sections": ["Technical Design", "Decisions"]
     },
     "qa": {
-      "model": "gpt-4.1",
+      "model": "sonnet-4.6",
       "systemPrompt": "You are a QA Engineer. Generate a comprehensive test plan based on the requirements and technical design documented on the card.",
       "sections": ["Test Plan"]
     }

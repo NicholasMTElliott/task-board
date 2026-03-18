@@ -5,9 +5,12 @@ param(
     [string]$WorkerDevVarsPath = "worker/.dev.vars",
     [string]$DotnetProjectPath = "lambda/src/TaskBoard.Worker",
     [int]$RunTimeoutSeconds = 0,
-    [ValidateSet("one", "wait", "loop")]
+    [ValidateSet("one", "wait", "loop", "manual", "agent")]
     [string]$Mode,
     [int]$WaitSeconds = 30,
+    [string]$CardId,
+    [string]$BoardId,
+    [string]$WorkspacePath,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$DotnetArgs
 )
@@ -76,6 +79,32 @@ if ($Action -eq "run-dotnet") {
 
         if ($Mode -eq "wait") {
             $dotnetArgsToRun += @("--wait-seconds", $WaitSeconds)
+        }
+
+        if ($Mode -eq "manual") {
+            if ([string]::IsNullOrWhiteSpace($CardId)) {
+                throw "-CardId is required for manual mode. Example: -Mode manual -CardId abc123"
+            }
+            $dotnetArgsToRun += @("--card-id", $CardId)
+        }
+
+        if ($Mode -eq "agent") {
+            if ([string]::IsNullOrWhiteSpace($CardId)) {
+                throw "-CardId is required for agent mode. Example: -Mode agent -CardId abc123 -BoardId xyz -WorkspacePath C:\repo"
+            }
+            $dotnetArgsToRun += @("--card-id", $CardId)
+
+            $resolvedBoardId = if (-not [string]::IsNullOrWhiteSpace($BoardId)) { $BoardId } else { $env:TRELLO_BOARD_ID }
+            if ([string]::IsNullOrWhiteSpace($resolvedBoardId)) {
+                throw "-BoardId or TRELLO_BOARD_ID env var is required for agent mode."
+            }
+            $dotnetArgsToRun += @("--board-id", $resolvedBoardId)
+
+            $resolvedWorkspace = if (-not [string]::IsNullOrWhiteSpace($WorkspacePath)) { $WorkspacePath } else { $env:AGENT_WORKSPACE_PATH }
+            if ([string]::IsNullOrWhiteSpace($resolvedWorkspace)) {
+                throw "-WorkspacePath or AGENT_WORKSPACE_PATH env var is required for agent mode."
+            }
+            $dotnetArgsToRun += @("--workspace", $resolvedWorkspace)
         }
     }
 

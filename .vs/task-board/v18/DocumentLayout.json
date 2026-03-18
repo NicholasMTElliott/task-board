@@ -3,6 +3,14 @@
   "WorkspaceRootPath": "C:\\Users\\Nicho\\Documents\\task-board\\",
   "Documents": [
     {
+      "AbsoluteMoniker": "D:0:0:{39EC8EBB-4841-DD37-E3D9-D58A91BF885F}|lambda\\src\\TaskBoard.Worker\\TaskBoard.Worker.csproj|c:\\users\\nicho\\documents\\task-board\\lambda\\src\\taskboard.worker\\clients\\claudeagentexecutor.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{39EC8EBB-4841-DD37-E3D9-D58A91BF885F}|lambda\\src\\TaskBoard.Worker\\TaskBoard.Worker.csproj|solutionrelative:lambda\\src\\taskboard.worker\\clients\\claudeagentexecutor.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{8DDCDEDD-6B9E-4C18-B80C-13F03F5039F2}|lambda\\tests\\TaskBoard.Worker.Tests\\TaskBoard.Worker.Tests.csproj|c:\\users\\nicho\\documents\\task-board\\lambda\\tests\\taskboard.worker.tests\\agentrunnerintegrationtests.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{8DDCDEDD-6B9E-4C18-B80C-13F03F5039F2}|lambda\\tests\\TaskBoard.Worker.Tests\\TaskBoard.Worker.Tests.csproj|solutionrelative:lambda\\tests\\taskboard.worker.tests\\agentrunnerintegrationtests.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
       "AbsoluteMoniker": "D:0:0:{39EC8EBB-4841-DD37-E3D9-D58A91BF885F}|lambda\\src\\TaskBoard.Worker\\TaskBoard.Worker.csproj|c:\\users\\nicho\\documents\\task-board\\lambda\\src\\taskboard.worker\\clients\\claudeclillmclient.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{39EC8EBB-4841-DD37-E3D9-D58A91BF885F}|lambda\\src\\TaskBoard.Worker\\TaskBoard.Worker.csproj|solutionrelative:lambda\\src\\taskboard.worker\\clients\\claudeclillmclient.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
@@ -22,15 +30,37 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": 3,
+          "SelectedChildIndex": 1,
           "Children": [
             {
-              "$type": "Bookmark",
-              "Name": "ST:0:0:{cce594b6-0c39-4442-ba28-10c64ac7e89f}"
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "AgentRunnerIntegrationTests.cs",
+              "DocumentMoniker": "C:\\Users\\Nicho\\Documents\\task-board\\lambda\\tests\\TaskBoard.Worker.Tests\\AgentRunnerIntegrationTests.cs",
+              "RelativeDocumentMoniker": "lambda\\tests\\TaskBoard.Worker.Tests\\AgentRunnerIntegrationTests.cs",
+              "ToolTip": "C:\\Users\\Nicho\\Documents\\task-board\\lambda\\tests\\TaskBoard.Worker.Tests\\AgentRunnerIntegrationTests.cs",
+              "RelativeToolTip": "lambda\\tests\\TaskBoard.Worker.Tests\\AgentRunnerIntegrationTests.cs",
+              "ViewState": "AgIAAE0AAAAAAAAAAAAgwGQAAAAIAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-03-18T20:10:16.627Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
-              "DocumentIndex": 2,
+              "DocumentIndex": 0,
+              "Title": "ClaudeAgentExecutor.cs",
+              "DocumentMoniker": "C:\\Users\\Nicho\\Documents\\task-board\\lambda\\src\\TaskBoard.Worker\\Clients\\ClaudeAgentExecutor.cs",
+              "RelativeDocumentMoniker": "lambda\\src\\TaskBoard.Worker\\Clients\\ClaudeAgentExecutor.cs",
+              "ToolTip": "C:\\Users\\Nicho\\Documents\\task-board\\lambda\\src\\TaskBoard.Worker\\Clients\\ClaudeAgentExecutor.cs",
+              "RelativeToolTip": "lambda\\src\\TaskBoard.Worker\\Clients\\ClaudeAgentExecutor.cs",
+              "ViewState": "AgIAABUAAAAAAAAAAAASwCgAAAATAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-03-18T19:42:25.155Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 4,
               "Title": "ClaudeCliLlmClientTests.cs",
               "DocumentMoniker": "C:\\Users\\Nicho\\Documents\\task-board\\lambda\\tests\\TaskBoard.Worker.Tests\\ClaudeCliLlmClientTests.cs",
               "RelativeDocumentMoniker": "lambda\\tests\\TaskBoard.Worker.Tests\\ClaudeCliLlmClientTests.cs",
@@ -38,31 +68,30 @@
               "RelativeToolTip": "lambda\\tests\\TaskBoard.Worker.Tests\\ClaudeCliLlmClientTests.cs",
               "ViewState": "AgIAAGMAAAAAAAAAAIAwwHcAAAAVAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2026-03-12T14:52:18.367Z",
-              "EditorCaption": ""
+              "WhenOpened": "2026-03-12T14:52:18.367Z"
             },
             {
               "$type": "Document",
-              "DocumentIndex": 1,
+              "DocumentIndex": 3,
               "Title": "ClaudeCliIntegrationTests.cs",
               "DocumentMoniker": "C:\\Users\\Nicho\\Documents\\task-board\\lambda\\tests\\TaskBoard.Worker.Tests\\ClaudeCliIntegrationTests.cs",
               "RelativeDocumentMoniker": "lambda\\tests\\TaskBoard.Worker.Tests\\ClaudeCliIntegrationTests.cs",
               "ToolTip": "C:\\Users\\Nicho\\Documents\\task-board\\lambda\\tests\\TaskBoard.Worker.Tests\\ClaudeCliIntegrationTests.cs",
               "RelativeToolTip": "lambda\\tests\\TaskBoard.Worker.Tests\\ClaudeCliIntegrationTests.cs",
-              "ViewState": "AgIAAE8AAAAAAAAAAAAWwGEAAABNAAAAAAAAAA==",
+              "ViewState": "AgIAACkAAAAAAAAAAAAAAEEAAAAkAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
               "WhenOpened": "2026-03-12T13:45:44.445Z",
               "EditorCaption": ""
             },
             {
               "$type": "Document",
-              "DocumentIndex": 0,
+              "DocumentIndex": 2,
               "Title": "ClaudeCliLlmClient.cs",
               "DocumentMoniker": "C:\\Users\\Nicho\\Documents\\task-board\\lambda\\src\\TaskBoard.Worker\\Clients\\ClaudeCliLlmClient.cs",
               "RelativeDocumentMoniker": "lambda\\src\\TaskBoard.Worker\\Clients\\ClaudeCliLlmClient.cs",
               "ToolTip": "C:\\Users\\Nicho\\Documents\\task-board\\lambda\\src\\TaskBoard.Worker\\Clients\\ClaudeCliLlmClient.cs",
               "RelativeToolTip": "lambda\\src\\TaskBoard.Worker\\Clients\\ClaudeCliLlmClient.cs",
-              "ViewState": "AgIAAHUAAAAAAAAAAAAMwH8AAABbAAAAAAAAAA==",
+              "ViewState": "AgIAAAcAAAAAAAAAAAAiwBYAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
               "WhenOpened": "2026-03-12T13:41:01.285Z",
               "EditorCaption": ""

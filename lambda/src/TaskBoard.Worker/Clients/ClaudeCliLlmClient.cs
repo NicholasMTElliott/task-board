@@ -21,9 +21,15 @@ public sealed class ClaudeCliLlmClient(
         _logger.LogInformation("Calling Claude CLI model={Model}, executable={Executable}",
             model, _options.ExecutablePath);
 
+        var argumentList = BuildArgumentList(model, fullSystemPrompt, userPrompt, _options);
+
+        _logger.LogDebug("Claude CLI command: {FileName} {Args}",
+            OperatingSystem.IsWindows() ? "claude.cmd" : _options.ExecutablePath,
+            FormatArgsForLogging(argumentList));
+
         var (exitCode, stdout, stderr) = await RunProcessAsync(
             _options.ExecutablePath,
-            BuildArgumentList(model, fullSystemPrompt, userPrompt, _options),
+            argumentList,
             _options.TimeoutSeconds,
             cancellationToken);
 
@@ -117,6 +123,20 @@ public sealed class ClaudeCliLlmClient(
             inner = inner[..lastFence];
 
         return inner.Trim();
+    }
+
+    internal static string FormatArgsForLogging(string[] args)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (i > 0) sb.Append(' ');
+            var arg = args[i];
+            if (arg.Length > 200)
+                arg = arg[..200] + "...[truncated]";
+            sb.Append(arg.Contains(' ') ? $"\"{arg}\"" : arg);
+        }
+        return sb.ToString();
     }
 
     internal static string MinifyJson(string json)

@@ -118,9 +118,68 @@ builder.Services.Configure<QueueProcessingOptions>(builder.Configuration.GetSect
 builder.Services.AddSingleton<EventProcessor>();
 builder.Services.AddSingleton<DrainHandler>();
 
+// Agent mode services
+builder.Services.AddSingleton<TaskFileManager>();
+builder.Services.AddSingleton<GitWorkspaceManager>();
+builder.Services.AddSingleton<AgentRunner>();
+
+var agentExecutorMode = Environment.GetEnvironmentVariable("AGENT_EXECUTOR")?.ToLowerInvariant() ?? "stub";
+if (agentExecutorMode == "claude-cli")
+{
+    builder.Services.Configure<ClaudeCliLlmOptions>(builder.Configuration.GetSection(ClaudeCliLlmOptions.SectionName));
+    builder.Services.AddSingleton<IAgentExecutor, ClaudeAgentExecutor>();
+}
+else
+{
+    builder.Services.AddSingleton<IAgentExecutor, StubAgentExecutor>();
+}
+
 var app = builder.Build();
 
 var mode = GetArgument(args, "--mode")?.ToLowerInvariant();
+
+if (mode == "agent")
+{
+    var cardId = GetArgument(args, "--card-id");
+    if (string.IsNullOrWhiteSpace(cardId))
+    {
+        app.Logger.LogError("--card-id is required for agent mode");
+        return;
+    }
+
+    var boardId = GetArgument(args, "--board-id")
+        ?? Environment.GetEnvironmentVariable("TRELLO_BOARD_ID");
+    if (string.IsNullOrWhiteSpace(boardId))
+    {
+        app.Logger.LogError("--board-id or TRELLO_BOARD_ID is required for agent mode");
+        return;
+    }
+
+    var workspacePath = GetArgument(args, "--workspace")
+        ?? Environment.GetEnvironmentVariable("AGENT_WORKSPACE_PATH");
+    if (string.IsNullOrWhiteSpace(workspacePath))
+    {
+        app.Logger.LogError("--workspace or AGENT_WORKSPACE_PATH is required for agent mode");
+        return;
+    }
+
+    await RunAgentModeAsync(app.Services, cardId, boardId, workspacePath, app.Logger);
+    return;
+}
+
+if (mode == "manual")
+{
+    var cardId = GetArgument(args, "--card-id");
+    if (string.IsNullOrWhiteSpace(cardId))
+    {
+        app.Logger.LogError("--card-id is required for manual mode");
+        return;
+    }
+
+    await RunManualModeAsync(app.Services, cardId, app.Logger);
+    return;
+}
+
 if (mode is "one" or "wait" or "loop")
 {
     await RunCliModeAsync(app.Services, mode, args, app.Logger);
@@ -191,6 +250,61 @@ static async Task RunCliModeAsync(IServiceProvider services, string mode, string
 
     logger.LogInformation("Starting continuous loop mode. Stop with Ctrl+C.");
     await processor.RunLoopAsync(cancellationToken);
+}
+
+static async Task RunManualModeAsync(IServiceProvider services, string cardId, ILogger logger)
+{
+    using var scope = services.CreateScope();
+    var trelloClient = scope.ServiceProvider.GetRequiredService<ITrelloClient>();
+    var queueRepository = scope.ServiceProvider.GetRequiredService<IQueueRepository>();
+    var processor = scope.ServiceProvider.GetRequiredService<EventProcessor>();
+
+    logger.LogInformation("Manual mode: fetching card {CardId} from Trello", cardId);
+    var card = await trelloClient.GetCardAsync(cardId, CancellationToken.None);
+
+    var actionId = $"manual-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+    var syntheticPayload = JsonSerializer.Serialize(new
+    {
+        actionId,
+        cardId = card.Id,
+        receivedAtUtc = DateTimeOffset.UtcNow.ToString("o"),
+        payload = new
+        {
+            action = new
+            {
+                id = actionId,
+                type = "updateCard",
+                data = new
+                {
+                    card = new { id = card.Id, name = card.Name },
+                    listAfter = new { id = card.IdList },
+                    listBefore = new { id = card.IdList }
+                }
+            }
+        }
+    });
+
+    logger.LogInformation("Enqueuing synthetic event {ActionId} for card {CardId} in list {ListId}",
+        actionId, card.Id, card.IdList);
+
+    await queueRepository.EnqueueAsync(syntheticPayload, CancellationToken.None);
+
+    var result = await processor.ProcessOneAsync(CancellationToken.None);
+    logger.LogInformation("{Result}", JsonSerializer.Serialize(result));
+}
+
+static async Task RunAgentModeAsync(IServiceProvider services, string cardId, string boardId, string workspacePath, ILogger logger)
+{
+    using var scope = services.CreateScope();
+    var agentRunner = scope.ServiceProvider.GetRequiredService<AgentRunner>();
+
+    logger.LogInformation("Agent mode: card={CardId} board={BoardId} workspace={Workspace}",
+        cardId, boardId, workspacePath);
+
+    var result = await agentRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+
+    logger.LogInformation("Agent run complete: outcome={Outcome}, error={ErrorDetail}",
+        result.Outcome, result.ErrorDetail ?? "(none)");
 }
 
 static string NormalizeConnectionString(string value)

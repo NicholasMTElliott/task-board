@@ -47,6 +47,27 @@ public class TrelloClientTests
     }
 
     [Fact]
+    public async Task GetBoardCardsAsync_ReturnsDeserializedCards()
+    {
+        var (sut, handler) = CreateSut();
+        handler.EnqueueResponse(HttpStatusCode.OK,
+            """[{"id":"c1","name":"Card One","desc":"Desc 1","idList":"list1"},{"id":"c2","name":"Card Two","desc":"Desc 2","idList":"list2"}]""");
+
+        var cards = await sut.GetBoardCardsAsync("board-123", CancellationToken.None);
+
+        Assert.Equal(2, cards.Count);
+        Assert.Equal("c1", cards[0].Id);
+        Assert.Equal("Card One", cards[0].Name);
+        Assert.Equal("c2", cards[1].Id);
+
+        var request = Assert.Single(handler.SentRequests);
+        Assert.Equal(HttpMethod.Get, request.Method);
+        Assert.Contains("/1/boards/board-123/cards", request.RequestUri!.ToString());
+        Assert.Contains("fields=id,name,desc,idList", request.RequestUri.ToString());
+        Assert.Contains("key=test-key", request.RequestUri.ToString());
+    }
+
+    [Fact]
     public async Task GetCardAsync_NonSuccess_ThrowsTrelloApiException()
     {
         var (sut, handler) = CreateSut();

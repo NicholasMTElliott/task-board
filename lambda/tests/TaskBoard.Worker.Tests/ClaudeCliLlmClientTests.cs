@@ -30,8 +30,6 @@ public class ClaudeCliLlmClientTests
         Assert.Contains("--output-format", args);
         Assert.Contains("json", args);
         Assert.Contains("--json-schema", args);
-        Assert.Contains("--max-turns", args);
-        Assert.Contains("5", args);
         Assert.Contains("--max-budget-usd", args);
         Assert.Contains("2.00", args);
         Assert.Contains("--permission-mode", args);

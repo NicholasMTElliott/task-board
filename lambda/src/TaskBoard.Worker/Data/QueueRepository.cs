@@ -26,6 +26,13 @@ public sealed class QueueRepository(NpgmqClient npgmqClient, IOptions<QueueProce
         return ConvertBatch(messages);
     }
 
+    public async Task<long> EnqueueAsync(string messageJson, CancellationToken cancellationToken)
+    {
+        var messageId = await _npgmqClient.SendAsync(_queueName, messageJson, cancellationToken);
+        _logger.LogInformation("Enqueued message {MessageId} to queue '{QueueName}'", messageId, _queueName);
+        return messageId;
+    }
+
     public async Task MarkSucceededAsync(long messageId, CancellationToken cancellationToken)
     {
         // Archive first to preserve audit trail, fall back to delete if archive fails

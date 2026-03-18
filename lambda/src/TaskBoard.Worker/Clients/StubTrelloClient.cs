@@ -12,6 +12,17 @@ public sealed class StubTrelloClient(ILogger<StubTrelloClient> logger) : ITrello
             "stub-list-id"));
     }
 
+    public Task<IReadOnlyList<TrelloCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("[Stub] GetBoardCards {BoardId}", boardId);
+        IReadOnlyList<TrelloCard> cards = new List<TrelloCard>
+        {
+            new("stub-card-1", "Stub Card 1", "# Requirements\nStub requirements", "stub-list-id"),
+            new("stub-card-2", "Stub Card 2", "# Design\nStub design", "stub-list-id"),
+        };
+        return Task.FromResult(cards);
+    }
+
     public Task UpdateCardDescriptionAsync(string cardId, string description, CancellationToken cancellationToken)
     {
         logger.LogInformation("[Stub] UpdateCardDescription {CardId} ({Length} chars)", cardId, description.Length);

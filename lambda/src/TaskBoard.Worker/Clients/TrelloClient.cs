@@ -28,6 +28,17 @@ public sealed class TrelloClient(
                ?? throw new TrelloApiException("GetCard", cardId, response.StatusCode, "Null deserialization result");
     }
 
+    public async Task<IReadOnlyList<TrelloCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken)
+    {
+        var url = AppendAuth($"/1/boards/{boardId}/cards?fields=id,name,desc,idList");
+        using var response = await _httpClient.GetAsync(url, cancellationToken);
+        await EnsureSuccessOrThrow(response, "GetBoardCards", boardId);
+
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+        return JsonSerializer.Deserialize<List<TrelloCard>>(json, JsonOptions)
+               ?? throw new TrelloApiException("GetBoardCards", boardId, response.StatusCode, "Null deserialization result");
+    }
+
     public async Task UpdateCardDescriptionAsync(string cardId, string description, CancellationToken cancellationToken)
     {
         var url = AppendAuth($"/1/cards/{cardId}");
