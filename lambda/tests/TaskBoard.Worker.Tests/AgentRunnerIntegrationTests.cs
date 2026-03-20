@@ -11,6 +11,9 @@ namespace TaskBoard.Worker.Tests;
 
 /// <summary>
 /// Integration tests that invoke real Claude CLI as a coding agent.
+/// Uses the actual repo root as the workspace so Claude has proper
+/// workspace trust and project context.
+///
 /// Gated behind AGENT_INTEGRATION_TESTS=true environment variable.
 /// Uses claude-sonnet-4-6 with a $0.50 budget cap per test.
 ///
@@ -21,13 +24,15 @@ namespace TaskBoard.Worker.Tests;
 [Trait("Category", "Integration")]
 public class AgentRunnerIntegrationTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly string _repoRoot;
     private readonly ITrelloClient _trelloClient;
     private readonly TaskFileManager _taskFileManager;
     private readonly GitWorkspaceManager _gitWorkspaceManager;
     private readonly WorkflowConfig _workflowConfig;
     private readonly ITestOutputHelper _output;
     private readonly bool _enabled;
+    private readonly string? _originalBranch;
+    private readonly string _testBranchName;
 
     private const string DesignListId = "list-design";
     private const string TargetCardId = "card-integration-test";
@@ -36,17 +41,20 @@ public class AgentRunnerIntegrationTests : IDisposable
     public AgentRunnerIntegrationTests(ITestOutputHelper output)
     {
         _output = output;
-        _enabled = 
+        _enabled =
             true;
             //!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AGENT_INTEGRATION_TESTS"));
 
-        _tempDir = Path.Combine(Path.GetTempPath(), "agent-integ-" + Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(_tempDir);
+        _repoRoot = FindRepoRoot();
+        _testBranchName = $"aiboard/{TargetCardId}";
+
+        _output.WriteLine($"Workspace (repo root): {_repoRoot}");
 
         if (_enabled)
         {
-            _output.WriteLine($"Workspace: {_tempDir}");
-            InitGitRepo(_tempDir);
+            // Remember current branch so we can restore it in cleanup
+            _originalBranch = GetCurrentBranchSync(_repoRoot);
+            _output.WriteLine($"Original branch: {_originalBranch}");
         }
 
         _trelloClient = Substitute.For<ITrelloClient>();
@@ -57,26 +65,36 @@ public class AgentRunnerIntegrationTests : IDisposable
 
     public void Dispose()
     {
+        if (!_enabled) return;
+
         // Allow subprocesses to release file handles
         Thread.Sleep(500);
 
-        if (!Directory.Exists(_tempDir))
-            return;
-
         try
         {
-            foreach (var file in Directory.EnumerateFiles(_tempDir, "*", SearchOption.AllDirectories))
+            // Switch back to original branch
+            if (!string.IsNullOrEmpty(_originalBranch))
             {
-                var attrs = File.GetAttributes(file);
-                if ((attrs & FileAttributes.ReadOnly) != 0)
-                    File.SetAttributes(file, attrs & ~FileAttributes.ReadOnly);
+                RunGitSync(_repoRoot, "checkout", _originalBranch);
             }
 
-            Directory.Delete(_tempDir, recursive: true);
+            // Delete the test branch (best effort)
+            try
+            {
+                RunGitSync(_repoRoot, "branch", "-D", _testBranchName);
+            }
+            catch { /* branch may not exist if test failed early */ }
+
+            // Remove .aiboard directory if it was created
+            var aiboardDir = Path.Combine(_repoRoot, ".aiboard");
+            if (Directory.Exists(aiboardDir))
+            {
+                Directory.Delete(aiboardDir, recursive: true);
+            }
         }
-        catch (IOException)
+        catch (Exception ex)
         {
-            // Best effort — temp dir will be cleaned up by OS
+            _output.WriteLine($"Cleanup warning: {ex.Message}");
         }
     }
 
@@ -98,7 +116,7 @@ public class AgentRunnerIntegrationTests : IDisposable
         var runner = CreateRunner(CreateRealExecutor(maxBudgetUsd: 0.50m, timeoutSeconds: 180));
         SetupBoardCards(description);
 
-        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _repoRoot, CancellationToken.None);
 
         _output.WriteLine($"Outcome: {result.Outcome}");
         _output.WriteLine($"ErrorDetail: {result.ErrorDetail ?? "(none)"}");
@@ -107,7 +125,7 @@ public class AgentRunnerIntegrationTests : IDisposable
             $"Expected SUCCESS but got {result.Outcome}. ErrorDetail: {result.ErrorDetail}");
 
         // Read the task file after execution
-        var taskContent = await _taskFileManager.ReadTaskFileAsync(_tempDir, TargetCardId, CancellationToken.None);
+        var taskContent = await _taskFileManager.ReadTaskFileAsync(_repoRoot, TargetCardId, CancellationToken.None);
         _output.WriteLine($"Task file length: {taskContent.Length} chars");
 
         // Claude should have added meaningful design content
@@ -115,7 +133,7 @@ public class AgentRunnerIntegrationTests : IDisposable
             $"Expected task file to be substantially larger than original description. Got {taskContent.Length} chars.");
 
         // Verify the branch exists
-        var branch = await _gitWorkspaceManager.GetCurrentBranchAsync(_tempDir, CancellationToken.None);
+        var branch = await _gitWorkspaceManager.GetCurrentBranchAsync(_repoRoot, CancellationToken.None);
         Assert.Equal($"aiboard/{TargetCardId}", branch);
     }
 
@@ -127,7 +145,7 @@ public class AgentRunnerIntegrationTests : IDisposable
         var runner = CreateRunner(CreateRealExecutor(maxBudgetUsd: 0.50m, timeoutSeconds: 180));
         SetupBoardCards("Make it better");
 
-        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _repoRoot, CancellationToken.None);
 
         _output.WriteLine($"Outcome: {result.Outcome}");
         _output.WriteLine($"ErrorDetail: {result.ErrorDetail ?? "(none)"}");
@@ -136,7 +154,7 @@ public class AgentRunnerIntegrationTests : IDisposable
         Assert.True(result.Outcome == AgentOutcome.QUESTIONS,
             $"Expected QUESTIONS but got {result.Outcome}. ErrorDetail: {result.ErrorDetail}");
 
-        var taskContent = await _taskFileManager.ReadTaskFileAsync(_tempDir, TargetCardId, CancellationToken.None);
+        var taskContent = await _taskFileManager.ReadTaskFileAsync(_repoRoot, TargetCardId, CancellationToken.None);
         _output.WriteLine($"Task file length: {taskContent.Length} chars");
         // Should contain question indicators
         Assert.Contains("?", taskContent);
@@ -151,7 +169,7 @@ public class AgentRunnerIntegrationTests : IDisposable
         var runner = CreateRunner(CreateRealExecutor(maxBudgetUsd: 0.01m, timeoutSeconds: 60));
         SetupBoardCards("Build a comprehensive microservices architecture");
 
-        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _repoRoot, CancellationToken.None);
 
         _output.WriteLine($"Outcome: {result.Outcome}");
         _output.WriteLine($"ErrorDetail: {result.ErrorDetail ?? "(none)"}");
@@ -215,14 +233,42 @@ public class AgentRunnerIntegrationTests : IDisposable
             });
     }
 
-    private static void InitGitRepo(string path)
+    /// <summary>
+    /// Walk up from the test assembly directory to find the repo root (where .git lives).
+    /// </summary>
+    private static string FindRepoRoot()
     {
-        RunGitSync(path, "init");
-        RunGitSync(path, "config", "user.email", "test@test.com");
-        RunGitSync(path, "config", "user.name", "Test");
-        File.WriteAllText(Path.Combine(path, ".gitkeep"), "");
-        RunGitSync(path, "add", ".gitkeep");
-        RunGitSync(path, "commit", "-m", "initial");
+        var dir = AppContext.BaseDirectory;
+        while (dir is not null)
+        {
+            if (Directory.Exists(Path.Combine(dir, ".git")))
+                return dir;
+            dir = Directory.GetParent(dir)?.FullName;
+        }
+
+        throw new InvalidOperationException(
+            $"Could not find repo root (no .git directory) starting from {AppContext.BaseDirectory}");
+    }
+
+    private static string GetCurrentBranchSync(string repoPath)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = repoPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("rev-parse");
+        psi.ArgumentList.Add("--abbrev-ref");
+        psi.ArgumentList.Add("HEAD");
+
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        var output = process.StandardOutput.ReadToEnd().Trim();
+        process.WaitForExit();
+        return output;
     }
 
     private static void RunGitSync(string workingDirectory, params string[] args)
