@@ -17,17 +17,31 @@ public sealed class ClaudeAgentExecutor(
           "properties": {
             "outcome": {
               "type": "string",
-              "enum": ["SUCCESS", "QUESTIONS", "ERROR"]
+              "enum": ["COMPLETE", "NEEDS_INFO", "ERROR"]
             },
             "detail": {
               "type": "string"
+            },
+            "questions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "question": { "type": "string" },
+                  "recommendations": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  }
+                },
+                "required": ["question"]
+              }
             }
           },
           "required": ["outcome"]
         }
         """;
 
-    public async Task<AgentOutcome> ExecuteAsync(
+    public async Task<AgentResult> ExecuteAsync(
         AgentExecutionContext context, CancellationToken cancellationToken)
     {
         logger.LogInformation(
@@ -65,9 +79,9 @@ public sealed class ClaudeAgentExecutor(
         logger.LogDebug("Claude agent raw stdout ({Length} chars): {Stdout}",
             stdout.Length, stdout[..Math.Min(2000, stdout.Length)]);
 
-        var outcome = ParseOutcome(stdout);
-        logger.LogInformation("Claude agent complete, outcome={Outcome}", outcome);
-        return outcome;
+        var result = ParseResult(stdout);
+        logger.LogInformation("Claude agent complete, outcome={Outcome}", result.Outcome);
+        return result;
     }
 
     private static string BuildUserPrompt(AgentExecutionContext context, string taskFilePath)
@@ -82,28 +96,32 @@ public sealed class ClaudeAgentExecutor(
         sb.AppendLine($"- The target task file is at: {taskFilePath}");
         sb.AppendLine("- All project tasks are in the .aiboard/tasks/ directory for context.");
         sb.AppendLine("- Modify ONLY the target task file. Do not modify any other file.");
-        sb.AppendLine("- If you can complete the work fully and accurately, respond with outcome SUCCESS.");
-        sb.AppendLine("- If you have important questions that must be answered first, add a ## Questions section to the task file and respond with outcome QUESTIONS.");
-        sb.AppendLine("- If something goes wrong, add a ## Error section to the task file and respond with outcome ERROR.");
+        sb.AppendLine("- If you can complete the work fully and accurately, respond with outcome COMPLETE.");
+        sb.AppendLine("- If you have important questions that must be answered first, respond with outcome NEEDS_INFO and include your questions in the questions array, each with an optional list of recommendations.");
+        sb.AppendLine("- If something goes wrong, respond with outcome ERROR and describe the issue in the detail field.");
         return sb.ToString();
     }
 
     private string[] BuildArgumentList(string model, string systemPrompt, string userPrompt)
     {
+        // IMPORTANT: On Windows, claude.cmd is invoked via cmd.exe which misparses
+        // double quotes in arguments. Flag-style args must come FIRST; content args
+        // (--system-prompt, -p) must come LAST to prevent quote mangling from
+        // corrupting configuration flags.
         return
         [
-            "-p", userPrompt,
             "--model", model,
-            "--system-prompt", systemPrompt,
             "--output-format", "json",
             "--max-budget-usd", _options.MaxBudgetUsd.ToString("F2"),
             "--permission-mode", "bypassPermissions",
             "--allowedTools", "*",
             "--json-schema", MinifyJson(OutcomeSchema),
+            "--append-system-prompt", systemPrompt,
+            "-p", userPrompt,
         ];
     }
 
-    internal static AgentOutcome ParseOutcome(string stdout)
+    internal static AgentResult ParseResult(string stdout)
     {
         try
         {
@@ -115,14 +133,17 @@ public sealed class ClaudeAgentExecutor(
                 && structured.ValueKind == JsonValueKind.Object
                 && structured.TryGetProperty("outcome", out var structuredOutcome))
             {
-                return ParseOutcomeString(structuredOutcome.GetString());
+                var outcome = ParseOutcomeString(structuredOutcome.GetString());
+                var detail = structured.TryGetProperty("detail", out var d) ? d.GetString() : null;
+                var questions = ParseQuestions(structured);
+                return new AgentResult(outcome, detail, questions);
             }
 
             // Try result field
             if (root.TryGetProperty("result", out var result))
             {
                 var resultText = result.GetString() ?? "";
-                return TryParseOutcomeFromText(resultText);
+                return new AgentResult(TryParseOutcomeFromText(resultText));
             }
         }
         catch (JsonException)
@@ -130,15 +151,48 @@ public sealed class ClaudeAgentExecutor(
             // Raw text output
         }
 
-        return TryParseOutcomeFromText(stdout);
+        return new AgentResult(TryParseOutcomeFromText(stdout));
+    }
+
+    private static List<AgentQuestion>? ParseQuestions(JsonElement structured)
+    {
+        if (!structured.TryGetProperty("questions", out var questionsEl)
+            || questionsEl.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var questions = new List<AgentQuestion>();
+        foreach (var item in questionsEl.EnumerateArray())
+        {
+            if (!item.TryGetProperty("question", out var q))
+                continue;
+
+            List<string>? recommendations = null;
+            if (item.TryGetProperty("recommendations", out var recsEl)
+                && recsEl.ValueKind == JsonValueKind.Array)
+            {
+                recommendations = [];
+                foreach (var rec in recsEl.EnumerateArray())
+                {
+                    var val = rec.GetString();
+                    if (val is not null)
+                        recommendations.Add(val);
+                }
+            }
+
+            questions.Add(new AgentQuestion(q.GetString()!, recommendations));
+        }
+
+        return questions.Count > 0 ? questions : null;
     }
 
     private static AgentOutcome ParseOutcomeString(string? outcome)
     {
         return outcome?.ToUpperInvariant() switch
         {
-            "SUCCESS" => AgentOutcome.SUCCESS,
-            "QUESTIONS" => AgentOutcome.QUESTIONS,
+            "COMPLETE" => AgentOutcome.COMPLETE,
+            "SUCCESS" => AgentOutcome.COMPLETE,       // backward compat
+            "NEEDS_INFO" => AgentOutcome.NEEDS_INFO,
+            "QUESTIONS" => AgentOutcome.NEEDS_INFO,   // backward compat
             "ERROR" => AgentOutcome.ERROR,
             _ => AgentOutcome.ERROR
         };
@@ -159,10 +213,12 @@ public sealed class ClaudeAgentExecutor(
         catch (JsonException) { }
 
         // Last resort: look for outcome keywords
-        if (text.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase))
-            return AgentOutcome.SUCCESS;
-        if (text.Contains("QUESTIONS", StringComparison.OrdinalIgnoreCase))
-            return AgentOutcome.QUESTIONS;
+        if (text.Contains("COMPLETE", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase))
+            return AgentOutcome.COMPLETE;
+        if (text.Contains("NEEDS_INFO", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("QUESTIONS", StringComparison.OrdinalIgnoreCase))
+            return AgentOutcome.NEEDS_INFO;
 
         return AgentOutcome.ERROR;
     }

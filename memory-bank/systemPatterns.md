@@ -129,9 +129,11 @@ One "Agent Status" comment per run — upserted, not appended. Prevents notifica
 The .NET worker can invoke the Claude CLI (`claude`) as a subprocess via `ClaudeCliLlmClient`.
 
 **Windows invocation:**
-- Set `startInfo.FileName = "claude.cmd"` directly with `ArgumentList` — .NET handles argument escaping correctly
+- Set `startInfo.FileName = "claude.cmd"` directly with `ArgumentList`
 - Do NOT use `cmd.exe /c claude` (mangles quoted arguments) or PowerShell wrappers (unnecessary indirection)
 - Remove `CLAUDECODE` env var from subprocess environment or the CLI refuses to run as a subprocess
+- **Argument ordering:** Flag-style args (`--model`, `--output-format`, `--permission-mode`, etc.) must come BEFORE content args (`--system-prompt`, `-p`). On Windows, `claude.cmd` runs through `cmd.exe` which misparses double quotes — if a content arg with quotes appears early, all subsequent flags are corrupted.
+- **No double quotes in prompts:** Prompt templates must not contain `"` characters. Use plain text or single quotes instead. Double quotes in `-p` or `--system-prompt` values trigger `cmd.exe` quote-state mangling.
 
 **CLI flags (required for structured output):**
 - `--output-format json` — returns JSON envelope with `result` and `structured_output` fields

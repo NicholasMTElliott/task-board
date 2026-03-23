@@ -7,18 +7,128 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger)
 {
     private const int DefaultTimeoutSeconds = 30;
 
-    public async Task CreateBranchAsync(
+    // ── Worktree methods ──────────────────────────────────────────────
+
+    internal static string GetWorktreePath(string repoPath, string branchName)
+        => Path.Combine(repoPath + "-worktrees", branchName.Replace('/', Path.DirectorySeparatorChar));
+
+    public async Task<string> CreateWorktreeAsync(
         string repoPath, string branchName, CancellationToken cancellationToken)
     {
-        logger.LogInformation("Creating branch {Branch} in {Repo}", branchName, repoPath);
-        await RunGitAsync(repoPath, ["checkout", "-b", branchName], cancellationToken);
+        var worktreePath = GetWorktreePath(repoPath, branchName);
+        var fullWorktreePath = Path.GetFullPath(worktreePath);
+
+        // If worktree already registered, reuse it
+        if (await WorktreeExistsAsync(repoPath, fullWorktreePath, cancellationToken))
+        {
+            logger.LogInformation("Reusing existing worktree at {Path} for {Branch}", fullWorktreePath, branchName);
+            return fullWorktreePath;
+        }
+
+        // If directory exists but isn't a registered worktree, clean it up
+        if (Directory.Exists(fullWorktreePath))
+        {
+            logger.LogWarning("Stale worktree directory at {Path} — removing and pruning", fullWorktreePath);
+            Directory.Delete(fullWorktreePath, recursive: true);
+            try { await RunGitAsync(repoPath, ["worktree", "prune"], cancellationToken); }
+            catch (GitOperationException) { /* best effort */ }
+        }
+
+        // Ensure parent directory exists
+        Directory.CreateDirectory(Path.GetDirectoryName(fullWorktreePath)!);
+
+        var branchExists = await BranchExistsAsync(repoPath, branchName, cancellationToken);
+
+        if (branchExists)
+        {
+            logger.LogInformation("Creating worktree at {Path} for existing branch {Branch}", fullWorktreePath, branchName);
+            await RunGitAsync(repoPath, ["worktree", "add", fullWorktreePath, branchName], cancellationToken);
+        }
+        else
+        {
+            logger.LogInformation("Creating worktree at {Path} with new branch {Branch}", fullWorktreePath, branchName);
+            await RunGitAsync(repoPath, ["worktree", "add", fullWorktreePath, "-b", branchName], cancellationToken);
+        }
+
+        return fullWorktreePath;
     }
+
+    public async Task RemoveWorktreeAsync(
+        string repoPath, string branchName, bool deleteBranch, CancellationToken cancellationToken)
+    {
+        var worktreePath = Path.GetFullPath(GetWorktreePath(repoPath, branchName));
+
+        logger.LogInformation("Removing worktree at {Path}", worktreePath);
+
+        try
+        {
+            await RunGitAsync(repoPath, ["worktree", "remove", worktreePath, "--force"], cancellationToken);
+        }
+        catch (GitOperationException ex)
+        {
+            logger.LogWarning(ex, "Failed to remove worktree at {Path} — may not exist", worktreePath);
+            // If directory still exists, force-remove it and prune
+            if (Directory.Exists(worktreePath))
+            {
+                Directory.Delete(worktreePath, recursive: true);
+                try { await RunGitAsync(repoPath, ["worktree", "prune"], cancellationToken); }
+                catch (GitOperationException) { /* best effort */ }
+            }
+        }
+
+        if (deleteBranch)
+        {
+            try
+            {
+                await RunGitAsync(repoPath, ["branch", "-D", branchName], cancellationToken);
+            }
+            catch (GitOperationException ex)
+            {
+                logger.LogWarning(ex, "Failed to delete branch {Branch}", branchName);
+            }
+        }
+    }
+
+    internal async Task<bool> WorktreeExistsAsync(
+        string repoPath, string worktreePath, CancellationToken cancellationToken)
+    {
+        var (_, stdout, _) = await RunGitAsync(repoPath, ["worktree", "list", "--porcelain"], cancellationToken);
+        var normalizedTarget = Path.GetFullPath(worktreePath);
+
+        foreach (var line in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (line.StartsWith("worktree ", StringComparison.Ordinal))
+            {
+                var path = Path.GetFullPath(line["worktree ".Length..].Trim());
+                if (string.Equals(path, normalizedTarget, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    internal async Task<bool> BranchExistsAsync(
+        string repoPath, string branchName, CancellationToken cancellationToken)
+    {
+        var (_, stdout, _) = await RunGitAsync(repoPath, ["branch", "--list", branchName], cancellationToken);
+        return !string.IsNullOrWhiteSpace(stdout);
+    }
+
+    // ── Common git operations ────────────────────────────────────────
 
     public async Task CommitAsync(
         string repoPath, string message, CancellationToken cancellationToken)
     {
         logger.LogInformation("Committing changes in {Repo}", repoPath);
-        await RunGitAsync(repoPath, ["add", ".aiboard/"], cancellationToken);
+        await RunGitAsync(repoPath, ["add", "."], cancellationToken);
+
+        if (!await HasStagedChangesAsync(repoPath, cancellationToken))
+        {
+            logger.LogInformation("No staged changes to commit in {Repo}", repoPath);
+            return;
+        }
+
         await RunGitAsync(repoPath, ["commit", "-m", message], cancellationToken);
     }
 
@@ -27,16 +137,6 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger)
     {
         logger.LogInformation("Pushing branch {Branch} in {Repo}", branchName, repoPath);
         await RunGitAsync(repoPath, ["push", "-u", "origin", branchName], cancellationToken);
-    }
-
-    public async Task CleanupAsync(
-        string repoPath, string branchName, CancellationToken cancellationToken)
-    {
-        logger.LogInformation("Cleaning up branch {Branch} in {Repo}", branchName, repoPath);
-
-        // Switch back to previous branch before deleting
-        await RunGitAsync(repoPath, ["checkout", "-"], cancellationToken);
-        await RunGitAsync(repoPath, ["branch", "-D", branchName], cancellationToken);
     }
 
     public async Task<string> GetCurrentBranchAsync(

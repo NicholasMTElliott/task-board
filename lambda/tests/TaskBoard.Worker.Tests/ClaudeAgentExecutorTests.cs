@@ -5,7 +5,7 @@ namespace TaskBoard.Worker.Tests;
 public class ClaudeAgentExecutorTests
 {
     [Fact]
-    public void ParseOutcome_StructuredOutput_ReturnsCorrectOutcome()
+    public void ParseResult_StructuredOutput_ReturnsCorrectOutcome()
     {
         var stdout = """
             {
@@ -16,31 +16,85 @@ public class ClaudeAgentExecutorTests
             }
             """;
 
-        var outcome = ClaudeAgentExecutor.ParseOutcome(stdout);
+        var result = ClaudeAgentExecutor.ParseResult(stdout);
 
-        Assert.Equal(AgentOutcome.SUCCESS, outcome);
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
     }
 
     [Fact]
-    public void ParseOutcome_StructuredOutput_Questions()
+    public void ParseResult_StructuredOutput_NeedsInfo()
     {
         var stdout = """
             {
               "result": "I have questions",
               "structured_output": {
-                "outcome": "QUESTIONS",
+                "outcome": "NEEDS_INFO",
                 "detail": "Need more info"
               }
             }
             """;
 
-        var outcome = ClaudeAgentExecutor.ParseOutcome(stdout);
+        var result = ClaudeAgentExecutor.ParseResult(stdout);
 
-        Assert.Equal(AgentOutcome.QUESTIONS, outcome);
+        Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
+        Assert.Equal("Need more info", result.Detail);
     }
 
     [Fact]
-    public void ParseOutcome_ResultFieldWithJson_ReturnsCorrectOutcome()
+    public void ParseResult_StructuredOutput_WithQuestions()
+    {
+        var stdout = """
+            {
+              "structured_output": {
+                "outcome": "NEEDS_INFO",
+                "detail": "Spec is too vague",
+                "questions": [
+                  {
+                    "question": "What is the target component?",
+                    "recommendations": ["Auth module", "API gateway"]
+                  },
+                  {
+                    "question": "What problem are we solving?"
+                  }
+                ]
+              }
+            }
+            """;
+
+        var result = ClaudeAgentExecutor.ParseResult(stdout);
+
+        Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
+        Assert.Equal("Spec is too vague", result.Detail);
+        Assert.NotNull(result.Questions);
+        Assert.Equal(2, result.Questions!.Count);
+        Assert.Equal("What is the target component?", result.Questions[0].Question);
+        Assert.NotNull(result.Questions[0].Recommendations);
+        Assert.Equal(2, result.Questions[0].Recommendations!.Count);
+        Assert.Equal("Auth module", result.Questions[0].Recommendations![0]);
+        Assert.Equal("What problem are we solving?", result.Questions[1].Question);
+        Assert.Null(result.Questions[1].Recommendations);
+    }
+
+    [Fact]
+    public void ParseResult_StructuredOutput_EmptyQuestions_ReturnsNull()
+    {
+        var stdout = """
+            {
+              "structured_output": {
+                "outcome": "COMPLETE",
+                "questions": []
+              }
+            }
+            """;
+
+        var result = ClaudeAgentExecutor.ParseResult(stdout);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+        Assert.Null(result.Questions);
+    }
+
+    [Fact]
+    public void ParseResult_ResultFieldWithJson_ReturnsCorrectOutcome()
     {
         var stdout = """
             {
@@ -49,13 +103,13 @@ public class ClaudeAgentExecutorTests
             }
             """;
 
-        var outcome = ClaudeAgentExecutor.ParseOutcome(stdout);
+        var result = ClaudeAgentExecutor.ParseResult(stdout);
 
-        Assert.Equal(AgentOutcome.QUESTIONS, outcome);
+        Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
     }
 
     [Fact]
-    public void ParseOutcome_ResultFieldWithMarkdownFences_ReturnsCorrectOutcome()
+    public void ParseResult_ResultFieldWithMarkdownFences_ReturnsCorrectOutcome()
     {
         var stdout = """
             {
@@ -64,33 +118,33 @@ public class ClaudeAgentExecutorTests
             }
             """;
 
-        var outcome = ClaudeAgentExecutor.ParseOutcome(stdout);
+        var result = ClaudeAgentExecutor.ParseResult(stdout);
 
-        Assert.Equal(AgentOutcome.ERROR, outcome);
+        Assert.Equal(AgentOutcome.ERROR, result.Outcome);
     }
 
     [Fact]
-    public void ParseOutcome_RawText_FallsBackToKeywordMatch()
+    public void ParseResult_RawText_FallsBackToKeywordMatch()
     {
         var stdout = "The task was completed with SUCCESS.";
 
-        var outcome = ClaudeAgentExecutor.ParseOutcome(stdout);
+        var result = ClaudeAgentExecutor.ParseResult(stdout);
 
-        Assert.Equal(AgentOutcome.SUCCESS, outcome);
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
     }
 
     [Fact]
-    public void ParseOutcome_UnrecognizedText_ReturnsError()
+    public void ParseResult_UnrecognizedText_ReturnsError()
     {
-        var stdout = "Something went completely sideways, no outcome keyword present.";
+        var stdout = "Something went wrong sideways, no outcome keyword present.";
 
-        var outcome = ClaudeAgentExecutor.ParseOutcome(stdout);
+        var result = ClaudeAgentExecutor.ParseResult(stdout);
 
-        Assert.Equal(AgentOutcome.ERROR, outcome);
+        Assert.Equal(AgentOutcome.ERROR, result.Outcome);
     }
 
     [Fact]
-    public void ParseOutcome_CaseInsensitive_Works()
+    public void ParseResult_CaseInsensitive_Works()
     {
         var stdout = """
             {
@@ -100,21 +154,21 @@ public class ClaudeAgentExecutorTests
             }
             """;
 
-        var outcome = ClaudeAgentExecutor.ParseOutcome(stdout);
+        var result = ClaudeAgentExecutor.ParseResult(stdout);
 
-        Assert.Equal(AgentOutcome.SUCCESS, outcome);
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
     }
 
     [Fact]
-    public void ParseOutcome_EmptyString_ReturnsError()
+    public void ParseResult_EmptyString_ReturnsError()
     {
-        var outcome = ClaudeAgentExecutor.ParseOutcome("");
+        var result = ClaudeAgentExecutor.ParseResult("");
 
-        Assert.Equal(AgentOutcome.ERROR, outcome);
+        Assert.Equal(AgentOutcome.ERROR, result.Outcome);
     }
 
     [Fact]
-    public void ParseOutcome_NullOutcomeInStructuredOutput_ReturnsError()
+    public void ParseResult_NullOutcomeInStructuredOutput_ReturnsError()
     {
         var stdout = """
             {
@@ -124,8 +178,8 @@ public class ClaudeAgentExecutorTests
             }
             """;
 
-        var outcome = ClaudeAgentExecutor.ParseOutcome(stdout);
+        var result = ClaudeAgentExecutor.ParseResult(stdout);
 
-        Assert.Equal(AgentOutcome.ERROR, outcome);
+        Assert.Equal(AgentOutcome.ERROR, result.Outcome);
     }
 }

@@ -27,7 +27,7 @@
       "name": "Design",
       "role": "senior_engineer",
       "gateType": "agent_run",
-      "taskPrompt": "You are working on the task \"{TaskName}\" ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context. Your job is to update ONLY the file for this task to add a detailed technical design approach. Include: architecture decisions, component interactions, data flow, edge cases, and implementation notes. Do not modify any other file.",
+      "taskPrompt": "You are working on the task {TaskName} ({TaskId}).  All project tasks are available in /.aiboard/tasks/ for context. Your job is to update ONLY the file for this task to add a detailed technical design approach. Include: architecture decisions, component interactions, data flow, edge cases, and implementation notes.  Do not modify any other file. You should include enough information for an unambiguous implementation. You may respond with questions where there is ambiguity, conflict, or mistakes; you should only proceed when you are fully confident you understand the request and the subject material fully.  It is always appropriate to say 'I do not understand', 'I need help', or 'This does not seem correct'.",
       "transitions": {
         "COMPLETE": "69babc43a79b65c19ea4b4c1",
         "NEEDS_INFO": "69bac6d8981fecf53493f69f",
@@ -95,7 +95,7 @@
     },
     "senior_engineer": {
       "model": "opus-4.6",
-      "systemPrompt": "You are a Senior Software Engineer. Produce structured Technical Design, identify edge cases, and create implementation breakdowns.",
+      "systemPrompt": "You are a Senior Software Engineer. Produce structured Technical Design, identify edge cases, and create implementation breakdowns.  You are reasonable but skeptical, critical enough to ensure that we catch any issues but not unreasonably blocking progress.",
       "sections": ["Technical Design", "Decisions"]
     },
     "qa": {

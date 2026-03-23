@@ -14,6 +14,9 @@ namespace TaskBoard.Worker.Tests;
 /// Uses the actual repo root as the workspace so Claude has proper
 /// workspace trust and project context.
 ///
+/// The agent runs inside a git worktree (isolated directory on its own branch),
+/// so the main repo working tree is never modified.
+///
 /// Gated behind AGENT_INTEGRATION_TESTS=true environment variable.
 /// Uses claude-sonnet-4-6 with a $0.50 budget cap per test.
 ///
@@ -31,7 +34,6 @@ public class AgentRunnerIntegrationTests : IDisposable
     private readonly WorkflowConfig _workflowConfig;
     private readonly ITestOutputHelper _output;
     private readonly bool _enabled;
-    private readonly string? _originalBranch;
     private readonly string _testBranchName;
 
     private const string DesignListId = "list-design";
@@ -50,13 +52,6 @@ public class AgentRunnerIntegrationTests : IDisposable
 
         _output.WriteLine($"Workspace (repo root): {_repoRoot}");
 
-        if (_enabled)
-        {
-            // Remember current branch so we can restore it in cleanup
-            _originalBranch = GetCurrentBranchSync(_repoRoot);
-            _output.WriteLine($"Original branch: {_originalBranch}");
-        }
-
         _trelloClient = Substitute.For<ITrelloClient>();
         _taskFileManager = new TaskFileManager(NullLogger<TaskFileManager>.Instance);
         _gitWorkspaceManager = new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance);
@@ -67,16 +62,29 @@ public class AgentRunnerIntegrationTests : IDisposable
     {
         if (!_enabled) return;
 
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SKIP_CLEANUP")))
+        {
+            var preserved = Path.GetFullPath(GitWorkspaceManager.GetWorktreePath(_repoRoot, _testBranchName));
+            _output.WriteLine($"SKIP_CLEANUP set — worktree preserved at: {preserved}");
+            return;
+        }
+
         // Allow subprocesses to release file handles
         Thread.Sleep(500);
 
         try
         {
-            // Switch back to original branch
-            if (!string.IsNullOrEmpty(_originalBranch))
+            // Remove the worktree (best effort)
+            var worktreePath = GitWorkspaceManager.GetWorktreePath(_repoRoot, _testBranchName);
+            var fullWorktreePath = Path.GetFullPath(worktreePath);
+
+            if (Directory.Exists(fullWorktreePath))
             {
-                RunGitSync(_repoRoot, "checkout", _originalBranch);
+                RunGitSync(_repoRoot, "worktree", "remove", fullWorktreePath, "--force");
             }
+
+            // Prune any stale worktree refs
+            RunGitSync(_repoRoot, "worktree", "prune");
 
             // Delete the test branch (best effort)
             try
@@ -85,7 +93,7 @@ public class AgentRunnerIntegrationTests : IDisposable
             }
             catch { /* branch may not exist if test failed early */ }
 
-            // Remove .aiboard directory if it was created
+            // Remove .aiboard directory from main repo if somehow created
             var aiboardDir = Path.Combine(_repoRoot, ".aiboard");
             if (Directory.Exists(aiboardDir))
             {
@@ -121,20 +129,28 @@ public class AgentRunnerIntegrationTests : IDisposable
         _output.WriteLine($"Outcome: {result.Outcome}");
         _output.WriteLine($"ErrorDetail: {result.ErrorDetail ?? "(none)"}");
 
-        Assert.True(result.Outcome == AgentOutcome.SUCCESS,
+        Assert.True(result.Outcome == AgentOutcome.COMPLETE,
             $"Expected SUCCESS but got {result.Outcome}. ErrorDetail: {result.ErrorDetail}");
 
-        // Read the task file after execution
-        var taskContent = await _taskFileManager.ReadTaskFileAsync(_repoRoot, TargetCardId, CancellationToken.None);
+        // Read the task file from the worktree
+        var worktreePath = Path.GetFullPath(
+            GitWorkspaceManager.GetWorktreePath(_repoRoot, _testBranchName));
+        var taskContent = await _taskFileManager.ReadTaskFileAsync(worktreePath, TargetCardId, CancellationToken.None);
         _output.WriteLine($"Task file length: {taskContent.Length} chars");
 
         // Claude should have added meaningful design content
         Assert.True(taskContent.Length > description.Length + 100,
             $"Expected task file to be substantially larger than original description. Got {taskContent.Length} chars.");
 
-        // Verify the branch exists
-        var branch = await _gitWorkspaceManager.GetCurrentBranchAsync(_repoRoot, CancellationToken.None);
-        Assert.Equal($"aiboard/{TargetCardId}", branch);
+        // Verify the branch exists (visible from the main repo)
+        var branchExists = await _gitWorkspaceManager.BranchExistsAsync(
+            _repoRoot, _testBranchName, CancellationToken.None);
+        Assert.True(branchExists, "Agent branch should exist");
+
+        // Verify main repo was not modified
+        var mainBranch = await _gitWorkspaceManager.GetCurrentBranchAsync(_repoRoot, CancellationToken.None);
+        _output.WriteLine($"Main repo branch after test: {mainBranch}");
+        Assert.DoesNotContain("aiboard", mainBranch);
     }
 
     [Fact]
@@ -143,7 +159,7 @@ public class AgentRunnerIntegrationTests : IDisposable
         if (!_enabled) return;
 
         var runner = CreateRunner(CreateRealExecutor(maxBudgetUsd: 0.50m, timeoutSeconds: 180));
-        SetupBoardCards("Make it better");
+        SetupBoardCards("Make it better", targetTitle: "Improvement");
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _repoRoot, CancellationToken.None);
 
@@ -151,13 +167,20 @@ public class AgentRunnerIntegrationTests : IDisposable
         _output.WriteLine($"ErrorDetail: {result.ErrorDetail ?? "(none)"}");
 
         // With a description this vague, Claude should ask questions
-        Assert.True(result.Outcome == AgentOutcome.QUESTIONS,
-            $"Expected QUESTIONS but got {result.Outcome}. ErrorDetail: {result.ErrorDetail}");
+        Assert.True(result.Outcome == AgentOutcome.NEEDS_INFO,
+            $"Expected NEEDS_INFO but got {result.Outcome}. ErrorDetail: {result.ErrorDetail}");
 
-        var taskContent = await _taskFileManager.ReadTaskFileAsync(_repoRoot, TargetCardId, CancellationToken.None);
-        _output.WriteLine($"Task file length: {taskContent.Length} chars");
-        // Should contain question indicators
-        Assert.Contains("?", taskContent);
+        // Questions should be returned in the structured output
+        Assert.NotNull(result.Questions);
+        Assert.True(result.Questions!.Count > 0, "Expected at least one question");
+        _output.WriteLine($"Questions: {result.Questions.Count}");
+        foreach (var q in result.Questions)
+        {
+            _output.WriteLine($"  Q: {q.Question}");
+            if (q.Recommendations is not null)
+                foreach (var r in q.Recommendations)
+                    _output.WriteLine($"    R: {r}");
+        }
     }
 
     [Fact]
@@ -175,9 +198,8 @@ public class AgentRunnerIntegrationTests : IDisposable
         _output.WriteLine($"ErrorDetail: {result.ErrorDetail ?? "(none)"}");
 
         // We accept either ERROR (budget exceeded) or SUCCESS (if it completed cheaply)
-        // The key assertion is: no crash, no unhandled exception
         Assert.True(
-            result.Outcome == AgentOutcome.ERROR || result.Outcome == AgentOutcome.SUCCESS,
+            result.Outcome == AgentOutcome.ERROR || result.Outcome == AgentOutcome.COMPLETE,
             $"Expected ERROR or SUCCESS, got {result.Outcome}. ErrorDetail: {result.ErrorDetail}");
     }
 
@@ -200,12 +222,12 @@ public class AgentRunnerIntegrationTests : IDisposable
             _workflowConfig, new XUnitLogger<AgentRunner>(_output));
     }
 
-    private void SetupBoardCards(string targetDescription)
+    private void SetupBoardCards(string targetDescription, string targetTitle = "User Registration Endpoint")
     {
         _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
             .Returns(new List<TrelloCard>
             {
-                new(TargetCardId, "User Registration Endpoint", targetDescription, DesignListId),
+                new(TargetCardId, targetTitle, targetDescription, DesignListId),
                 new("card-context-1", "Setup Database Migrations", "Configure Flyway for PostgreSQL schema management", DesignListId),
                 new("card-context-2", "Add Auth Middleware", "JWT validation middleware for protected routes", DesignListId),
             });
@@ -217,7 +239,7 @@ public class AgentRunnerIntegrationTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 [DesignListId] = new("Design", "senior_engineer", "agent_run",
-                    "You are working on the task \"{TaskName}\" ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context. Your job is to update ONLY the file for this task to add a detailed technical design approach. Include: architecture decisions, component interactions, data flow, edge cases, and implementation notes. Do not modify any other file.",
+                    "You are working on the task {TaskName} ({TaskId}).  All project tasks are available in /.aiboard/tasks/ for context. Your job is to update ONLY the file for this task to add a detailed technical design approach. Include: architecture decisions, component interactions, data flow, edge cases, and implementation notes.  Do not modify any other file. You should include enough information for an unambiguous implementation. You may respond with questions where there is ambiguity, conflict, or mistakes; you should only proceed when you are fully confident you understand the request and the subject material fully.  It is always appropriate to say 'I do not understand', 'I need help', or 'This does not seem correct'.",
                     new Dictionary<string, string>
                     {
                         ["COMPLETE"] = "list-review",
@@ -228,7 +250,7 @@ public class AgentRunnerIntegrationTests : IDisposable
             Roles: new Dictionary<string, WorkflowRole>
             {
                 ["senior_engineer"] = new("claude-sonnet-4-6",
-                    "You are a Senior Software Engineer. Produce structured Technical Design, identify edge cases, and create implementation breakdowns.",
+                    "You are a Senior Software Engineer. Produce structured Technical Design, identify edge cases, and create implementation breakdowns.  You are reasonable but skeptical, critical enough to ensure that we catch any issues but not unreasonably blocking progress.",
                     new List<string> { "Technical Design", "Decisions" }),
             });
     }
@@ -248,27 +270,6 @@ public class AgentRunnerIntegrationTests : IDisposable
 
         throw new InvalidOperationException(
             $"Could not find repo root (no .git directory) starting from {AppContext.BaseDirectory}");
-    }
-
-    private static string GetCurrentBranchSync(string repoPath)
-    {
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = repoPath,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        psi.ArgumentList.Add("rev-parse");
-        psi.ArgumentList.Add("--abbrev-ref");
-        psi.ArgumentList.Add("HEAD");
-
-        using var process = System.Diagnostics.Process.Start(psi)!;
-        var output = process.StandardOutput.ReadToEnd().Trim();
-        process.WaitForExit();
-        return output;
     }
 
     private static void RunGitSync(string workingDirectory, params string[] args)

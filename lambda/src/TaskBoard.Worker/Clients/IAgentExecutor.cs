@@ -2,7 +2,7 @@ namespace TaskBoard.Worker.Clients;
 
 public interface IAgentExecutor
 {
-    Task<AgentOutcome> ExecuteAsync(AgentExecutionContext context, CancellationToken cancellationToken);
+    Task<AgentResult> ExecuteAsync(AgentExecutionContext context, CancellationToken cancellationToken);
 }
 
 public sealed record AgentExecutionContext(
@@ -12,9 +12,18 @@ public sealed record AgentExecutionContext(
     string SystemPrompt,
     string Model);
 
+public sealed record AgentResult(
+    AgentOutcome Outcome,
+    string? Detail = null,
+    IReadOnlyList<AgentQuestion>? Questions = null);
+
+public sealed record AgentQuestion(
+    string Question,
+    IReadOnlyList<string>? Recommendations = null);
+
 public enum AgentOutcome
 {
-    SUCCESS,
-    QUESTIONS,
+    COMPLETE,
+    NEEDS_INFO,
     ERROR
 }

@@ -51,66 +51,62 @@ public sealed partial class AgentRunner(
 
         try
         {
-            // 3. Create git branch
-            await gitWorkspaceManager.CreateBranchAsync(workspacePath, branchName, cancellationToken);
+            // 3. Create git worktree (isolated working directory for the agent)
+            var worktreePath = await gitWorkspaceManager.CreateWorktreeAsync(
+                workspacePath, branchName, cancellationToken);
 
-            // 4. Write all task files
-            await taskFileManager.WriteAllTaskFilesAsync(workspacePath, cards, workflowConfig, cancellationToken);
+            // 4. Write all task files into the worktree
+            await taskFileManager.WriteAllTaskFilesAsync(worktreePath, cards, workflowConfig, cancellationToken);
 
             // 5. Resolve prompt placeholders
             var resolvedPrompt = ResolvePromptPlaceholders(state.TaskPrompt ?? "", targetCard);
 
-            // 6. Execute agent
+            // 6. Execute agent — WorkspacePath is the worktree, so Claude CLI runs there
             var context = new AgentExecutionContext(
                 TargetCardId: cardId,
-                WorkspacePath: workspacePath,
+                WorkspacePath: worktreePath,
                 TaskPrompt: resolvedPrompt,
                 SystemPrompt: role.SystemPrompt,
                 Model: role.Model);
 
-            var outcome = await agentExecutor.ExecuteAsync(context, cancellationToken);
+            var agentResult = await agentExecutor.ExecuteAsync(context, cancellationToken);
 
-            // 7. Commit based on outcome
-            var commitMessage = outcome switch
+            // 7. Commit based on outcome (inside the worktree)
+            var commitMessage = agentResult.Outcome switch
             {
-                AgentOutcome.SUCCESS => $"Agent: {state.Name} complete for {targetCard.Name}",
-                AgentOutcome.QUESTIONS => $"Agent: questions for {targetCard.Name}",
+                AgentOutcome.COMPLETE => $"Agent: {state.Name} complete for {targetCard.Name}",
+                AgentOutcome.NEEDS_INFO => $"Agent: questions for {targetCard.Name}",
                 AgentOutcome.ERROR => $"Agent: error processing {targetCard.Name}",
-                _ => $"Agent: {outcome} for {targetCard.Name}"
+                _ => $"Agent: {agentResult.Outcome} for {targetCard.Name}"
             };
 
-            try
-            {
-                await gitWorkspaceManager.CommitAsync(workspacePath, commitMessage, cancellationToken);
+            // CommitAsync is a no-op if nothing is staged (e.g., only .aiboard/ files changed)
+            await gitWorkspaceManager.CommitAsync(worktreePath, commitMessage, cancellationToken);
 
-                if (outcome == AgentOutcome.SUCCESS)
+            if (agentResult.Outcome == AgentOutcome.COMPLETE)
+            {
+                try
                 {
-                    try
-                    {
-                        await gitWorkspaceManager.PushAsync(workspacePath, branchName, cancellationToken);
-                    }
-                    catch (GitOperationException ex)
-                    {
-                        logger.LogWarning(ex, "Failed to push branch {Branch} — no remote configured?", branchName);
-                    }
+                    await gitWorkspaceManager.PushAsync(worktreePath, branchName, cancellationToken);
+                }
+                catch (GitOperationException ex)
+                {
+                    logger.LogWarning(ex, "Failed to push branch {Branch} — no remote configured?", branchName);
                 }
             }
-            catch (GitOperationException ex) when (ex.Message.Contains("nothing to commit"))
-            {
-                logger.LogWarning("No changes to commit for card {CardId}", cardId);
-            }
 
-            logger.LogInformation("Agent run complete for card {CardId}: outcome={Outcome}", cardId, outcome);
-            return new AgentRunResult(outcome, null);
+            logger.LogInformation("Agent run complete for card {CardId}: outcome={Outcome}", cardId, agentResult.Outcome);
+            return new AgentRunResult(agentResult.Outcome, null, agentResult.Questions);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogError(ex, "Agent run failed for card {CardId}", cardId);
 
-            // Try to write error to task file
+            // Try to write error to task file in the worktree
             try
             {
-                var taskFilePath = TaskFileManager.GetTaskFilePath(workspacePath, cardId);
+                var worktreePath = GitWorkspaceManager.GetWorktreePath(workspacePath, branchName);
+                var taskFilePath = TaskFileManager.GetTaskFilePath(worktreePath, cardId);
                 if (File.Exists(taskFilePath))
                 {
                     var existing = await File.ReadAllTextAsync(taskFilePath, cancellationToken);
@@ -118,7 +114,7 @@ public sealed partial class AgentRunner(
                         existing + $"\n\n## Error\n\n{ex.Message}", cancellationToken);
                 }
 
-                await gitWorkspaceManager.CommitAsync(workspacePath,
+                await gitWorkspaceManager.CommitAsync(worktreePath,
                     $"Agent: error processing {cardId}", cancellationToken);
             }
             catch
@@ -146,4 +142,7 @@ public sealed partial class AgentRunner(
     }
 }
 
-public sealed record AgentRunResult(AgentOutcome Outcome, string? ErrorDetail);
+public sealed record AgentRunResult(
+    AgentOutcome Outcome,
+    string? ErrorDetail,
+    IReadOnlyList<AgentQuestion>? Questions = null);

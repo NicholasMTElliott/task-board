@@ -9,6 +9,7 @@ namespace TaskBoard.Worker.Tests;
 public class AgentRunnerTests : IDisposable
 {
     private readonly string _tempDir;
+    private readonly string _worktreeBase;
     private readonly ITrelloClient _trelloClient;
     private readonly StubAgentExecutor _agentExecutor;
     private readonly TaskFileManager _taskFileManager;
@@ -23,6 +24,7 @@ public class AgentRunnerTests : IDisposable
     public AgentRunnerTests()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), "agentrunner-tests-" + Guid.NewGuid().ToString("N")[..8]);
+        _worktreeBase = _tempDir + "-worktrees";
         Directory.CreateDirectory(_tempDir);
         InitGitRepo(_tempDir);
 
@@ -43,47 +45,61 @@ public class AgentRunnerTests : IDisposable
 
     public void Dispose()
     {
-        if (!Directory.Exists(_tempDir))
+        CleanupDirectory(_worktreeBase);
+        try { RunGitSync(_tempDir, "worktree", "prune"); } catch { }
+        CleanupDirectory(_tempDir);
+    }
+
+    private static void CleanupDirectory(string path)
+    {
+        if (!Directory.Exists(path))
             return;
 
-        foreach (var file in Directory.EnumerateFiles(_tempDir, "*", SearchOption.AllDirectories))
+        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
         {
             var attrs = File.GetAttributes(file);
             if ((attrs & FileAttributes.ReadOnly) != 0)
                 File.SetAttributes(file, attrs & ~FileAttributes.ReadOnly);
         }
 
-        Directory.Delete(_tempDir, recursive: true);
+        Directory.Delete(path, recursive: true);
     }
 
     [Fact]
     public async Task ExecuteAsync_Success_CreatesCommitOnBranch()
     {
         SetupBoardCards();
-        _agentExecutor.NextOutcome = AgentOutcome.SUCCESS;
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
 
         var result = await _runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
 
-        Assert.Equal(AgentOutcome.SUCCESS, result.Outcome);
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
         Assert.Null(result.ErrorDetail);
 
-        // Verify branch was created
-        var branch = await _gitWorkspaceManager.GetCurrentBranchAsync(_tempDir, CancellationToken.None);
-        Assert.Equal($"aiboard/{TargetCardId}", branch);
+        // Main repo should be untouched (still on original branch)
+        var mainBranch = await _gitWorkspaceManager.GetCurrentBranchAsync(_tempDir, CancellationToken.None);
+        Assert.True(mainBranch == "main" || mainBranch == "master",
+            $"Main repo should still be on main/master, got '{mainBranch}'");
+
+        // Agent branch should exist
+        var branchExists = await _gitWorkspaceManager.BranchExistsAsync(
+            _tempDir, $"aiboard/{TargetCardId}", CancellationToken.None);
+        Assert.True(branchExists, "Agent branch should exist");
     }
 
     [Fact]
     public async Task ExecuteAsync_Questions_CreatesCommitWithQuestions()
     {
         SetupBoardCards();
-        _agentExecutor.NextOutcome = AgentOutcome.QUESTIONS;
+        _agentExecutor.NextOutcome = AgentOutcome.NEEDS_INFO;
 
         var result = await _runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
 
-        Assert.Equal(AgentOutcome.QUESTIONS, result.Outcome);
+        Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
 
-        // Verify task file contains questions
-        var taskContent = await _taskFileManager.ReadTaskFileAsync(_tempDir, TargetCardId, CancellationToken.None);
+        // Verify task file contains questions (in the worktree)
+        var worktreePath = GitWorkspaceManager.GetWorktreePath(_tempDir, $"aiboard/{TargetCardId}");
+        var taskContent = await _taskFileManager.ReadTaskFileAsync(worktreePath, TargetCardId, CancellationToken.None);
         Assert.Contains("Questions", taskContent);
     }
 
@@ -129,13 +145,14 @@ public class AgentRunnerTests : IDisposable
     public async Task ExecuteAsync_WritesAllTaskFiles()
     {
         SetupBoardCards();
-        _agentExecutor.NextOutcome = AgentOutcome.SUCCESS;
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
 
         await _runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
 
-        // Verify both cards were written as task files
-        Assert.True(File.Exists(TaskFileManager.GetTaskFilePath(_tempDir, TargetCardId)));
-        Assert.True(File.Exists(TaskFileManager.GetTaskFilePath(_tempDir, "card-other")));
+        // Verify both cards were written as task files (in the worktree)
+        var worktreePath = GitWorkspaceManager.GetWorktreePath(_tempDir, $"aiboard/{TargetCardId}");
+        Assert.True(File.Exists(TaskFileManager.GetTaskFilePath(worktreePath, TargetCardId)));
+        Assert.True(File.Exists(TaskFileManager.GetTaskFilePath(worktreePath, "card-other")));
     }
 
     [Fact]
@@ -171,7 +188,7 @@ public class AgentRunnerTests : IDisposable
     {
         var throwingExecutor = Substitute.For<IAgentExecutor>();
         throwingExecutor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns<AgentOutcome>(_ => throw new InvalidOperationException("LLM provider is down"));
+            .Returns<AgentResult>(_ => throw new InvalidOperationException("LLM provider is down"));
 
         var runner = new AgentRunner(
             _trelloClient, throwingExecutor, _taskFileManager, _gitWorkspaceManager,
@@ -188,12 +205,12 @@ public class AgentRunnerTests : IDisposable
     [Fact]
     public void ResolvePromptPlaceholders_ReplacesKnownPlaceholders()
     {
-        var template = "Work on task \"{TaskName}\" ({TaskId}). Story: {UserStoryName}";
+        var template = "Work on task {TaskName} ({TaskId}). Story: {UserStoryName}";
         var card = new TrelloCard("card-123", "Build Auth", "desc", "list-1");
 
         var result = AgentRunner.ResolvePromptPlaceholders(template, card);
 
-        Assert.Equal("Work on task \"Build Auth\" (card-123). Story: {UserStoryName}", result);
+        Assert.Equal("Work on task Build Auth (card-123). Story: {UserStoryName}", result);
     }
 
     [Fact]
@@ -223,7 +240,7 @@ public class AgentRunnerTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 [DesignListId] = new("Design", "senior_engineer", "agent_run",
-                    "Design task \"{TaskName}\" ({TaskId})",
+                    "Design task {TaskName} ({TaskId})",
                     new Dictionary<string, string>
                     {
                         ["COMPLETE"] = "list-review",
@@ -243,8 +260,9 @@ public class AgentRunnerTests : IDisposable
         RunGitSync(path, "init");
         RunGitSync(path, "config", "user.email", "test@test.com");
         RunGitSync(path, "config", "user.name", "Test");
+        File.WriteAllText(Path.Combine(path, ".gitignore"), ".aiboard/\n");
         File.WriteAllText(Path.Combine(path, ".gitkeep"), "");
-        RunGitSync(path, "add", ".gitkeep");
+        RunGitSync(path, "add", ".");
         RunGitSync(path, "commit", "-m", "initial");
     }
 
