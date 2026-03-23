@@ -158,7 +158,7 @@ public class AgentRunnerIntegrationTests : IDisposable
     {
         if (!_enabled) return;
 
-        var runner = CreateRunner(CreateRealExecutor(maxBudgetUsd: 0.50m, timeoutSeconds: 180));
+        var runner = CreateRunner(CreateRealExecutor(maxBudgetUsd: 1.50m, timeoutSeconds: 180));
         SetupBoardCards("Make it better", targetTitle: "Improvement");
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _repoRoot, CancellationToken.None);
@@ -249,7 +249,7 @@ public class AgentRunnerIntegrationTests : IDisposable
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
-                ["senior_engineer"] = new("claude-sonnet-4-6",
+                ["senior_engineer"] = new("claude-opus-4-6",
                     "You are a Senior Software Engineer. Produce structured Technical Design, identify edge cases, and create implementation breakdowns.  You are reasonable but skeptical, critical enough to ensure that we catch any issues but not unreasonably blocking progress.",
                     new List<string> { "Technical Design", "Decisions" }),
             });
