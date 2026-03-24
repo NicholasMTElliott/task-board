@@ -70,8 +70,12 @@ public sealed partial class AgentRunner(
             // 5. Write all task files into the worktree
             await taskFileManager.WriteAllTaskFilesAsync(worktreePath, cards, workflowConfig, cancellationToken);
 
-            // 6. Resolve prompt placeholders
-            var resolvedPrompt = ResolvePromptPlaceholders(state.TaskPrompt ?? "", targetCard);
+            // 5a. Resolve system prompt file path (writes temp file for inline prompts)
+            var systemPromptFilePath = await ResolveSystemPromptFileAsync(
+                role, state.Role!, worktreePath, cancellationToken);
+
+            // 5b. Resolve task prompt (from file or inline), with placeholder substitution
+            var resolvedPrompt = await ResolveTaskPromptAsync(state, worktreePath, targetCard, cancellationToken);
 
             // 7. Execute agent — WorkspacePath is the worktree, so Claude CLI runs there
             var context = new AgentExecutionContext(
@@ -79,7 +83,7 @@ public sealed partial class AgentRunner(
                 TargetCardTitle: targetCard.Title,
                 WorkspacePath: worktreePath,
                 TaskPrompt: resolvedPrompt,
-                SystemPrompt: role.SystemPrompt,
+                SystemPromptFilePath: systemPromptFilePath,
                 Model: role.Model);
 
             var agentResult = await agentExecutor.ExecuteAsync(context, cancellationToken);
@@ -344,6 +348,51 @@ public sealed partial class AgentRunner(
             sb.AppendLine($"\n{result.Detail}");
 
         return sb.ToString();
+    }
+
+    internal static async Task<string> ResolveSystemPromptFileAsync(
+        WorkflowRole role, string roleName, string worktreePath, CancellationToken cancellationToken)
+    {
+        if (role.SystemPromptFile is not null)
+        {
+            var path = Path.GetFullPath(Path.Combine(worktreePath, role.SystemPromptFile));
+            if (!File.Exists(path))
+                throw new FileNotFoundException(
+                    $"System prompt file not found: {path} (configured as '{role.SystemPromptFile}' for role '{roleName}')",
+                    path);
+            return path;
+        }
+
+        if (string.IsNullOrWhiteSpace(role.SystemPrompt))
+            throw new InvalidOperationException(
+                $"Role '{roleName}' has no SystemPromptFile and no inline SystemPrompt.");
+
+        var tempPath = Path.Combine(worktreePath, ".aiboard", $"system-prompt-{roleName}.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(tempPath)!);
+        await File.WriteAllTextAsync(tempPath, role.SystemPrompt, cancellationToken);
+        return tempPath;
+    }
+
+    internal static async Task<string> ResolveTaskPromptAsync(
+        WorkflowState state, string worktreePath, BoardCard card, CancellationToken cancellationToken)
+    {
+        string template;
+
+        if (state.TaskPromptFile is not null)
+        {
+            var path = Path.GetFullPath(Path.Combine(worktreePath, state.TaskPromptFile));
+            if (!File.Exists(path))
+                throw new FileNotFoundException(
+                    $"Task prompt file not found: {path} (configured as '{state.TaskPromptFile}' for state '{state.Name}')",
+                    path);
+            template = await File.ReadAllTextAsync(path, cancellationToken);
+        }
+        else
+        {
+            template = state.TaskPrompt ?? "";
+        }
+
+        return ResolvePromptPlaceholders(template, card);
     }
 
     internal static string ResolvePromptPlaceholders(string template, BoardCard card)
