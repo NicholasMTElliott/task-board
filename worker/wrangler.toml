@@ -1,4 +1,4 @@
-name = "task-board-webhook-worker"
+name = "task-board"
 main = "src/index.ts"
 compatibility_date = "2026-03-01"
 
