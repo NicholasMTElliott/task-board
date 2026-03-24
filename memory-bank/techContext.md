@@ -25,22 +25,36 @@
 ### Workflow Config
 | Layer | Technology | Notes |
 |-------|------------|-------|
-| Workflow definition (POC) | `workflow.v1.json` (file in repo) | Loaded at Lambda startup; DB migration is a future step |
+| GitHub Projects workflow | `workflow.github.json` (file in repo) | Active config; column names as state keys |
+| Trello workflow (legacy) | `workflow.v1.json` (file in repo) | Trello list IDs as state keys |
+
+Selection via `WORKFLOW_CONFIG_PATH` env var. Defaults to `workflow.v1.json` in output directory.
 
 ### AI
 | Layer | Technology | Notes |
 |-------|------------|-------|
-| LLM provider (option 1) | OpenAI | Model TBD per role (e.g., gpt-4.1) |
-| LLM provider (option 2) | Claude CLI subprocess | Validated with `claude-haiku-4-5-20251001`; uses `--json-schema` for structured output |
+| Agent executor (primary) | Claude CLI subprocess | Via `ClaudeAgentExecutor`; uses `--json-schema` for structured output |
+| LLM provider (legacy) | OpenAI / Anthropic HTTP | Via `ILlmClient` implementations; used by legacy Orchestrator path |
 
-Both providers implement `ILlmClient`. Selection via DI configuration (`CLIENT_MODE`).
+Agent executor selection via `AGENT_EXECUTOR` env var: `claude-cli` or `stub`.
 
 ### External APIs
 | API | Purpose |
 |-----|---------|
+| GitHub Projects v2 GraphQL | Read project items, move status, resolve field/option IDs |
+| GitHub Issues REST (via `gh`) | Read/update issue body, post/edit comments |
 | Trello REST API | Read card state, write description sections, post/update comments, move cards |
-| OpenAI Chat Completions | Agent inference |
 | Claude CLI | Agent inference via subprocess (structured output with `--json-schema`) |
+
+### Board Provider
+| Provider | Implementation | Selection |
+|----------|---------------|-----------|
+| GitHub Projects | `GitHubProjectsClient` (via `gh` CLI) | `BOARD_PROVIDER=github` |
+| Trello | `TrelloClient` (HTTP) | `BOARD_PROVIDER=trello` |
+| Stub | `StubTaskBoardClient` | `BOARD_PROVIDER=stub` (default) |
+
+GitHub Projects requires: `gh` CLI authenticated with `project` + `repo` scopes.
+Config via env vars: `GitHubProjects__Owner`, `GitHubProjects__Repo`, `GitHubProjects__ProjectNumber`.
 
 ## Key Technical Constraints
 - Worker must return 200 to Trello within ~3 seconds; it should enqueue then return immediately
@@ -56,7 +70,7 @@ Both providers implement `ILlmClient`. Selection via DI configuration (`CLIENT_M
 - IDE: Visual Studio Code
 - OS: Windows 11
 - Shell: PowerShell 7
-- Runtime tools available locally: dotnet, node, docker, aws CLI, terraform, git
+- Runtime tools available locally: dotnet, node, docker, aws CLI, terraform, git, gh (GitHub CLI)
 
 ### Local Secret Loading Convention
 - Single local source of truth: `/.env.local` (gitignored)
@@ -78,20 +92,20 @@ Both providers implement `ILlmClient`. Selection via DI configuration (`CLIENT_M
 ## Infrastructure-as-Code
 - IaC tool: **TBD** (Terraform or AWS SAM/CDK — to be decided)
 
-## Decided Architecture Items (POC)
-- ✅ **Prototype ingress:** Cloudflare Worker + Lambda Function URL kick
-- ✅ **Queue backend:** PGMQ on Neon (SQL-only install confirmed)
-- ✅ **Idempotency key:** Trello `actionId` (unique constraint on `processed_events` table)
-- ✅ **Workflow config:** file-based `workflow.v1.json`
-- ✅ **Re-trigger rule:** card moved back to prior agent state only
-- ✅ **Agent output:** schema validation mandatory before any write applied
-- ✅ **Processor runtime shape:** reusable core with one/wait/loop execution modes
+## Decided Architecture Items
+- ✅ **Board abstraction:** `ITaskBoardClient` with GitHub Projects and Trello implementations
+- ✅ **GitHub Projects integration:** Via `gh` CLI + GraphQL, validated end-to-end
+- ✅ **Agent executor:** Claude CLI subprocess with `--json-schema` structured output
+- ✅ **IN_PROGRESS transitions:** Cards move to "X-ing" column before agent starts work
+- ✅ **Direct CLI mode:** `--mode agent --card-id N` bypasses queues/databases entirely
+- ✅ **Workflow config:** file-based, per-provider (`workflow.github.json`, `workflow.v1.json`)
+- ✅ **Git worktree isolation:** Agents work in isolated worktrees, main repo untouched
+- ✅ **Queue backend:** PGMQ on Neon (confirmed, used in legacy queue path)
+- ✅ **Re-trigger rule:** card moved back to "Ready for" state to re-trigger
 
 ## Open Technical Decisions
+- [ ] Webhook/event-driven triggers (currently manual CLI invocation only)
 - [ ] .NET Lambda deployment model (native AOT vs. standard managed runtime)
-- [ ] Whether low-frequency sweeper is required in addition to kick-only invocation
 - [ ] IaC toolchain (Terraform vs. SAM vs. CDK)
-- [ ] OpenAI model per role (all gpt-4.1, or mix with gpt-4o-mini for cheaper roles)
-- [ ] Structured output strategy (JSON mode vs. response_format schema)
-- [x] ~~Trello webhook auth model finalization in Worker~~ (HMAC-SHA1 implemented)
-- [ ] Max retry and dead-letter policy for selected queue backend
+- [ ] Model selection per role (currently claude-sonnet-4-6 for all)
+- [ ] Max retry and dead-letter policy for queue backend

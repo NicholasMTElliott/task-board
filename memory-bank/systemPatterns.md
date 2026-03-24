@@ -2,29 +2,44 @@
 
 ## Architecture Overview
 
+### Direct Agent Mode (current primary flow)
 ```
-Trello Webhook
+CLI invocation: dotnet run -- --mode agent --card-id N --board-id 1 --workspace .
     ↓
-Cloudflare Worker (HTTP endpoint, webhook receiver)
-    ↓
-Neon Postgres queue (PGMQ SQL-only install confirmed)
-    ↓
-Reusable .NET processor core (one/wait/loop modes) with host adapters (local CLI, Lambda Function URL, future container)
-    ↓
-OpenAI API (LLM)
-    ↓
-Trello API (card updates, comment writes, list moves)
-    ↓
-Postgres (queue tables, processed_events, card_state, run_log)
+AgentRunner (C#)
+    ↓ fetch cards
+ITaskBoardClient (GitHub Projects / Trello / Stub)
+    ↓ move to IN_PROGRESS column
+    ↓ create git worktree, write task files
+ClaudeAgentExecutor (claude CLI subprocess)
+    ↓ parse structured output
+Post-process: update card body, upsert comment, move to outcome column
 ```
 
-> **Prototype pivot:** Cloudflare Worker + Neon + reusable .NET processor adopted for cost-first validation.
-> **Queue backend:** PGMQ-on-Neon confirmed via SQL-only install script.
+### Queue-based Mode (legacy, for webhook-triggered flows)
+```
+Webhook → Cloudflare Worker → PGMQ on Neon → .NET EventProcessor → Orchestrator → Board API
+```
+
+> **Current focus:** Direct CLI agent mode with GitHub Projects. Queue-based flow preserved for future webhook integration.
 
 ## Core Design Patterns
 
 ### State Machine
-Trello lists are the authoritative state of a card. Each list maps to exactly one role or manual gate. The orchestrator determines transitions deterministically based on workflow config.
+Board columns (GitHub Projects status field / Trello lists) are the authoritative state of a card. Each column maps to exactly one role or manual gate. The AgentRunner determines transitions deterministically based on workflow config.
+
+### IN_PROGRESS Transition
+When an agent picks up a card from a "Ready for X" trigger column, it first moves the card to the "X-ing" in-progress column before starting work. This provides visual feedback on the board that work is happening. Defined as `"IN_PROGRESS": "Designing"` in the state's transitions map. Optional — if not defined, the agent runs in-place.
+
+### ITaskBoardClient Abstraction
+Provider-agnostic interface for all board operations:
+- `GetCardAsync(cardId)` / `GetBoardCardsAsync(boardId)` — read cards
+- `UpdateCardBodyAsync(cardId, body)` — write card content
+- `MoveCardToColumnAsync(cardId, columnId)` — state transitions
+- `UpsertAgentCommentAsync(cardId, body)` — agent feedback
+
+Implementations: `GitHubProjectsClient` (via `gh` CLI), `TrelloClient` (HTTP), `StubTaskBoardClient` (testing).
+Selection via `BOARD_PROVIDER` env var: `github`, `trello`/`live`, or default `stub`.
 
 ### Agent Contract
 The agent executor (`ClaudeAgentExecutor`) uses `--json-schema` to enforce structured output:
@@ -123,7 +138,7 @@ Prevents duplicate agent runs from concurrent worker instances claiming differen
 Comment-marker re-trigger is explicitly out of scope for v1.
 
 ### Manual Gates
-Requirements Review, Design Review, and Code Review are passive lists. The orchestrator takes no action on cards in these states. Only operator card movement triggers the next agent.
+"Designed" and "Ready for Implementation" are passive columns. The orchestrator takes no action on cards in these states. Only operator card movement triggers the next agent.
 
 ### Card Description Structure
 Agents read and write structured sections inside the card description:
@@ -175,40 +190,50 @@ The .NET worker can invoke the Claude CLI (`claude`) as a subprocess via `Claude
 
 | Component | Responsibility |
 |-----------|----------------|
-| Trello | Human UI, planning content, state via list position |
-| Cloudflare Worker | Webhook ingestion, auth validation, enqueue, Lambda kick |
-| Neon Postgres | Queue storage + idempotency + run metadata |
-| .NET Processor Core (C#) | Queue claim/ack, idempotency enforcement, orchestration execution |
-| Host Adapters | Local CLI, Lambda Function URL, future container runtime |
-| OpenAI | LLM for all agent roles in v1 |
-| Postgres | queue tables, card_state, run_log, processed_events |
-| workflow.v1.json | Workflow config (file-based for POC) |
+| GitHub Projects / Trello | Human UI, planning content, state via column position |
+| ITaskBoardClient | Provider-agnostic board abstraction |
+| GitHubProjectsClient | GitHub Projects v2 via `gh` CLI (GraphQL + REST) |
+| TrelloClient | Trello REST API |
+| AgentRunner | Direct agent execution: fetch cards → worktree → agent → post-process |
+| ClaudeAgentExecutor | Claude CLI subprocess with `--json-schema` structured output |
+| GitWorkspaceManager | Git worktree lifecycle for isolated agent execution |
+| TaskFileManager | Write board cards as `.aiboard/tasks/{id}.md` files |
+| Cloudflare Worker | Webhook ingestion (legacy queue path) |
+| Neon Postgres | Queue storage + idempotency + run metadata (legacy queue path) |
+| workflow.github.json | Workflow config for GitHub Projects |
+| workflow.v1.json | Workflow config for Trello (legacy) |
 
 ## Workflow Configuration
-**POC: file-based** — `workflow.v1.json` in repository, loaded at Lambda startup.  
-This eliminates early DB config complexity. Migration to DB-stored config is a future step once the pipeline is stable.
+**File-based** — `workflow.github.json` or `workflow.v1.json` in repository, selected via `WORKFLOW_CONFIG_PATH` env var.
 
 Schema:
 ```json
 {
   "states": {
-    "<list_id>": {
+    "<column_name>": {
+      "name": "<display_name>",
       "role": "<role_key>",
+      "gateType": "agent_run | manual_gate | manual_entry | in_progress | holding | terminal",
+      "taskPrompt": "<prompt with {TaskName} {TaskId} placeholders>",
       "transitions": {
-        "NEEDS_INFO": "<questions_list_id>",
-        "COMPLETE": "<next_list_id>"
+        "IN_PROGRESS": "<in_progress_column>",
+        "COMPLETE": "<next_column>",
+        "NEEDS_INFO": "<questions_column>",
+        "ERROR": "<error_column>"
       }
     }
   },
   "roles": {
     "<role_key>": {
-      "model": "gpt-4.1",
-      "system_prompt": "...",
-      "tools": []
+      "model": "claude-sonnet-4-6",
+      "systemPrompt": "...",
+      "sections": ["Technical Design", "Decisions"]
     }
   }
 }
 ```
+
+State keys are **column names** for GitHub Projects (status option names) or **list IDs** for Trello.
 
 ## Database Tables
 

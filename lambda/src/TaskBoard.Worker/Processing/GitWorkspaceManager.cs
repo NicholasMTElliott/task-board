@@ -3,19 +3,22 @@ using System.Text;
 
 namespace TaskBoard.Worker.Processing;
 
-public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger)
+public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, string? worktreeBasePath = null)
 {
     private const int DefaultTimeoutSeconds = 30;
 
     // ── Worktree methods ──────────────────────────────────────────────
 
-    internal static string GetWorktreePath(string repoPath, string branchName)
-        => Path.Combine(repoPath + "-worktrees", branchName.Replace('/', Path.DirectorySeparatorChar));
+    internal static string GetWorktreePath(string repoPath, string branchName, string? worktreeBase = null)
+    {
+        var basePath = worktreeBase ?? (repoPath + "-worktrees");
+        return Path.Combine(basePath, branchName.Replace('/', Path.DirectorySeparatorChar));
+    }
 
     public async Task<string> CreateWorktreeAsync(
         string repoPath, string branchName, CancellationToken cancellationToken)
     {
-        var worktreePath = GetWorktreePath(repoPath, branchName);
+        var worktreePath = GetWorktreePath(repoPath, branchName, worktreeBasePath);
         var fullWorktreePath = Path.GetFullPath(worktreePath);
 
         // If worktree already registered, reuse it
@@ -56,7 +59,7 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger)
     public async Task RemoveWorktreeAsync(
         string repoPath, string branchName, bool deleteBranch, CancellationToken cancellationToken)
     {
-        var worktreePath = Path.GetFullPath(GetWorktreePath(repoPath, branchName));
+        var worktreePath = Path.GetFullPath(GetWorktreePath(repoPath, branchName, worktreeBasePath));
 
         logger.LogInformation("Removing worktree at {Path}", worktreePath);
 
@@ -87,6 +90,34 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger)
                 logger.LogWarning(ex, "Failed to delete branch {Branch}", branchName);
             }
         }
+    }
+
+    /// <summary>
+    /// Finds an existing branch matching the card ID prefix pattern.
+    /// Checks for slugged branches (aiboard/{cardId}-*) and legacy branches (aiboard/{cardId}).
+    /// Returns the branch name if found, null otherwise.
+    /// </summary>
+    public async Task<string?> FindBranchByPrefixAsync(
+        string repoPath, string cardId, CancellationToken cancellationToken)
+    {
+        // Check for slugged branch: aiboard/{cardId}-*
+        // Trailing hyphen prevents aiboard/2-* matching aiboard/20-*
+        var (_, sluggedOutput, _) = await RunGitAsync(
+            repoPath, ["branch", "--list", $"aiboard/{cardId}-*"], cancellationToken);
+
+        var sluggedBranch = sluggedOutput
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.TrimStart('*', ' '))
+            .FirstOrDefault(b => !string.IsNullOrWhiteSpace(b));
+
+        if (sluggedBranch is not null)
+            return sluggedBranch;
+
+        // Check for legacy exact branch: aiboard/{cardId}
+        if (await BranchExistsAsync(repoPath, $"aiboard/{cardId}", cancellationToken))
+            return $"aiboard/{cardId}";
+
+        return null;
     }
 
     internal async Task<bool> WorktreeExistsAsync(
@@ -159,6 +190,16 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger)
         {
             return true;
         }
+    }
+
+    /// <summary>
+    /// Checks if there are any uncommitted changes (tracked files only, .gitignore respected).
+    /// </summary>
+    public async Task<bool> HasUncommittedChangesAsync(
+        string repoPath, CancellationToken cancellationToken)
+    {
+        var (_, stdout, _) = await RunGitAsync(repoPath, ["status", "--porcelain"], cancellationToken);
+        return !string.IsNullOrWhiteSpace(stdout);
     }
 
     internal static async Task<(int ExitCode, string Stdout, string Stderr)> RunGitAsync(

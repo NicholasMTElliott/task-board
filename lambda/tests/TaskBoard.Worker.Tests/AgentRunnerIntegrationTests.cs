@@ -17,6 +17,9 @@ namespace TaskBoard.Worker.Tests;
 /// The agent runs inside a git worktree (isolated directory on its own branch),
 /// so the main repo working tree is never modified.
 ///
+/// With "discard" gitBehavior, the worktree and branch are cleaned up after execution.
+/// Verification is done through board client mock interactions.
+///
 /// Gated behind AGENT_INTEGRATION_TESTS=true environment variable.
 /// Uses claude-sonnet-4-6 with a $0.50 budget cap per test.
 ///
@@ -34,7 +37,6 @@ public class AgentRunnerIntegrationTests : IDisposable
     private readonly WorkflowConfig _workflowConfig;
     private readonly ITestOutputHelper _output;
     private readonly bool _enabled;
-    private readonly string _testBranchName;
 
     private const string DesignListId = "list-design";
     private const string TargetCardId = "card-integration-test";
@@ -48,7 +50,6 @@ public class AgentRunnerIntegrationTests : IDisposable
             //!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AGENT_INTEGRATION_TESTS"));
 
         _repoRoot = FindRepoRoot();
-        _testBranchName = $"aiboard/{TargetCardId}";
 
         _output.WriteLine($"Workspace (repo root): {_repoRoot}");
 
@@ -62,36 +63,33 @@ public class AgentRunnerIntegrationTests : IDisposable
     {
         if (!_enabled) return;
 
-        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SKIP_CLEANUP")))
-        {
-            var preserved = Path.GetFullPath(GitWorkspaceManager.GetWorktreePath(_repoRoot, _testBranchName));
-            _output.WriteLine($"SKIP_CLEANUP set — worktree preserved at: {preserved}");
-            return;
-        }
-
         // Allow subprocesses to release file handles
         Thread.Sleep(500);
 
         try
         {
-            // Remove the worktree (best effort)
-            var worktreePath = GitWorkspaceManager.GetWorktreePath(_repoRoot, _testBranchName);
-            var fullWorktreePath = Path.GetFullPath(worktreePath);
+            // With discard behavior, worktree and branch should already be cleaned up.
+            // Cleanup here is best-effort for any leftover state.
 
-            if (Directory.Exists(fullWorktreePath))
+            // Find any leftover branches for the test card
+            var branchSearch = RunGitSyncWithOutput(_repoRoot, "branch", "--list", $"aiboard/{TargetCardId}-*");
+            var legacyBranch = RunGitSyncWithOutput(_repoRoot, "branch", "--list", $"aiboard/{TargetCardId}");
+
+            foreach (var branch in (branchSearch + "\n" + legacyBranch)
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(b => b.TrimStart('*', ' ')))
             {
-                RunGitSync(_repoRoot, "worktree", "remove", fullWorktreePath, "--force");
+                var worktreePath = GitWorkspaceManager.GetWorktreePath(_repoRoot, branch);
+                var fullPath = Path.GetFullPath(worktreePath);
+                if (Directory.Exists(fullPath))
+                {
+                    try { RunGitSync(_repoRoot, "worktree", "remove", fullPath, "--force"); } catch { }
+                }
+
+                try { RunGitSync(_repoRoot, "branch", "-D", branch); } catch { }
             }
 
-            // Prune any stale worktree refs
             RunGitSync(_repoRoot, "worktree", "prune");
-
-            // Delete the test branch (best effort)
-            try
-            {
-                RunGitSync(_repoRoot, "branch", "-D", _testBranchName);
-            }
-            catch { /* branch may not exist if test failed early */ }
 
             // Remove .aiboard directory from main repo if somehow created
             var aiboardDir = Path.Combine(_repoRoot, ".aiboard");
@@ -132,25 +130,21 @@ public class AgentRunnerIntegrationTests : IDisposable
         Assert.True(result.Outcome == AgentOutcome.COMPLETE,
             $"Expected SUCCESS but got {result.Outcome}. ErrorDetail: {result.ErrorDetail}");
 
-        // Read the task file from the worktree
-        var worktreePath = Path.GetFullPath(
-            GitWorkspaceManager.GetWorktreePath(_repoRoot, _testBranchName));
-        var taskContent = await _taskFileManager.ReadTaskFileAsync(worktreePath, TargetCardId, CancellationToken.None);
-        _output.WriteLine($"Task file length: {taskContent.Length} chars");
-
-        // Claude should have added meaningful design content
-        Assert.True(taskContent.Length > description.Length + 100,
-            $"Expected task file to be substantially larger than original description. Got {taskContent.Length} chars.");
-
-        // Verify the branch exists (visible from the main repo)
-        var branchExists = await _gitWorkspaceManager.BranchExistsAsync(
-            _repoRoot, _testBranchName, CancellationToken.None);
-        Assert.True(branchExists, "Agent branch should exist");
+        // With discard behavior, the card body should have been updated via the board client
+        await _trelloClient.Received(1).UpdateCardBodyAsync(
+            TargetCardId,
+            Arg.Is<string>(s => s.Length > description.Length + 100),
+            Arg.Any<CancellationToken>());
 
         // Verify main repo was not modified
         var mainBranch = await _gitWorkspaceManager.GetCurrentBranchAsync(_repoRoot, CancellationToken.None);
         _output.WriteLine($"Main repo branch after test: {mainBranch}");
         Assert.DoesNotContain("aiboard", mainBranch);
+
+        // With discard behavior, branch should be cleaned up
+        var existingBranch = await _gitWorkspaceManager.FindBranchByPrefixAsync(
+            _repoRoot, TargetCardId, CancellationToken.None);
+        Assert.Null(existingBranch);
     }
 
     [Fact]
@@ -245,7 +239,8 @@ public class AgentRunnerIntegrationTests : IDisposable
                         ["COMPLETE"] = "list-review",
                         ["NEEDS_INFO"] = "list-questions",
                         ["ERROR"] = "list-error",
-                    }),
+                    },
+                    GitBehavior: "discard"),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -288,5 +283,25 @@ public class AgentRunnerIntegrationTests : IDisposable
 
         using var process = System.Diagnostics.Process.Start(psi)!;
         process.WaitForExit();
+    }
+
+    private static string RunGitSyncWithOutput(string workingDirectory, params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        var output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        return output;
     }
 }

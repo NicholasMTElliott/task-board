@@ -24,7 +24,7 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
                 : "Unknown";
 
             var content = BuildTaskFileContent(card, listName);
-            var filePath = GetTaskFilePath(workspacePath, card.Id);
+            var filePath = GetTaskFilePath(workspacePath, card.Id, card.Title);
 
             await File.WriteAllTextAsync(filePath, content, Encoding.UTF8, cancellationToken);
         }
@@ -33,14 +33,18 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
     }
 
     public async Task<string> ReadTaskFileAsync(
-        string workspacePath, string cardId, CancellationToken cancellationToken)
+        string workspacePath, string cardId, string? title = null, CancellationToken cancellationToken = default)
     {
-        var filePath = GetTaskFilePath(workspacePath, cardId);
+        var filePath = GetTaskFilePath(workspacePath, cardId, title);
         return await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken);
     }
 
-    public static string GetTaskFilePath(string workspacePath, string cardId)
-        => Path.Combine(workspacePath, TasksRelativePath, $"{cardId}.md");
+    public static string GetTaskFilePath(string workspacePath, string cardId, string? title = null)
+    {
+        var slug = SlugHelper.Sanitize(title);
+        var fileName = string.IsNullOrEmpty(slug) ? $"{cardId}.md" : $"{cardId}-{slug}.md";
+        return Path.Combine(workspacePath, TasksRelativePath, fileName);
+    }
 
     internal static string BuildTaskFileContent(BoardCard card, string listName)
     {

@@ -13,7 +13,7 @@ public sealed class StubAgentExecutor(ILogger<StubAgentExecutor> logger) : IAgen
 
         // Simulate agent modifying the target task file
         var taskFilePath = Processing.TaskFileManager.GetTaskFilePath(
-            context.WorkspacePath, context.TargetCardId);
+            context.WorkspacePath, context.TargetCardId, context.TargetCardTitle);
 
         if (File.Exists(taskFilePath))
         {

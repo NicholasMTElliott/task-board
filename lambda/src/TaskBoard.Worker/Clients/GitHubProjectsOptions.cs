@@ -13,6 +13,9 @@ public sealed class GitHubProjectsOptions
     /// <summary>HTML comment marker used to identify agent comments for upsert.</summary>
     public string CommentMarker { get; init; } = "<!-- agent-status -->";
 
+    /// <summary>Project number (the number in the project URL, e.g. "1").</summary>
+    public string ProjectNumber { get; init; } = "";
+
     /// <summary>
     /// The name of the Status single-select field in the project.
     /// Defaults to "Status" which is the standard GitHub Projects field name.

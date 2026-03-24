@@ -8,9 +8,9 @@ namespace TaskBoard.Worker.Tests;
 
 /// <summary>
 /// Design state-focused tests using StubAgentExecutor with realistic card data.
-/// Verifies task file content, git state, and prompt composition.
-/// Now uses git worktrees: the agent operates in an isolated worktree directory,
-/// and the main repo branch is never modified.
+/// Verifies card body updates, comments, git state, and prompt composition.
+/// With "discard" gitBehavior, worktrees are cleaned up after execution,
+/// so we verify effects through board client mock interactions.
 /// </summary>
 public class AgentRunnerDesignTests : IDisposable
 {
@@ -59,7 +59,7 @@ public class AgentRunnerDesignTests : IDisposable
     }
 
     [Fact]
-    public async Task Design_Success_TaskFileContainsTechnicalDesign()
+    public async Task Design_Success_UpdatesCardBodyWithDesign()
     {
         var stub = new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)
         {
@@ -74,29 +74,25 @@ public class AgentRunnerDesignTests : IDisposable
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
         Assert.Null(result.ErrorDetail);
 
-        // Task files live in the worktree
-        var worktreePath = GitWorkspaceManager.GetWorktreePath(_tempDir, $"aiboard/{TargetCardId}");
-        var taskContent = await _taskFileManager.ReadTaskFileAsync(worktreePath, TargetCardId, CancellationToken.None);
-        Assert.Contains("## Technical Design", taskContent);
-        Assert.Contains("Architecture", taskContent);
-        Assert.Contains("Data Flow", taskContent);
+        // Card body should be updated with design content
+        await _trelloClient.Received(1).UpdateCardBodyAsync(
+            TargetCardId,
+            Arg.Is<string>(s => s.Contains("## Technical Design") && s.Contains("Architecture")),
+            Arg.Any<CancellationToken>());
 
         // Main repo should still be on its original branch (untouched)
         var mainBranch = await _gitWorkspaceManager.GetCurrentBranchAsync(_tempDir, CancellationToken.None);
         Assert.True(mainBranch == "main" || mainBranch == "master",
             $"Main repo should be on main/master, got '{mainBranch}'");
 
-        // The agent branch should exist (created by worktree)
-        var branchExists = await _gitWorkspaceManager.BranchExistsAsync(
-            _tempDir, $"aiboard/{TargetCardId}", CancellationToken.None);
-        Assert.True(branchExists, "Agent branch should exist");
-
-        // No commit assertion — .aiboard/ files are gitignored,
-        // so stub executor runs produce no committable changes
+        // Branch should be cleaned up (discard behavior)
+        var existingBranch = await _gitWorkspaceManager.FindBranchByPrefixAsync(
+            _tempDir, TargetCardId, CancellationToken.None);
+        Assert.Null(existingBranch);
     }
 
     [Fact]
-    public async Task Design_Questions_TaskFileContainsQuestionSection()
+    public async Task Design_Questions_PostsQuestionsComment()
     {
         var stub = new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)
         {
@@ -109,17 +105,15 @@ public class AgentRunnerDesignTests : IDisposable
 
         Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
 
-        // Read task file from the worktree
-        var worktreePath = GitWorkspaceManager.GetWorktreePath(_tempDir, $"aiboard/{TargetCardId}");
-        var taskContent = await _taskFileManager.ReadTaskFileAsync(worktreePath, TargetCardId, CancellationToken.None);
-        Assert.Contains("## Questions", taskContent);
-        Assert.Contains("?", taskContent);
-
-        // No commit assertion — .aiboard/ files are gitignored
+        // Comment should contain questions
+        await _trelloClient.Received(1).UpsertAgentCommentAsync(
+            TargetCardId,
+            Arg.Is<string>(s => s.Contains("Questions")),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task Design_Error_TaskFileContainsErrorSection()
+    public async Task Design_Error_PostsErrorComment()
     {
         var stub = new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)
         {
@@ -132,46 +126,11 @@ public class AgentRunnerDesignTests : IDisposable
 
         Assert.Equal(AgentOutcome.ERROR, result.Outcome);
 
-        // Read task file from the worktree
-        var worktreePath = GitWorkspaceManager.GetWorktreePath(_tempDir, $"aiboard/{TargetCardId}");
-        var taskContent = await _taskFileManager.ReadTaskFileAsync(worktreePath, TargetCardId, CancellationToken.None);
-        Assert.Contains("## Error", taskContent);
-    }
-
-    [Fact]
-    public async Task Design_Success_OtherCardFilesUnmodified()
-    {
-        var stub = new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)
-        {
-            NextOutcome = AgentOutcome.COMPLETE
-        };
-        var runner = CreateRunner(stub);
-
-        var otherCards = new[]
-        {
-            new BoardCard("card-other-1", "Setup CI", "Configure pipelines", DesignListId),
-            new BoardCard("card-other-2", "Add logging", "Structured logging", DesignListId),
-            new BoardCard("card-other-3", "Write docs", "API documentation", DesignListId),
-        };
-
-        _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
-            .Returns(new List<BoardCard>(otherCards)
-            {
-                new(TargetCardId, "Build Auth Endpoint", WellSpecifiedDescription, DesignListId),
-            });
-
-        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
-
-        // Read other cards' files from the worktree
-        var worktreePath = GitWorkspaceManager.GetWorktreePath(_tempDir, $"aiboard/{TargetCardId}");
-        foreach (var other in otherCards)
-        {
-            var content = await _taskFileManager.ReadTaskFileAsync(worktreePath, other.Id, CancellationToken.None);
-            Assert.DoesNotContain("## Technical Design", content);
-            Assert.DoesNotContain("## Questions", content);
-            Assert.DoesNotContain("## Error", content);
-            Assert.Contains(other.Body, content);
-        }
+        // Comment should contain error info
+        await _trelloClient.Received(1).UpsertAgentCommentAsync(
+            TargetCardId,
+            Arg.Is<string>(s => s.Contains("Agent Error")),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -223,7 +182,8 @@ public class AgentRunnerDesignTests : IDisposable
                         ["COMPLETE"] = "list-review",
                         ["NEEDS_INFO"] = "list-questions",
                         ["ERROR"] = "list-error",
-                    }),
+                    },
+                    GitBehavior: "discard"),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {

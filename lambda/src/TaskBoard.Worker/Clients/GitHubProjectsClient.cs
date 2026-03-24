@@ -121,7 +121,7 @@ public sealed class GitHubProjectsClient(
         // 2. Get the project item ID for this issue
         // 3. Mutation: updateProjectV2ItemFieldValue
 
-        var projectNumber = await GetProjectNumberFromIssue(cardId, cancellationToken);
+        var projectNumber = _options.ProjectNumber;
 
         // Get project metadata (field IDs, option IDs)
         var (projectId, fieldId, optionId) = await ResolveStatusFieldOption(
@@ -266,21 +266,46 @@ public sealed class GitHubProjectsClient(
     private async Task<string> ResolveProjectItemId(
         string issueNumber, string projectId, CancellationToken cancellationToken)
     {
-        var json = await RunGhAsync(
-            ["issue", "view", issueNumber, "--repo", _options.Repo, "--json", "projectItems"],
-            cancellationToken);
+        // gh issue view --json projectItems doesn't include the node ID.
+        // Query the project directly via GraphQL to find the item for this issue.
+        var repoParts = _options.Repo.Split('/');
+        var query = $$"""
+            query {
+              repository(owner: "{{repoParts[0]}}", name: "{{repoParts[1]}}") {
+                issue(number: {{issueNumber}}) {
+                  projectItems(first: 10) {
+                    nodes {
+                      id
+                      project { id }
+                    }
+                  }
+                }
+              }
+            }
+            """;
 
+        var json = await RunGhAsync(["api", "graphql", "-f", $"query={query}"], cancellationToken);
         using var doc = JsonDocument.Parse(json);
-        var items = doc.RootElement.GetProperty("projectItems");
 
-        foreach (var item in items.EnumerateArray())
+        var nodes = doc.RootElement
+            .GetProperty("data").GetProperty("repository").GetProperty("issue")
+            .GetProperty("projectItems").GetProperty("nodes");
+
+        foreach (var node in nodes.EnumerateArray())
         {
-            if (item.TryGetProperty("id", out var idProp))
+            var nodeProjectId = node.GetProperty("project").GetProperty("id").GetString();
+            if (nodeProjectId == projectId)
             {
-                // Return the first project item ID (if multiple projects, match on projectId)
-                return idProp.GetString()
+                return node.GetProperty("id").GetString()
                     ?? throw new InvalidOperationException("Null project item ID");
             }
+        }
+
+        // Fall back to first item if project ID doesn't match (single-project case)
+        foreach (var node in nodes.EnumerateArray())
+        {
+            return node.GetProperty("id").GetString()
+                ?? throw new InvalidOperationException("Null project item ID");
         }
 
         throw new InvalidOperationException(

@@ -152,7 +152,12 @@ if (needsDatabase)
 
 // Agent mode services
 builder.Services.AddSingleton<TaskFileManager>();
-builder.Services.AddSingleton<GitWorkspaceManager>();
+
+var worktreeBasePath = GetArgument(args, "--worktree-base")
+    ?? Environment.GetEnvironmentVariable("WORKTREE_BASE_PATH");
+builder.Services.AddSingleton(sp =>
+    new GitWorkspaceManager(sp.GetRequiredService<ILogger<GitWorkspaceManager>>(), worktreeBasePath));
+
 builder.Services.AddSingleton<AgentRunner>();
 
 var agentExecutorMode = Environment.GetEnvironmentVariable("AGENT_EXECUTOR")?.ToLowerInvariant() ?? "stub";

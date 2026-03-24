@@ -9,7 +9,8 @@ public sealed record WorkflowState(
     string? Role,
     string GateType,
     string? TaskPrompt,
-    Dictionary<string, string> Transitions);
+    Dictionary<string, string> Transitions,
+    string? GitBehavior = null);
 
 public sealed record WorkflowRole(
     string Model,

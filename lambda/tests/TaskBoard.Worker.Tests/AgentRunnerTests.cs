@@ -18,7 +18,9 @@ public class AgentRunnerTests : IDisposable
     private readonly AgentRunner _runner;
 
     private const string DesignListId = "list-design";
+    private const string ImplListId = "list-impl";
     private const string TargetCardId = "card-target";
+    private const string TargetCardTitle = "Build Auth Middleware";
     private const string BoardId = "board-1";
 
     public AgentRunnerTests()
@@ -66,12 +68,13 @@ public class AgentRunnerTests : IDisposable
     }
 
     [Fact]
-    public async Task ExecuteAsync_Success_CreatesCommitOnBranch()
+    public async Task ExecuteAsync_CommitAndPush_CreatesCommitOnBranch()
     {
-        SetupBoardCards();
+        SetupBoardCards(ImplListId);
         _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
 
-        var result = await _runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        var runner = CreateRunnerWithConfig(BuildImplWorkflowConfig());
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
 
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
         Assert.Null(result.ErrorDetail);
@@ -81,14 +84,30 @@ public class AgentRunnerTests : IDisposable
         Assert.True(mainBranch == "main" || mainBranch == "master",
             $"Main repo should still be on main/master, got '{mainBranch}'");
 
-        // Agent branch should exist
-        var branchExists = await _gitWorkspaceManager.BranchExistsAsync(
-            _tempDir, $"aiboard/{TargetCardId}", CancellationToken.None);
-        Assert.True(branchExists, "Agent branch should exist");
+        // Agent branch should exist (with slug)
+        var existingBranch = await _gitWorkspaceManager.FindBranchByPrefixAsync(
+            _tempDir, TargetCardId, CancellationToken.None);
+        Assert.NotNull(existingBranch);
     }
 
     [Fact]
-    public async Task ExecuteAsync_Questions_CreatesCommitWithQuestions()
+    public async Task ExecuteAsync_Discard_CleansUpWorktreeAndBranch()
+    {
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+
+        var result = await _runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+
+        // Branch should be cleaned up for discard behavior
+        var existingBranch = await _gitWorkspaceManager.FindBranchByPrefixAsync(
+            _tempDir, TargetCardId, CancellationToken.None);
+        Assert.Null(existingBranch);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Questions_ReturnsNeedsInfo()
     {
         SetupBoardCards();
         _agentExecutor.NextOutcome = AgentOutcome.NEEDS_INFO;
@@ -96,11 +115,6 @@ public class AgentRunnerTests : IDisposable
         var result = await _runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
 
         Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
-
-        // Verify task file contains questions (in the worktree)
-        var worktreePath = GitWorkspaceManager.GetWorktreePath(_tempDir, $"aiboard/{TargetCardId}");
-        var taskContent = await _taskFileManager.ReadTaskFileAsync(worktreePath, TargetCardId, CancellationToken.None);
-        Assert.Contains("Questions", taskContent);
     }
 
     [Fact]
@@ -142,23 +156,8 @@ public class AgentRunnerTests : IDisposable
     }
 
     [Fact]
-    public async Task ExecuteAsync_WritesAllTaskFiles()
-    {
-        SetupBoardCards();
-        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
-
-        await _runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
-
-        // Verify both cards were written as task files (in the worktree)
-        var worktreePath = GitWorkspaceManager.GetWorktreePath(_tempDir, $"aiboard/{TargetCardId}");
-        Assert.True(File.Exists(TaskFileManager.GetTaskFilePath(worktreePath, TargetCardId)));
-        Assert.True(File.Exists(TaskFileManager.GetTaskFilePath(worktreePath, "card-other")));
-    }
-
-    [Fact]
     public async Task ExecuteAsync_StateHasNoRole_ReturnsError()
     {
-        // Use a workflow config where the state has a null role
         var configWithNoRole = new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
@@ -167,9 +166,7 @@ public class AgentRunnerTests : IDisposable
             },
             Roles: new Dictionary<string, WorkflowRole>());
 
-        var runner = new AgentRunner(
-            _trelloClient, _agentExecutor, _taskFileManager, _gitWorkspaceManager,
-            configWithNoRole, NullLogger<AgentRunner>.Instance);
+        var runner = CreateRunnerWithConfig(configWithNoRole);
 
         _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
             .Returns(new List<BoardCard>
@@ -205,7 +202,6 @@ public class AgentRunnerTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_WithInProgressTransition_MovesCardBeforeAgentRuns()
     {
-        // Setup workflow with IN_PROGRESS transition
         var configWithInProgress = new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
@@ -225,10 +221,7 @@ public class AgentRunnerTests : IDisposable
                     new List<string> { "Technical Design", "Decisions" }),
             });
 
-        var runner = new AgentRunner(
-            _trelloClient, _agentExecutor, _taskFileManager, _gitWorkspaceManager,
-            configWithInProgress, NullLogger<AgentRunner>.Instance);
-
+        var runner = CreateRunnerWithConfig(configWithInProgress);
         SetupBoardCards();
         _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
 
@@ -248,7 +241,6 @@ public class AgentRunnerTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_WithoutInProgressTransition_SkipsInProgressMove()
     {
-        // Default workflow config has no IN_PROGRESS key
         SetupBoardCards();
         _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
 
@@ -301,14 +293,43 @@ public class AgentRunnerTests : IDisposable
         Assert.Equal(template, result);
     }
 
-    private void SetupBoardCards()
+    [Fact]
+    public void FormatComment_WithGitNote_AppendsNote()
     {
+        var result = new AgentResult(AgentOutcome.COMPLETE, "Done");
+        var comment = AgentRunner.FormatComment(result, "Branch `aiboard/1-foo` pushed to origin.");
+
+        Assert.Contains("Agent Complete", comment);
+        Assert.Contains("Done", comment);
+        Assert.Contains("Branch `aiboard/1-foo` pushed to origin.", comment);
+    }
+
+    [Fact]
+    public void FormatComment_WithoutGitNote_NoExtra()
+    {
+        var result = new AgentResult(AgentOutcome.COMPLETE, "Done");
+        var comment = AgentRunner.FormatComment(result);
+
+        Assert.Contains("Agent Complete", comment);
+        Assert.DoesNotContain("---", comment);
+    }
+
+    private void SetupBoardCards(string? listId = null)
+    {
+        var targetList = listId ?? DesignListId;
         _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
             .Returns(new List<BoardCard>
             {
-                new(TargetCardId, "Build Auth Middleware", "Implement JWT authentication", DesignListId),
-                new("card-other", "Setup CI/CD", "Configure GitHub Actions", DesignListId),
+                new(TargetCardId, TargetCardTitle, "Implement JWT authentication", targetList),
+                new("card-other", "Setup CI/CD", "Configure GitHub Actions", targetList),
             });
+    }
+
+    private AgentRunner CreateRunnerWithConfig(WorkflowConfig config)
+    {
+        return new AgentRunner(
+            _trelloClient, _agentExecutor, _taskFileManager, _gitWorkspaceManager,
+            config, NullLogger<AgentRunner>.Instance);
     }
 
     private static WorkflowConfig BuildWorkflowConfig()
@@ -323,7 +344,30 @@ public class AgentRunnerTests : IDisposable
                         ["COMPLETE"] = "list-review",
                         ["NEEDS_INFO"] = "list-questions",
                         ["ERROR"] = "list-error",
-                    }),
+                    },
+                    GitBehavior: "discard"),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
+                    new List<string> { "Technical Design", "Decisions" }),
+            });
+    }
+
+    private static WorkflowConfig BuildImplWorkflowConfig()
+    {
+        return new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                [ImplListId] = new("Ready for Implementation", "senior_engineer", "agent_run",
+                    "Implement task {TaskName} ({TaskId})",
+                    new Dictionary<string, string>
+                    {
+                        ["COMPLETE"] = "list-review",
+                        ["NEEDS_INFO"] = "list-questions",
+                        ["ERROR"] = "list-error",
+                    },
+                    GitBehavior: "commit_and_push"),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {

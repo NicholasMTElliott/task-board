@@ -18,6 +18,8 @@ public sealed partial class AgentRunner(
     [GeneratedRegex(@"\{(\w+)\}")]
     private static partial Regex PlaceholderPattern();
 
+    private const string CommitFilePath = ".aiboard/commit.md";
+
     public async Task<AgentRunResult> ExecuteAsync(
         string cardId, string boardId, string workspacePath, CancellationToken cancellationToken)
     {
@@ -55,23 +57,26 @@ public sealed partial class AgentRunner(
             logger.LogInformation("Moved card {CardId} to in-progress column {Column}", cardId, inProgressColumnId);
         }
 
-        var branchName = $"aiboard/{cardId}";
+        // 3. Resolve branch name (slug-based with prefix reuse)
+        var branchName = await ResolveBranchNameAsync(workspacePath, cardId, targetCard.Title, cancellationToken);
+        var gitBehavior = state.GitBehavior ?? "discard";
 
         try
         {
-            // 3. Create git worktree (isolated working directory for the agent)
+            // 4. Create git worktree (isolated working directory for the agent)
             var worktreePath = await gitWorkspaceManager.CreateWorktreeAsync(
                 workspacePath, branchName, cancellationToken);
 
-            // 4. Write all task files into the worktree
+            // 5. Write all task files into the worktree
             await taskFileManager.WriteAllTaskFilesAsync(worktreePath, cards, workflowConfig, cancellationToken);
 
-            // 5. Resolve prompt placeholders
+            // 6. Resolve prompt placeholders
             var resolvedPrompt = ResolvePromptPlaceholders(state.TaskPrompt ?? "", targetCard);
 
-            // 6. Execute agent — WorkspacePath is the worktree, so Claude CLI runs there
+            // 7. Execute agent — WorkspacePath is the worktree, so Claude CLI runs there
             var context = new AgentExecutionContext(
                 TargetCardId: cardId,
+                TargetCardTitle: targetCard.Title,
                 WorkspacePath: worktreePath,
                 TaskPrompt: resolvedPrompt,
                 SystemPrompt: role.SystemPrompt,
@@ -79,32 +84,18 @@ public sealed partial class AgentRunner(
 
             var agentResult = await agentExecutor.ExecuteAsync(context, cancellationToken);
 
-            // 7. Commit based on outcome (inside the worktree)
-            var commitMessage = agentResult.Outcome switch
-            {
-                AgentOutcome.COMPLETE => $"Agent: {state.Name} complete for {targetCard.Title}",
-                AgentOutcome.NEEDS_INFO => $"Agent: questions for {targetCard.Title}",
-                AgentOutcome.ERROR => $"Agent: error processing {targetCard.Title}",
-                _ => $"Agent: {agentResult.Outcome} for {targetCard.Title}"
-            };
+            // 8. Handle git operations based on stage-specific behavior
+            var gitNote = await HandleGitBehaviorAsync(
+                gitBehavior, worktreePath, branchName, targetCard, state, agentResult, cancellationToken);
 
-            // CommitAsync is a no-op if nothing is staged (e.g., only .aiboard/ files changed)
-            await gitWorkspaceManager.CommitAsync(worktreePath, commitMessage, cancellationToken);
+            // 9. Post-process: update card on board, add comment, move to next state
+            await PostProcessAsync(targetCard, state, agentResult, worktreePath, branchName, gitNote, cancellationToken);
 
-            if (agentResult.Outcome == AgentOutcome.COMPLETE)
+            // 10. Cleanup worktree for discard stages
+            if (gitBehavior == "discard")
             {
-                try
-                {
-                    await gitWorkspaceManager.PushAsync(worktreePath, branchName, cancellationToken);
-                }
-                catch (GitOperationException ex)
-                {
-                    logger.LogWarning(ex, "Failed to push branch {Branch} — no remote configured?", branchName);
-                }
+                await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
             }
-
-            // 8. Post-process: update card on board, add comment, move to next state
-            await PostProcessAsync(targetCard, state, agentResult, worktreePath, cancellationToken);
 
             logger.LogInformation("Agent run complete for card {CardId}: outcome={Outcome}", cardId, agentResult.Outcome);
             return new AgentRunResult(agentResult.Outcome, null, agentResult.Questions);
@@ -113,24 +104,32 @@ public sealed partial class AgentRunner(
         {
             logger.LogError(ex, "Agent run failed for card {CardId}", cardId);
 
-            // Try to write error to task file in the worktree
-            try
+            // For commit-capable stages, try to record error in worktree
+            if (gitBehavior is "commit_and_push" or "commit_only")
             {
-                var worktreePath = GitWorkspaceManager.GetWorktreePath(workspacePath, branchName);
-                var taskFilePath = TaskFileManager.GetTaskFilePath(worktreePath, cardId);
-                if (File.Exists(taskFilePath))
+                try
                 {
-                    var existing = await File.ReadAllTextAsync(taskFilePath, cancellationToken);
-                    await File.WriteAllTextAsync(taskFilePath,
-                        existing + $"\n\n## Error\n\n{ex.Message}", cancellationToken);
-                }
+                    var worktreePath = GitWorkspaceManager.GetWorktreePath(workspacePath, branchName);
+                    var taskFilePath = TaskFileManager.GetTaskFilePath(worktreePath, cardId, targetCard.Title);
+                    if (File.Exists(taskFilePath))
+                    {
+                        var existing = await File.ReadAllTextAsync(taskFilePath, cancellationToken);
+                        await File.WriteAllTextAsync(taskFilePath,
+                            existing + $"\n\n## Error\n\n{ex.Message}", cancellationToken);
+                    }
 
-                await gitWorkspaceManager.CommitAsync(worktreePath,
-                    $"Agent: error processing {cardId}", cancellationToken);
+                    await gitWorkspaceManager.CommitAsync(worktreePath,
+                        $"Agent: error processing {cardId}", cancellationToken);
+                }
+                catch
+                {
+                    // Best effort error recording
+                }
             }
-            catch
+            else
             {
-                // Best effort error recording
+                // Discard stage: just clean up the worktree
+                await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
             }
 
             // Best effort: post error comment and move card to error state
@@ -154,15 +153,130 @@ public sealed partial class AgentRunner(
         }
     }
 
+    private async Task<string> ResolveBranchNameAsync(
+        string repoPath, string cardId, string title, CancellationToken cancellationToken)
+    {
+        // Check for existing branch with this card's prefix
+        var existingBranch = await gitWorkspaceManager.FindBranchByPrefixAsync(
+            repoPath, cardId, cancellationToken);
+
+        if (existingBranch is not null)
+        {
+            logger.LogInformation("Reusing existing branch {Branch} for card {CardId}", existingBranch, cardId);
+            return existingBranch;
+        }
+
+        // Create new branch name with slug
+        var slug = SlugHelper.Sanitize(title);
+        var branchName = string.IsNullOrEmpty(slug)
+            ? $"aiboard/{cardId}"
+            : $"aiboard/{cardId}-{slug}";
+
+        logger.LogInformation("Using new branch name {Branch} for card {CardId}", branchName, cardId);
+        return branchName;
+    }
+
+    /// <summary>
+    /// Handles git operations based on the stage's gitBehavior config.
+    /// Returns an optional note to include in the agent comment.
+    /// </summary>
+    private async Task<string?> HandleGitBehaviorAsync(
+        string gitBehavior,
+        string worktreePath,
+        string branchName,
+        BoardCard card,
+        WorkflowState state,
+        AgentResult agentResult,
+        CancellationToken cancellationToken)
+    {
+        switch (gitBehavior)
+        {
+            case "commit_and_push":
+            {
+                var commitMsg = await ReadCommitMessageAsync(worktreePath, card, state, cancellationToken);
+                await gitWorkspaceManager.CommitAsync(worktreePath, commitMsg, cancellationToken);
+
+                if (agentResult.Outcome == AgentOutcome.COMPLETE)
+                {
+                    try
+                    {
+                        await gitWorkspaceManager.PushAsync(worktreePath, branchName, cancellationToken);
+                        return $"Branch `{branchName}` pushed to origin.";
+                    }
+                    catch (GitOperationException ex)
+                    {
+                        logger.LogWarning(ex, "Failed to push branch {Branch} — no remote configured?", branchName);
+                        return $"Branch `{branchName}` committed locally (push failed).";
+                    }
+                }
+
+                return $"Changes committed to branch `{branchName}`.";
+            }
+
+            case "commit_only":
+            {
+                var commitMsg = await ReadCommitMessageAsync(worktreePath, card, state, cancellationToken);
+                await gitWorkspaceManager.CommitAsync(worktreePath, commitMsg, cancellationToken);
+                return $"Changes committed to branch `{branchName}`.";
+            }
+
+            case "discard":
+            default:
+            {
+                if (await gitWorkspaceManager.HasUncommittedChangesAsync(worktreePath, cancellationToken))
+                {
+                    logger.LogWarning(
+                        "Discarding unexpected code changes in {State} stage for card {CardId}",
+                        state.Name, card.Id);
+                    return "Note: agent made unexpected code changes which were discarded.";
+                }
+
+                return null;
+            }
+        }
+    }
+
+    private static async Task<string> ReadCommitMessageAsync(
+        string worktreePath, BoardCard card, WorkflowState state, CancellationToken cancellationToken)
+    {
+        var commitFilePath = Path.Combine(worktreePath, CommitFilePath);
+        if (File.Exists(commitFilePath))
+        {
+            var msg = (await File.ReadAllTextAsync(commitFilePath, cancellationToken)).Trim();
+            if (!string.IsNullOrWhiteSpace(msg))
+                return msg;
+        }
+
+        // Fallback: auto-generated message
+        return $"Agent: {state.Name} complete for {card.Title}";
+    }
+
+    private async Task CleanupWorktreeAsync(
+        string repoPath, string branchName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await gitWorkspaceManager.RemoveWorktreeAsync(
+                repoPath, branchName, deleteBranch: true, cancellationToken);
+            logger.LogInformation("Cleaned up worktree for branch {Branch}", branchName);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to clean up worktree for branch {Branch}", branchName);
+        }
+    }
+
     private async Task PostProcessAsync(
         BoardCard originalCard,
         WorkflowState state,
         AgentResult agentResult,
         string worktreePath,
+        string branchName,
+        string? gitNote,
         CancellationToken cancellationToken)
     {
-        // 8a. Read back the task file to detect agent changes to card content
-        var taskFilePath = TaskFileManager.GetTaskFilePath(worktreePath, originalCard.Id);
+        // 9a. Read back the task file to detect agent changes to card content
+        var taskFilePath = TaskFileManager.GetTaskFilePath(worktreePath, originalCard.Id, originalCard.Title);
         if (File.Exists(taskFilePath))
         {
             var taskFileContent = await File.ReadAllTextAsync(taskFilePath, cancellationToken);
@@ -175,12 +289,12 @@ public sealed partial class AgentRunner(
             }
         }
 
-        // 8b. Format and post comment
-        var comment = FormatComment(agentResult);
+        // 9b. Format and post comment (with optional git note)
+        var comment = FormatComment(agentResult, gitNote);
         await boardClient.UpsertAgentCommentAsync(originalCard.Id, comment, cancellationToken);
         logger.LogInformation("Posted agent comment for {CardId}", originalCard.Id);
 
-        // 8c. Move card to next state per transitions
+        // 9c. Move card to next state per transitions
         var outcomeKey = agentResult.Outcome.ToString();
         if (state.Transitions.TryGetValue(outcomeKey, out var targetColumnId))
         {
@@ -193,15 +307,20 @@ public sealed partial class AgentRunner(
         }
     }
 
-    internal static string FormatComment(AgentResult result)
+    internal static string FormatComment(AgentResult result, string? gitNote = null)
     {
-        return result.Outcome switch
+        var comment = result.Outcome switch
         {
             AgentOutcome.COMPLETE => $"## Agent Complete\n\n{result.Detail ?? "Task completed successfully."}",
             AgentOutcome.NEEDS_INFO => FormatQuestionsComment(result),
             AgentOutcome.ERROR => $"## Agent Error\n\n{result.Detail ?? "An error occurred."}",
             _ => $"## Agent: {result.Outcome}\n\n{result.Detail ?? ""}"
         };
+
+        if (!string.IsNullOrEmpty(gitNote))
+            comment += $"\n\n---\n{gitNote}";
+
+        return comment;
     }
 
     private static string FormatQuestionsComment(AgentResult result)

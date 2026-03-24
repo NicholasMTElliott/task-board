@@ -11,6 +11,7 @@
       "name": "Ready for Design",
       "role": "senior_engineer",
       "gateType": "agent_run",
+      "gitBehavior": "discard",
       "taskPrompt": "You are working on the task {TaskName} ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context. Your job is to update ONLY the file for this task to add a detailed technical design approach. Include: architecture decisions, component interactions, data flow, edge cases, and implementation notes. Do not modify any other file. You should include enough information for an unambiguous implementation. You may respond with questions where there is ambiguity, conflict, or mistakes; you should only proceed when you are fully confident you understand the request and the subject material fully. It is always appropriate to say 'I do not understand', 'I need help', or 'This does not seem correct'.",
       "transitions": {
         "IN_PROGRESS": "Designing",
@@ -44,7 +45,8 @@
       "name": "Ready for Implementation",
       "role": "senior_engineer",
       "gateType": "agent_run",
-      "taskPrompt": "You are working on the task {TaskName} ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context. Using the approved technical design in the task file, implement the changes. Write production-quality code, follow existing patterns in the codebase, and ensure all changes are consistent with the design. Do not modify any task files other than the one for this task.",
+      "gitBehavior": "commit_and_push",
+      "taskPrompt": "You are working on the task {TaskName} ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context. Using the approved technical design in the task file, implement the changes. Write production-quality code, follow existing patterns in the codebase, and ensure all changes are consistent with the design. Do not modify any task files other than the one for this task. Do not interact with git directly -- the orchestrator handles all git operations. When you are finished, write a concise commit message summarizing your changes to the file .aiboard/commit.md. This message will be used as the git commit message.",
       "transitions": {
         "IN_PROGRESS": "Implementing",
         "COMPLETE": "Ready for Test",
@@ -70,6 +72,7 @@
       "name": "Ready for Test",
       "role": "qa",
       "gateType": "agent_run",
+      "gitBehavior": "discard",
       "taskPrompt": "You are working on the task {TaskName} ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context. Using the requirements, technical design, and implementation, run the existing test suite and validate the implementation meets requirements and expectations. Report test results, any failures, and overall quality assessment. If there are issues that need design or implementation rework, respond with NEEDS_INFO and describe the problems found.",
       "transitions": {
         "COMPLETE": "Tested",

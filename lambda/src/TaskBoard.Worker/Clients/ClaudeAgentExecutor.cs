@@ -49,7 +49,7 @@ public sealed class ClaudeAgentExecutor(
             context.TargetCardId, context.WorkspacePath, context.Model);
 
         var taskFilePath = Processing.TaskFileManager.GetTaskFilePath(
-            context.WorkspacePath, context.TargetCardId);
+            context.WorkspacePath, context.TargetCardId, context.TargetCardTitle);
 
         var userPrompt = BuildUserPrompt(context, taskFilePath);
         var args = BuildArgumentList(context.Model, context.SystemPrompt, userPrompt);

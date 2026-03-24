@@ -21,7 +21,8 @@
       "Bash(AGENT_INTEGRATION_TESTS=true dotnet test lambda/tests/TaskBoard.Worker.Tests/TaskBoard.Worker.Tests.csproj --filter \"Integration_Design_ClearSpec\" --no-restore -l \"console;verbosity=detailed\")",
       "Bash(gh project:*)",
       "Bash(gh api:*)",
-      "Bash(gh auth:*)"
+      "Bash(gh auth:*)",
+      "Bash(BOARD_PROVIDER=github AGENT_EXECUTOR=stub WORKFLOW_CONFIG_PATH=\"c:/Users/Nicho/Documents/task-board/workflow.github.json\" GitHubProjects__Owner=NicholasMTElliott GitHubProjects__Repo=NicholasMTElliott/task-board GitHubProjects__ProjectNumber=1 dotnet run --project lambda/src/TaskBoard.Worker -- --mode agent --card-id 2 --board-id 1 --workspace .)"
     ]
   }
 }

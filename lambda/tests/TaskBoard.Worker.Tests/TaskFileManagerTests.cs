@@ -35,8 +35,8 @@ public class TaskFileManagerTests : IDisposable
 
         await _manager.WriteAllTaskFilesAsync(_tempDir, cards, config, CancellationToken.None);
 
-        Assert.True(File.Exists(TaskFileManager.GetTaskFilePath(_tempDir, "card1")));
-        Assert.True(File.Exists(TaskFileManager.GetTaskFilePath(_tempDir, "card2")));
+        Assert.True(File.Exists(TaskFileManager.GetTaskFilePath(_tempDir, "card1", "First Card")));
+        Assert.True(File.Exists(TaskFileManager.GetTaskFilePath(_tempDir, "card2", "Second Card")));
     }
 
     [Fact]
@@ -50,7 +50,7 @@ public class TaskFileManagerTests : IDisposable
 
         await _manager.WriteAllTaskFilesAsync(_tempDir, cards, config, CancellationToken.None);
 
-        var content = await File.ReadAllTextAsync(TaskFileManager.GetTaskFilePath(_tempDir, "card1"));
+        var content = await File.ReadAllTextAsync(TaskFileManager.GetTaskFilePath(_tempDir, "card1", "Auth Middleware"));
         Assert.Contains("id: card1", content);
         Assert.Contains("title: Auth Middleware", content);
         Assert.Contains("list: Design", content);
@@ -69,7 +69,7 @@ public class TaskFileManagerTests : IDisposable
 
         await _manager.WriteAllTaskFilesAsync(_tempDir, cards, config, CancellationToken.None);
 
-        var content = await File.ReadAllTextAsync(TaskFileManager.GetTaskFilePath(_tempDir, "card1"));
+        var content = await File.ReadAllTextAsync(TaskFileManager.GetTaskFilePath(_tempDir, "card1", "Card"));
         Assert.Contains("list: Unknown", content);
     }
 
@@ -83,7 +83,7 @@ public class TaskFileManagerTests : IDisposable
         var config = BuildWorkflowConfig();
 
         await _manager.WriteAllTaskFilesAsync(_tempDir, cards, config, CancellationToken.None);
-        var content = await _manager.ReadTaskFileAsync(_tempDir, "card1", CancellationToken.None);
+        var content = await _manager.ReadTaskFileAsync(_tempDir, "card1", "Test Card", CancellationToken.None);
 
         Assert.Contains("Some content here", content);
         Assert.Contains("id: card1", content);
@@ -95,7 +95,7 @@ public class TaskFileManagerTests : IDisposable
         // File.ReadAllTextAsync throws FileNotFoundException on Windows,
         // but may throw DirectoryNotFoundException if the .aiboard/tasks dir doesn't exist
         await Assert.ThrowsAnyAsync<IOException>(
-            () => _manager.ReadTaskFileAsync(_tempDir, "nonexistent", CancellationToken.None));
+            () => _manager.ReadTaskFileAsync(_tempDir, "nonexistent", cancellationToken: CancellationToken.None));
     }
 
     [Fact]
@@ -157,7 +157,17 @@ public class TaskFileManagerTests : IDisposable
     }
 
     [Fact]
-    public void GetTaskFilePath_ReturnsCorrectPath()
+    public void GetTaskFilePath_WithTitle_ReturnsSluggedPath()
+    {
+        var path = TaskFileManager.GetTaskFilePath("/repo", "card123", "My Cool Feature");
+
+        Assert.Contains("card123-my-cool-feature.md", path);
+        Assert.Contains(".aiboard", path);
+        Assert.Contains("tasks", path);
+    }
+
+    [Fact]
+    public void GetTaskFilePath_WithoutTitle_ReturnsBareIdPath()
     {
         var path = TaskFileManager.GetTaskFilePath("/repo", "card123");
 

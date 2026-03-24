@@ -7,6 +7,7 @@ public interface IAgentExecutor
 
 public sealed record AgentExecutionContext(
     string TargetCardId,
+    string TargetCardTitle,
     string WorkspacePath,
     string TaskPrompt,
     string SystemPrompt,
