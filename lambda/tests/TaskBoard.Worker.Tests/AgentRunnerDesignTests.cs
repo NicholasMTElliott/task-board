@@ -72,7 +72,6 @@ public class AgentRunnerDesignTests : IDisposable
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
 
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
-        Assert.Null(result.ErrorDetail);
 
         // Card body should be updated with design content
         await _trelloClient.Received(1).UpdateCardBodyAsync(

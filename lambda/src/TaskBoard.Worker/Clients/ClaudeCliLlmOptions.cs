@@ -8,7 +8,7 @@ public sealed class ClaudeCliLlmOptions
 
     public int MaxTurns { get; init; } = 5;
 
-    public decimal MaxBudgetUsd { get; init; } = 2.00m;
+    public decimal MaxBudgetUsd { get; init; } = 10.00m;
 
-    public int TimeoutSeconds { get; init; } = 300;
+    public int TimeoutSeconds { get; init; } = 900;
 }

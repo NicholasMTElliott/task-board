@@ -107,7 +107,7 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
 
         var sluggedBranch = sluggedOutput
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => line.TrimStart('*', ' '))
+            .Select(line => line.Trim('*', '+', ' ', '\r', '\t'))
             .FirstOrDefault(b => !string.IsNullOrWhiteSpace(b));
 
         if (sluggedBranch is not null)

@@ -77,7 +77,6 @@ public class AgentRunnerTests : IDisposable
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
 
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
-        Assert.Null(result.ErrorDetail);
 
         // Main repo should be untouched (still on original branch)
         var mainBranch = await _gitWorkspaceManager.GetCurrentBranchAsync(_tempDir, CancellationToken.None);

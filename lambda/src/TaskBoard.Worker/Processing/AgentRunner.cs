@@ -58,7 +58,7 @@ public sealed partial class AgentRunner(
         }
 
         // 3. Resolve branch name (slug-based with prefix reuse)
-        var branchName = await ResolveBranchNameAsync(workspacePath, cardId, targetCard.Title, cancellationToken);
+        var (branchName, isExistingBranch) = await ResolveBranchNameAsync(workspacePath, cardId, targetCard.Title, cancellationToken);
         var gitBehavior = state.GitBehavior ?? "discard";
 
         try
@@ -72,6 +72,13 @@ public sealed partial class AgentRunner(
 
             // 6. Resolve prompt placeholders
             var resolvedPrompt = ResolvePromptPlaceholders(state.TaskPrompt ?? "", targetCard);
+
+            if (isExistingBranch)
+            {
+                resolvedPrompt += "\n\nNote: This task has been worked on previously. A branch with prior changes already exists. " +
+                    "Review the existing state of the codebase and any changes already made before beginning new work. " +
+                    "Avoid duplicating or overwriting prior progress.";
+            }
 
             // 7. Execute agent — WorkspacePath is the worktree, so Claude CLI runs there
             var context = new AgentExecutionContext(
@@ -97,8 +104,9 @@ public sealed partial class AgentRunner(
                 await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
             }
 
-            logger.LogInformation("Agent run complete for card {CardId}: outcome={Outcome}", cardId, agentResult.Outcome);
-            return new AgentRunResult(agentResult.Outcome, null, agentResult.Questions);
+            logger.LogInformation("Agent run complete for card {CardId}: outcome={Outcome}, detail={Detail}",
+                cardId, agentResult.Outcome, agentResult.Detail ?? "(none)");
+            return new AgentRunResult(agentResult.Outcome, agentResult.Detail, agentResult.Questions);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -153,7 +161,7 @@ public sealed partial class AgentRunner(
         }
     }
 
-    private async Task<string> ResolveBranchNameAsync(
+    private async Task<(string BranchName, bool IsExisting)> ResolveBranchNameAsync(
         string repoPath, string cardId, string title, CancellationToken cancellationToken)
     {
         // Check for existing branch with this card's prefix
@@ -163,7 +171,7 @@ public sealed partial class AgentRunner(
         if (existingBranch is not null)
         {
             logger.LogInformation("Reusing existing branch {Branch} for card {CardId}", existingBranch, cardId);
-            return existingBranch;
+            return (existingBranch, true);
         }
 
         // Create new branch name with slug
@@ -173,7 +181,7 @@ public sealed partial class AgentRunner(
             : $"aiboard/{cardId}-{slug}";
 
         logger.LogInformation("Using new branch name {Branch} for card {CardId}", branchName, cardId);
-        return branchName;
+        return (branchName, false);
     }
 
     /// <summary>
@@ -313,7 +321,7 @@ public sealed partial class AgentRunner(
         {
             AgentOutcome.COMPLETE => $"## Agent Complete\n\n{result.Detail ?? "Task completed successfully."}",
             AgentOutcome.NEEDS_INFO => FormatQuestionsComment(result),
-            AgentOutcome.ERROR => $"## Agent Error\n\n{result.Detail ?? "An error occurred."}",
+            AgentOutcome.ERROR => $"## Agent Error\n\n{result.Detail ?? "The agent returned ERROR with no detail. This may indicate a timeout, budget exhaustion, or a failure to produce structured output."}",
             _ => $"## Agent: {result.Outcome}\n\n{result.Detail ?? ""}"
         };
 

@@ -66,14 +66,23 @@ public sealed class ClaudeAgentExecutor(
         {
             logger.LogError("Claude agent exited with code {ExitCode}. Stderr: {Stderr}. Stdout: {Stdout}",
                 exitCode, stderr, stdout[..Math.Min(500, stdout.Length)]);
-            throw new InvalidOperationException(
-                $"Claude CLI exited with code {exitCode}. Stderr: {stderr[..Math.Min(1000, stderr.Length)]}");
+
+            var stderrSnippet = stderr[..Math.Min(1000, stderr.Length)].Trim();
+            var stdoutSnippet = stdout[..Math.Min(500, stdout.Length)].Trim();
+            var detail = $"Claude CLI exited with code {exitCode}.";
+            if (!string.IsNullOrEmpty(stderrSnippet))
+                detail += $"\nStderr: {stderrSnippet}";
+            if (!string.IsNullOrEmpty(stdoutSnippet))
+                detail += $"\nStdout: {stdoutSnippet}";
+
+            throw new InvalidOperationException(detail);
         }
 
         if (string.IsNullOrWhiteSpace(stdout))
         {
-            logger.LogError("Claude agent returned empty output");
-            throw new InvalidOperationException("Claude CLI returned empty output");
+            logger.LogError("Claude agent returned empty output. Stderr: {Stderr}", stderr);
+            throw new InvalidOperationException(
+                $"Claude CLI returned empty output. Stderr: {stderr[..Math.Min(500, stderr.Length)].Trim()}");
         }
 
         logger.LogDebug("Claude agent raw stdout ({Length} chars): {Stdout}",
