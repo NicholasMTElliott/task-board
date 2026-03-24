@@ -10,7 +10,7 @@ public sealed record AgentExecutionContext(
     string TargetCardTitle,
     string WorkspacePath,
     string TaskPrompt,
-    string SystemPrompt,
+    string SystemPromptFilePath,
     string Model);
 
 public sealed record AgentResult(

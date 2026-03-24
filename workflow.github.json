@@ -12,7 +12,8 @@
       "role": "senior_engineer",
       "gateType": "agent_run",
       "gitBehavior": "discard",
-      "taskPrompt": "You are working on the task {TaskName} ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context. Your job is to update ONLY the file for this task to add a detailed technical design approach. Include: architecture decisions, component interactions, data flow, edge cases, and implementation notes. Do not modify any other file. You should include enough information for an unambiguous implementation. You may respond with questions where there is ambiguity, conflict, or mistakes; you should only proceed when you are fully confident you understand the request and the subject material fully. It is always appropriate to say 'I do not understand', 'I need help', or 'This does not seem correct'.",
+      "taskPromptFile": "prompts/states/ready_for_design.md",
+      "taskPrompt": null,
       "transitions": {
         "IN_PROGRESS": "Designing",
         "COMPLETE": "Designed",
@@ -47,6 +48,7 @@
       "gateType": "agent_run",
       "gitBehavior": "commit_and_push",
       "taskPrompt": "You are working on the task {TaskName} ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context. Using the approved technical design in the task file, implement the changes. Write production-quality code, follow existing patterns in the codebase, and ensure all changes are consistent with the design. Do not modify any task files other than the one for this task. Do not interact with git directly -- the orchestrator handles all git operations. When you are finished, write a concise commit message summarizing your changes to the file .aiboard/commit.md. This message will be used as the git commit message. You may respond with questions where there is ambiguity, conflict, or mistakes; you should only proceed when you are fully confident you understand the request and the subject material fully. It is always appropriate to say 'I do not understand', 'I need help', or 'This does not seem correct'.",
+      "taskPromptFile": "prompts/states/ready_for_implementation.md",
       "transitions": {
         "IN_PROGRESS": "Implementing",
         "COMPLETE": "Ready for Test",
@@ -73,7 +75,8 @@
       "role": "qa",
       "gateType": "agent_run",
       "gitBehavior": "discard",
-      "taskPrompt": "You are working on the task {TaskName} ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context. Using the requirements, technical design, and implementation, run the existing test suite and validate the implementation meets requirements and expectations. Report test results, any failures, and overall quality assessment. If there are issues that need design or implementation rework, respond with NEEDS_INFO and describe the problems found.",
+      "taskPromptFile": "prompts/states/ready_for_test.md",
+      "taskPrompt": null,
       "transitions": {
         "COMPLETE": "Tested",
         "NEEDS_INFO": "Design Questions",
@@ -98,12 +101,14 @@
   "roles": {
     "senior_engineer": {
       "model": "claude-sonnet-4-6",
-      "systemPrompt": "You are a Senior Software Engineer. Produce structured Technical Design, identify edge cases, and create implementation breakdowns. You are reasonable but skeptical, critical enough to ensure that we catch any issues but not unreasonably blocking progress.",
+      "systemPromptFile": "prompts/senior_engineer.md",
+      "systemPrompt": "",
       "sections": ["Technical Design", "Decisions", "Implementation"]
     },
     "qa": {
       "model": "claude-sonnet-4-6",
-      "systemPrompt": "You are a QA Engineer. Validate implementations against requirements and technical design. Run tests, report results, and flag any issues that need rework.",
+      "systemPromptFile": "prompts/qa.md",
+      "systemPrompt": "",
       "sections": ["Test Plan", "Test Results"]
     }
   }

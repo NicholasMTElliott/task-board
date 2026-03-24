@@ -52,14 +52,14 @@ public sealed class ClaudeAgentExecutor(
             context.WorkspacePath, context.TargetCardId, context.TargetCardTitle);
 
         var userPrompt = BuildUserPrompt(context, taskFilePath);
-        var args = BuildArgumentList(context.Model, context.SystemPrompt, userPrompt);
+        var args = BuildArgumentList(context.Model, context.SystemPromptFilePath);
 
         logger.LogDebug("Claude CLI command: {FileName} {Args}",
             OperatingSystem.IsWindows() ? "claude.cmd" : _options.ExecutablePath,
             FormatArgsForLogging(args));
 
         var (exitCode, stdout, stderr) = await RunProcessAsync(
-            _options.ExecutablePath, args, context.WorkspacePath,
+            _options.ExecutablePath, args, userPrompt, context.WorkspacePath,
             _options.TimeoutSeconds, cancellationToken);
 
         if (exitCode != 0)
@@ -111,12 +111,8 @@ public sealed class ClaudeAgentExecutor(
         return sb.ToString();
     }
 
-    private string[] BuildArgumentList(string model, string systemPrompt, string userPrompt)
+    internal string[] BuildArgumentList(string model, string systemPromptFilePath)
     {
-        // IMPORTANT: On Windows, claude.cmd is invoked via cmd.exe which misparses
-        // double quotes in arguments. Flag-style args must come FIRST; content args
-        // (--system-prompt, -p) must come LAST to prevent quote mangling from
-        // corrupting configuration flags.
         return
         [
             "--model", model,
@@ -125,8 +121,8 @@ public sealed class ClaudeAgentExecutor(
             "--permission-mode", "bypassPermissions",
             "--allowedTools", "*",
             "--json-schema", MinifyJson(OutcomeSchema),
-            "--append-system-prompt", systemPrompt,
-            "-p", userPrompt,
+            "--append-system-prompt-file", systemPromptFilePath,
+            // Task prompt is written to stdin — no -p flag
         ];
     }
 
@@ -270,13 +266,14 @@ public sealed class ClaudeAgentExecutor(
     }
 
     private static async Task<(int ExitCode, string Stdout, string Stderr)> RunProcessAsync(
-        string executable, string[] argumentList, string workingDirectory,
+        string executable, string[] argumentList, string taskPrompt, string workingDirectory,
         int timeoutSeconds, CancellationToken cancellationToken)
     {
         using var process = new Process();
         var startInfo = new ProcessStartInfo
         {
             WorkingDirectory = workingDirectory,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -310,6 +307,15 @@ public sealed class ClaudeAgentExecutor(
         process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
+
+        // Write task prompt to stdin and signal EOF.
+        // Wrapped in try/catch because the process may exit before we finish writing (e.g., budget exceeded).
+        try
+        {
+            await process.StandardInput.WriteAsync(taskPrompt);
+            process.StandardInput.Close();
+        }
+        catch (IOException) { /* process exited before stdin was fully read — not an error */ }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));

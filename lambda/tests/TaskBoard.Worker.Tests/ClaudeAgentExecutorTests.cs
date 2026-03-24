@@ -4,6 +4,60 @@ namespace TaskBoard.Worker.Tests;
 
 public class ClaudeAgentExecutorTests
 {
+    private static ClaudeAgentExecutor CreateExecutor(decimal maxBudgetUsd = 2.00m)
+    {
+        var options = Microsoft.Extensions.Options.Options.Create(
+            new ClaudeCliLlmOptions { MaxBudgetUsd = maxBudgetUsd });
+        return new ClaudeAgentExecutor(options,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ClaudeAgentExecutor>.Instance);
+    }
+
+    [Fact]
+    public void BuildArgumentList_UsesSystemPromptFileFlag()
+    {
+        var executor = CreateExecutor();
+        var args = executor.BuildArgumentList("claude-sonnet-4-6", "/tmp/system.md");
+
+        Assert.Contains("--append-system-prompt-file", args);
+        Assert.Contains("/tmp/system.md", args);
+    }
+
+    [Fact]
+    public void BuildArgumentList_DoesNotContainInlineSystemPromptFlag()
+    {
+        var executor = CreateExecutor();
+        var args = executor.BuildArgumentList("claude-sonnet-4-6", "/tmp/system.md");
+
+        // The inline --append-system-prompt flag (without -file suffix) must not be present
+        Assert.DoesNotContain("--append-system-prompt",
+            args.Where(a => a != "--append-system-prompt-file"));
+    }
+
+    [Fact]
+    public void BuildArgumentList_DoesNotContainPromptFlag()
+    {
+        var executor = CreateExecutor();
+        var args = executor.BuildArgumentList("claude-sonnet-4-6", "/tmp/system.md");
+
+        // Task prompt is piped via stdin; -p flag must not be present
+        Assert.DoesNotContain("-p", args);
+    }
+
+    [Fact]
+    public void BuildArgumentList_ContainsRequiredFlags()
+    {
+        var executor = CreateExecutor();
+        var args = executor.BuildArgumentList("my-model", "/path/to/prompt.md");
+
+        Assert.Contains("--model", args);
+        Assert.Contains("my-model", args);
+        Assert.Contains("--output-format", args);
+        Assert.Contains("json", args);
+        Assert.Contains("--json-schema", args);
+        Assert.Contains("--permission-mode", args);
+        Assert.Contains("bypassPermissions", args);
+    }
+
     [Fact]
     public void ParseResult_StructuredOutput_ReturnsCorrectOutcome()
     {
