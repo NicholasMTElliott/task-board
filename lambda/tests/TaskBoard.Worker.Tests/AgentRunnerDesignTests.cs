@@ -145,7 +145,7 @@ public class AgentRunnerDesignTests : IDisposable
         Assert.NotNull(capturingExecutor.CapturedContext);
         Assert.Contains("Build Auth Endpoint", capturingExecutor.CapturedContext!.TaskPrompt);
         Assert.Contains(TargetCardId, capturingExecutor.CapturedContext.TaskPrompt);
-        Assert.Contains("Senior Software Engineer", capturingExecutor.CapturedContext.SystemPrompt);
+        Assert.Contains("system-prompt-senior_engineer.md", capturingExecutor.CapturedContext.SystemPromptFilePath);
         Assert.Equal("opus-4.6", capturingExecutor.CapturedContext.Model);
 
         // WorkspacePath should be the worktree, not the repo root

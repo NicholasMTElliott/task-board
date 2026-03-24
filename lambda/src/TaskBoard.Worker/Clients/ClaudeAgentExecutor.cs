@@ -102,7 +102,7 @@ public sealed class ClaudeAgentExecutor(
         return sb.ToString();
     }
 
-    private string[] BuildArgumentList(string model, string systemPromptFilePath)
+    internal string[] BuildArgumentList(string model, string systemPromptFilePath)
     {
         return
         [

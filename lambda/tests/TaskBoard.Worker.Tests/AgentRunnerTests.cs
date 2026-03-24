@@ -272,6 +272,125 @@ public class AgentRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task ResolveSystemPromptFileAsync_InlinePrompt_WritesTempFileAndReturnsPath()
+    {
+        var role = new WorkflowRole("model", "You are a Senior Engineer.", new List<string>());
+        var tempDir = Path.Combine(Path.GetTempPath(), "syspmpt-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var path = await AgentRunner.ResolveSystemPromptFileAsync(role, "senior_engineer", tempDir, CancellationToken.None);
+
+            Assert.True(File.Exists(path));
+            Assert.Equal("You are a Senior Engineer.", (await File.ReadAllTextAsync(path)).Trim());
+            Assert.Contains("system-prompt-senior_engineer.md", path);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ResolveSystemPromptFileAsync_FileConfigured_ReturnsAbsolutePath()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "syspmptfile-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var promptRelPath = "prompts/role.md";
+            var promptFullPath = Path.Combine(tempDir, promptRelPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(promptFullPath)!);
+            await File.WriteAllTextAsync(promptFullPath, "You are an engineer.");
+
+            var role = new WorkflowRole("model", "", new List<string>(), SystemPromptFile: promptRelPath);
+            var path = await AgentRunner.ResolveSystemPromptFileAsync(role, "engineer", tempDir, CancellationToken.None);
+
+            Assert.Equal(Path.GetFullPath(promptFullPath), path);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ResolveSystemPromptFileAsync_FileConfiguredButMissing_ThrowsFileNotFoundException()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "syspmptmiss-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var role = new WorkflowRole("model", "", new List<string>(), SystemPromptFile: "prompts/missing.md");
+            await Assert.ThrowsAsync<FileNotFoundException>(
+                () => AgentRunner.ResolveSystemPromptFileAsync(role, "engineer", tempDir, CancellationToken.None));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ResolveTaskPromptAsync_InlinePrompt_ResolvesPlaceholders()
+    {
+        var state = new WorkflowState("Design", "senior_engineer", "agent_run",
+            "Work on {TaskName} ({TaskId})",
+            new Dictionary<string, string>());
+        var card = new BoardCard("card-1", "Auth Feature", "desc", "list-design");
+
+        var prompt = await AgentRunner.ResolveTaskPromptAsync(state, "/irrelevant", card, CancellationToken.None);
+
+        Assert.Equal("Work on Auth Feature (card-1)", prompt);
+    }
+
+    [Fact]
+    public async Task ResolveTaskPromptAsync_FileConfigured_ReadsAndResolvesPlaceholders()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "taskprompt-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var promptRelPath = "prompts/states/design.md";
+            var promptFullPath = Path.Combine(tempDir, promptRelPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(promptFullPath)!);
+            await File.WriteAllTextAsync(promptFullPath, "Implement {TaskName} (id={TaskId}).");
+
+            var state = new WorkflowState("Design", "senior_engineer", "agent_run", null,
+                new Dictionary<string, string>(), TaskPromptFile: promptRelPath);
+            var card = new BoardCard("42", "Login Flow", "desc", "list-design");
+
+            var prompt = await AgentRunner.ResolveTaskPromptAsync(state, tempDir, card, CancellationToken.None);
+
+            Assert.Equal("Implement Login Flow (id=42).", prompt);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ResolveTaskPromptAsync_FileConfiguredButMissing_ThrowsFileNotFoundException()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "taskpromptmiss-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var state = new WorkflowState("Design", "senior_engineer", "agent_run", null,
+                new Dictionary<string, string>(), TaskPromptFile: "prompts/states/missing.md");
+            var card = new BoardCard("1", "Card", "desc", "list");
+
+            await Assert.ThrowsAsync<FileNotFoundException>(
+                () => AgentRunner.ResolveTaskPromptAsync(state, tempDir, card, CancellationToken.None));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ResolvePromptPlaceholders_ReplacesKnownPlaceholders()
     {
         var template = "Work on task {TaskName} ({TaskId}). Story: {UserStoryName}";
