@@ -10,7 +10,7 @@ public class AgentRunnerTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly string _worktreeBase;
-    private readonly ITrelloClient _trelloClient;
+    private readonly ITaskBoardClient _trelloClient;
     private readonly StubAgentExecutor _agentExecutor;
     private readonly TaskFileManager _taskFileManager;
     private readonly GitWorkspaceManager _gitWorkspaceManager;
@@ -28,7 +28,7 @@ public class AgentRunnerTests : IDisposable
         Directory.CreateDirectory(_tempDir);
         InitGitRepo(_tempDir);
 
-        _trelloClient = Substitute.For<ITrelloClient>();
+        _trelloClient = Substitute.For<ITaskBoardClient>();
         _agentExecutor = new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance);
         _taskFileManager = new TaskFileManager(NullLogger<TaskFileManager>.Instance);
         _gitWorkspaceManager = new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance);
@@ -118,7 +118,7 @@ public class AgentRunnerTests : IDisposable
     public async Task ExecuteAsync_CardNotFound_ReturnsError()
     {
         _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
-            .Returns(new List<TrelloCard>());
+            .Returns(new List<BoardCard>());
 
         var result = await _runner.ExecuteAsync("nonexistent", BoardId, _tempDir, CancellationToken.None);
 
@@ -130,7 +130,7 @@ public class AgentRunnerTests : IDisposable
     public async Task ExecuteAsync_CardInUnknownList_ReturnsError()
     {
         _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
-            .Returns(new List<TrelloCard>
+            .Returns(new List<BoardCard>
             {
                 new(TargetCardId, "Card", "Desc", "unknown-list"),
             });
@@ -172,7 +172,7 @@ public class AgentRunnerTests : IDisposable
             configWithNoRole, NullLogger<AgentRunner>.Instance);
 
         _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
-            .Returns(new List<TrelloCard>
+            .Returns(new List<BoardCard>
             {
                 new(TargetCardId, "Card", "Desc", DesignListId),
             });
@@ -203,10 +203,87 @@ public class AgentRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteAsync_WithInProgressTransition_MovesCardBeforeAgentRuns()
+    {
+        // Setup workflow with IN_PROGRESS transition
+        var configWithInProgress = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                [DesignListId] = new("Ready for Design", "senior_engineer", "agent_run",
+                    "Design task {TaskName} ({TaskId})",
+                    new Dictionary<string, string>
+                    {
+                        ["IN_PROGRESS"] = "list-designing",
+                        ["COMPLETE"] = "list-designed",
+                        ["NEEDS_INFO"] = "list-questions",
+                        ["ERROR"] = "list-error",
+                    }),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
+                    new List<string> { "Technical Design", "Decisions" }),
+            });
+
+        var runner = new AgentRunner(
+            _trelloClient, _agentExecutor, _taskFileManager, _gitWorkspaceManager,
+            configWithInProgress, NullLogger<AgentRunner>.Instance);
+
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+
+        // Verify IN_PROGRESS move happened (first call) then COMPLETE move (second call)
+        var moveCalls = _trelloClient.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == "MoveCardToColumnAsync")
+            .ToList();
+        Assert.Equal(2, moveCalls.Count);
+        Assert.Equal("list-designing", moveCalls[0].GetArguments()[1]);
+        Assert.Equal("list-designed", moveCalls[1].GetArguments()[1]);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithoutInProgressTransition_SkipsInProgressMove()
+    {
+        // Default workflow config has no IN_PROGRESS key
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+
+        await _runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Only one move call (the COMPLETE transition in post-processing)
+        var moveCalls = _trelloClient.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == "MoveCardToColumnAsync")
+            .ToList();
+        Assert.Single(moveCalls);
+        Assert.Equal("list-review", moveCalls[0].GetArguments()[1]);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Success_PostsCommentAndUpdatesCard()
+    {
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+
+        await _runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Verify comment was posted
+        await _trelloClient.Received(1).UpsertAgentCommentAsync(
+            TargetCardId, Arg.Is<string>(s => s.Contains("Agent Complete")), Arg.Any<CancellationToken>());
+
+        // Verify card was moved to COMPLETE column
+        await _trelloClient.Received().MoveCardToColumnAsync(
+            TargetCardId, "list-review", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public void ResolvePromptPlaceholders_ReplacesKnownPlaceholders()
     {
         var template = "Work on task {TaskName} ({TaskId}). Story: {UserStoryName}";
-        var card = new TrelloCard("card-123", "Build Auth", "desc", "list-1");
+        var card = new BoardCard("card-123", "Build Auth", "desc", "list-1");
 
         var result = AgentRunner.ResolvePromptPlaceholders(template, card);
 
@@ -217,7 +294,7 @@ public class AgentRunnerTests : IDisposable
     public void ResolvePromptPlaceholders_NoPlaceholders_ReturnsUnchanged()
     {
         var template = "Just a plain prompt with no placeholders.";
-        var card = new TrelloCard("id", "name", "desc", "list");
+        var card = new BoardCard("id", "name", "desc", "list");
 
         var result = AgentRunner.ResolvePromptPlaceholders(template, card);
 
@@ -227,7 +304,7 @@ public class AgentRunnerTests : IDisposable
     private void SetupBoardCards()
     {
         _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
-            .Returns(new List<TrelloCard>
+            .Returns(new List<BoardCard>
             {
                 new(TargetCardId, "Build Auth Middleware", "Implement JWT authentication", DesignListId),
                 new("card-other", "Setup CI/CD", "Configure GitHub Actions", DesignListId),

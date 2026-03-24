@@ -27,21 +27,26 @@ Postgres (queue tables, processed_events, card_state, run_log)
 Trello lists are the authoritative state of a card. Each list maps to exactly one role or manual gate. The orchestrator determines transitions deterministically based on workflow config.
 
 ### Agent Contract
-Every agent returns a structured JSON payload:
+The agent executor (`ClaudeAgentExecutor`) uses `--json-schema` to enforce structured output:
 ```json
 {
-  "updates": {
-    "requirements": "...",
-    "design": "...",
-    "decisions": "...",
-    "questions": []
-  },
-  "summary_comment": "...",
-  "outcome": "COMPLETE | NEEDS_INFO | BLOCKED",
-  "approval_required": true | false
+  "outcome": "COMPLETE | NEEDS_INFO | ERROR",
+  "detail": "optional summary string",
+  "questions": [
+    {
+      "question": "What is the target component?",
+      "recommendations": ["Auth module", "API gateway"]
+    }
+  ]
 }
 ```
-Agents do NOT move cards. The orchestrator owns all transitions.
+- `outcome` is required; `detail` and `questions` are optional
+- `questions` array is populated when outcome is `NEEDS_INFO`
+- Each question has optional `recommendations` (suggested answers)
+- Agents do NOT move cards. The orchestrator owns all transitions.
+- The C# `AgentOutcome` enum uses: `COMPLETE`, `NEEDS_INFO`, `ERROR`
+- The `AgentResult` record carries: `Outcome`, `Detail`, `Questions`
+- Backward compat: parser also accepts `SUCCESS` → `COMPLETE`, `QUESTIONS` → `NEEDS_INFO`
 
 ### Webhook Authentication
 Trello webhooks are validated using HMAC-SHA1 signature verification:
@@ -97,10 +102,19 @@ Fallback semantics (if PGMQ fails on Neon):
 - claim via transactional `FOR UPDATE SKIP LOCKED`
 - retry by returning failed jobs to pending with backoff
 
+### Git Worktree Isolation
+Agent execution uses git worktrees for isolated working directories:
+- `GitWorkspaceManager.CreateWorktreeAsync(repoPath, branchName)` → returns worktree path
+- Convention: `{repoPath}-worktrees/aiboard/{cardId}`
+- Edge cases handled: worktree already exists (reuse), branch already exists (attach without `-b`), stale directory (prune + recreate)
+- `.aiboard/` task files are gitignored and ephemeral — not committed to git
+- `CommitAsync` uses `git add .` (respects `.gitignore`) with `HasStagedChangesAsync` check before committing
+- Main repo working tree is never modified during agent execution
+
 ### Locking
-Before execution: write lock `(cardId, runId)` to Postgres.  
-If lock exists → skip.  
-After execution: release lock.  
+Before execution: write lock `(cardId, runId)` to Postgres.
+If lock exists → skip.
+After execution: release lock.
 Prevents duplicate agent runs from concurrent worker instances claiming different jobs for the same card.
 
 ### Human-in-the-Loop
@@ -146,10 +160,11 @@ The .NET worker can invoke the Claude CLI (`claude`) as a subprocess via `Claude
 - Prompts passed as CLI arguments must not contain literal newlines — escape them as `\\n`
 - Schema instruction in system prompt is redundant when `--json-schema` is used (the CLI handles structured output natively)
 
-**Output parsing (`ExtractStructuredOutput`):**
-- Primary path: parse `structured_output` object from JSON envelope
+**Output parsing (`ParseResult`):**
+- Primary path: parse `structured_output` object from JSON envelope → extract `outcome`, `detail`, `questions`
 - Fallback: parse `result` string field, stripping markdown fences if present
 - Last resort: treat raw stdout as content, strip markdown fences
+- Returns `AgentResult` record with typed `Outcome`, `Detail`, and `Questions` list
 
 **Timeout observability:**
 - Use event-based capture (`OutputDataReceived`/`ErrorDataReceived` + `StringBuilder`) instead of `ReadToEndAsync`

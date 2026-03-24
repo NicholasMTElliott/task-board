@@ -10,28 +10,35 @@ using NpgsqlTypes;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddSingleton<NpgsqlDataSource>(_ =>
+// Determine mode early so we can conditionally register services
+var mode = GetArgument(args, "--mode")?.ToLowerInvariant();
+var needsDatabase = mode is not "agent";
+
+if (needsDatabase)
 {
-    var configuredConnectionString = Environment.GetEnvironmentVariable("NEON_DATABASE_URL");
-    if (string.IsNullOrWhiteSpace(configuredConnectionString))
+    builder.Services.AddSingleton<NpgsqlDataSource>(_ =>
     {
-        throw new InvalidOperationException("NEON_DATABASE_URL is required.");
-    }
+        var configuredConnectionString = Environment.GetEnvironmentVariable("NEON_DATABASE_URL");
+        if (string.IsNullOrWhiteSpace(configuredConnectionString))
+        {
+            throw new InvalidOperationException("NEON_DATABASE_URL is required.");
+        }
 
-    var connectionString = NormalizeConnectionString(configuredConnectionString);
-    return NpgsqlDataSource.Create(connectionString);
-});
+        var connectionString = NormalizeConnectionString(configuredConnectionString);
+        return NpgsqlDataSource.Create(connectionString);
+    });
 
-builder.Services.AddSingleton<NpgmqClient>(serviceProvider =>
-{
-    var dataSource = serviceProvider.GetRequiredService<NpgsqlDataSource>();
-    return new NpgmqClient(dataSource);
-});
+    builder.Services.AddSingleton<NpgmqClient>(serviceProvider =>
+    {
+        var dataSource = serviceProvider.GetRequiredService<NpgsqlDataSource>();
+        return new NpgmqClient(dataSource);
+    });
 
-builder.Services.AddSingleton<IQueueRepository, QueueRepository>();
-builder.Services.AddSingleton<IProcessedEventsRepository, ProcessedEventsRepository>();
-builder.Services.AddSingleton<ICardStateRepository, CardStateRepository>();
-builder.Services.AddSingleton<IRunLogRepository, RunLogRepository>();
+    builder.Services.AddSingleton<IQueueRepository, QueueRepository>();
+    builder.Services.AddSingleton<IProcessedEventsRepository, ProcessedEventsRepository>();
+    builder.Services.AddSingleton<ICardStateRepository, CardStateRepository>();
+    builder.Services.AddSingleton<IRunLogRepository, RunLogRepository>();
+}
 
 builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
 {
@@ -62,19 +69,42 @@ builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
     return config;
 });
 
-var clientMode = Environment.GetEnvironmentVariable("CLIENT_MODE")?.ToLowerInvariant() ?? "stub";
-if (clientMode == "live")
+// Board provider selection — ITaskBoardClient for agent mode, ITrelloClient for legacy Orchestrator
+var boardProvider = Environment.GetEnvironmentVariable("BOARD_PROVIDER")?.ToLowerInvariant()
+    ?? Environment.GetEnvironmentVariable("CLIENT_MODE")?.ToLowerInvariant()
+    ?? "stub";
+
+switch (boardProvider)
 {
-    builder.Services.Configure<TrelloClientOptions>(builder.Configuration.GetSection(TrelloClientOptions.SectionName));
-    builder.Services.AddHttpClient<ITrelloClient, TrelloClient>(client =>
-    {
-        var baseUrl = builder.Configuration.GetSection("Trello")["BaseUrl"] ?? "https://api.trello.com";
-        client.BaseAddress = new Uri(baseUrl);
-    });
-}
-else
-{
-    builder.Services.AddSingleton<ITrelloClient, StubTrelloClient>();
+    case "trello":
+    case "live":
+        builder.Services.Configure<TrelloClientOptions>(builder.Configuration.GetSection(TrelloClientOptions.SectionName));
+        builder.Services.AddHttpClient<ITaskBoardClient, TrelloClient>(client =>
+        {
+            var baseUrl = builder.Configuration.GetSection("Trello")["BaseUrl"] ?? "https://api.trello.com";
+            client.BaseAddress = new Uri(baseUrl);
+        });
+        // Legacy Orchestrator path still uses ITrelloClient
+        builder.Services.AddHttpClient<ITrelloClient, TrelloClient>(client =>
+        {
+            var baseUrl = builder.Configuration.GetSection("Trello")["BaseUrl"] ?? "https://api.trello.com";
+            client.BaseAddress = new Uri(baseUrl);
+        });
+        break;
+    case "github":
+        builder.Services.Configure<GitHubProjectsOptions>(builder.Configuration.GetSection(GitHubProjectsOptions.SectionName));
+        builder.Services.AddSingleton<ITaskBoardClient, GitHubProjectsClient>();
+        // Legacy Orchestrator path gets stub when using GitHub
+#pragma warning disable CS0618 // ITrelloClient is obsolete
+        builder.Services.AddSingleton<ITrelloClient, StubTrelloClient>();
+#pragma warning restore CS0618
+        break;
+    default:
+        builder.Services.AddSingleton<ITaskBoardClient, StubTaskBoardClient>();
+#pragma warning disable CS0618
+        builder.Services.AddSingleton<ITrelloClient, StubTrelloClient>();
+#pragma warning restore CS0618
+        break;
 }
 
 var llmProvider = Environment.GetEnvironmentVariable("LLM_PROVIDER")?.ToLowerInvariant()
@@ -112,11 +142,13 @@ switch (llmProvider)
         break;
 }
 
-builder.Services.AddSingleton<Orchestrator>();
-
-builder.Services.Configure<QueueProcessingOptions>(builder.Configuration.GetSection(QueueProcessingOptions.SectionName));
-builder.Services.AddSingleton<EventProcessor>();
-builder.Services.AddSingleton<DrainHandler>();
+if (needsDatabase)
+{
+    builder.Services.AddSingleton<Orchestrator>();
+    builder.Services.Configure<QueueProcessingOptions>(builder.Configuration.GetSection(QueueProcessingOptions.SectionName));
+    builder.Services.AddSingleton<EventProcessor>();
+    builder.Services.AddSingleton<DrainHandler>();
+}
 
 // Agent mode services
 builder.Services.AddSingleton<TaskFileManager>();
@@ -136,8 +168,6 @@ else
 
 var app = builder.Build();
 
-var mode = GetArgument(args, "--mode")?.ToLowerInvariant();
-
 if (mode == "agent")
 {
     var cardId = GetArgument(args, "--card-id");
@@ -148,10 +178,11 @@ if (mode == "agent")
     }
 
     var boardId = GetArgument(args, "--board-id")
+        ?? Environment.GetEnvironmentVariable("BOARD_ID")
         ?? Environment.GetEnvironmentVariable("TRELLO_BOARD_ID");
     if (string.IsNullOrWhiteSpace(boardId))
     {
-        app.Logger.LogError("--board-id or TRELLO_BOARD_ID is required for agent mode");
+        app.Logger.LogError("--board-id or BOARD_ID is required for agent mode");
         return;
     }
 

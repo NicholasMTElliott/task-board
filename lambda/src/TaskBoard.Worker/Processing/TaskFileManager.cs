@@ -10,7 +10,7 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
 
     public async Task WriteAllTaskFilesAsync(
         string workspacePath,
-        IReadOnlyList<TrelloCard> cards,
+        IReadOnlyList<BoardCard> cards,
         WorkflowConfig workflowConfig,
         CancellationToken cancellationToken)
     {
@@ -19,7 +19,7 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
 
         foreach (var card in cards)
         {
-            var listName = workflowConfig.States.TryGetValue(card.IdList, out var state)
+            var listName = workflowConfig.States.TryGetValue(card.ColumnId, out var state)
                 ? state.Name
                 : "Unknown";
 
@@ -42,18 +42,37 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
     public static string GetTaskFilePath(string workspacePath, string cardId)
         => Path.Combine(workspacePath, TasksRelativePath, $"{cardId}.md");
 
-    internal static string BuildTaskFileContent(TrelloCard card, string listName)
+    internal static string BuildTaskFileContent(BoardCard card, string listName)
     {
         var sb = new StringBuilder();
         sb.AppendLine("---");
         sb.AppendLine($"id: {card.Id}");
-        sb.AppendLine($"title: {EscapeYamlValue(card.Name)}");
+        sb.AppendLine($"title: {EscapeYamlValue(card.Title)}");
         sb.AppendLine($"list: {listName}");
-        sb.AppendLine($"list_id: {card.IdList}");
+        sb.AppendLine($"list_id: {card.ColumnId}");
         sb.AppendLine("---");
         sb.AppendLine();
-        sb.Append(card.Desc);
+        sb.Append(card.Body);
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Extracts the body content from a task file, stripping the YAML front matter.
+    /// </summary>
+    public static string ExtractBodyFromTaskFile(string taskFileContent)
+    {
+        if (!taskFileContent.StartsWith("---"))
+            return taskFileContent;
+
+        // Find the closing "---" of the front matter (skip the opening "---")
+        var endOfFrontMatter = taskFileContent.IndexOf("---", 3, StringComparison.Ordinal);
+        if (endOfFrontMatter < 0)
+            return taskFileContent;
+
+        var afterFrontMatter = taskFileContent[(endOfFrontMatter + 3)..];
+
+        // Strip the leading newline(s) between front matter and body
+        return afterFrontMatter.TrimStart('\r', '\n');
     }
 
     internal static string EscapeYamlValue(string value)

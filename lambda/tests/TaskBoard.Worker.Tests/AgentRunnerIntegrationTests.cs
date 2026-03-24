@@ -28,7 +28,7 @@ namespace TaskBoard.Worker.Tests;
 public class AgentRunnerIntegrationTests : IDisposable
 {
     private readonly string _repoRoot;
-    private readonly ITrelloClient _trelloClient;
+    private readonly ITaskBoardClient _trelloClient;
     private readonly TaskFileManager _taskFileManager;
     private readonly GitWorkspaceManager _gitWorkspaceManager;
     private readonly WorkflowConfig _workflowConfig;
@@ -52,7 +52,7 @@ public class AgentRunnerIntegrationTests : IDisposable
 
         _output.WriteLine($"Workspace (repo root): {_repoRoot}");
 
-        _trelloClient = Substitute.For<ITrelloClient>();
+        _trelloClient = Substitute.For<ITaskBoardClient>();
         _taskFileManager = new TaskFileManager(NullLogger<TaskFileManager>.Instance);
         _gitWorkspaceManager = new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance);
         _workflowConfig = BuildDesignWorkflowConfig();
@@ -225,7 +225,7 @@ public class AgentRunnerIntegrationTests : IDisposable
     private void SetupBoardCards(string targetDescription, string targetTitle = "User Registration Endpoint")
     {
         _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
-            .Returns(new List<TrelloCard>
+            .Returns(new List<BoardCard>
             {
                 new(TargetCardId, targetTitle, targetDescription, DesignListId),
                 new("card-context-1", "Setup Database Migrations", "Configure Flyway for PostgreSQL schema management", DesignListId),

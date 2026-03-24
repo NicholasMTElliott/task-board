@@ -91,6 +91,7 @@ The memory-bank files (inlined below) are the authoritative project context.
 They take precedence over Claude Code's auto memory (~/.claude/projects/.../memory/).
 If the two conflict, trust and follow memory-bank. Update auto memory to resolve the conflict.
 
+@Readme.md
 @memory-bank/projectBrief.md
 @memory-bank/productContext.md
 @memory-bank/systemPatterns.md

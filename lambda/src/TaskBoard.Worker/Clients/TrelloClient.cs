@@ -6,7 +6,7 @@ namespace TaskBoard.Worker.Clients;
 public sealed class TrelloClient(
     HttpClient httpClient,
     IOptions<TrelloClientOptions> options,
-    ILogger<TrelloClient> logger) : ITrelloClient
+    ILogger<TrelloClient> logger) : ITrelloClient, ITaskBoardClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -92,6 +92,32 @@ public sealed class TrelloClient(
             _logger.LogInformation("Created new agent comment on card {CardId}", cardId);
         }
     }
+
+    // ITaskBoardClient explicit implementations — delegate to Trello-specific methods
+
+    async Task<BoardCard> ITaskBoardClient.GetCardAsync(string cardId, CancellationToken cancellationToken)
+    {
+        var card = await GetCardAsync(cardId, cancellationToken);
+        return ToBoardCard(card);
+    }
+
+    async Task<IReadOnlyList<BoardCard>> ITaskBoardClient.GetBoardCardsAsync(string boardId, CancellationToken cancellationToken)
+    {
+        var cards = await GetBoardCardsAsync(boardId, cancellationToken);
+        return cards.Select(ToBoardCard).ToList();
+    }
+
+    Task ITaskBoardClient.UpdateCardBodyAsync(string cardId, string body, CancellationToken cancellationToken)
+        => UpdateCardDescriptionAsync(cardId, body, cancellationToken);
+
+    Task ITaskBoardClient.MoveCardToColumnAsync(string cardId, string columnId, CancellationToken cancellationToken)
+        => MoveCardToListAsync(cardId, columnId, cancellationToken);
+
+    Task ITaskBoardClient.UpsertAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken)
+        => UpsertAgentCommentAsync(cardId, commentBody, cancellationToken);
+
+    private static BoardCard ToBoardCard(TrelloCard card)
+        => new(card.Id, card.Name, card.Desc, card.IdList);
 
     private string? FindAgentCommentId(string actionsJson)
     {

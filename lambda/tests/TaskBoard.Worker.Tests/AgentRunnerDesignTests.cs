@@ -16,7 +16,7 @@ public class AgentRunnerDesignTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly string _worktreeBase;
-    private readonly ITrelloClient _trelloClient;
+    private readonly ITaskBoardClient _trelloClient;
     private readonly TaskFileManager _taskFileManager;
     private readonly GitWorkspaceManager _gitWorkspaceManager;
     private readonly WorkflowConfig _workflowConfig;
@@ -44,7 +44,7 @@ public class AgentRunnerDesignTests : IDisposable
         Directory.CreateDirectory(_tempDir);
         InitGitRepo(_tempDir);
 
-        _trelloClient = Substitute.For<ITrelloClient>();
+        _trelloClient = Substitute.For<ITaskBoardClient>();
         _taskFileManager = new TaskFileManager(NullLogger<TaskFileManager>.Instance);
         _gitWorkspaceManager = new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance);
         _workflowConfig = BuildDesignWorkflowConfig();
@@ -149,13 +149,13 @@ public class AgentRunnerDesignTests : IDisposable
 
         var otherCards = new[]
         {
-            new TrelloCard("card-other-1", "Setup CI", "Configure pipelines", DesignListId),
-            new TrelloCard("card-other-2", "Add logging", "Structured logging", DesignListId),
-            new TrelloCard("card-other-3", "Write docs", "API documentation", DesignListId),
+            new BoardCard("card-other-1", "Setup CI", "Configure pipelines", DesignListId),
+            new BoardCard("card-other-2", "Add logging", "Structured logging", DesignListId),
+            new BoardCard("card-other-3", "Write docs", "API documentation", DesignListId),
         };
 
         _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
-            .Returns(new List<TrelloCard>(otherCards)
+            .Returns(new List<BoardCard>(otherCards)
             {
                 new(TargetCardId, "Build Auth Endpoint", WellSpecifiedDescription, DesignListId),
             });
@@ -170,7 +170,7 @@ public class AgentRunnerDesignTests : IDisposable
             Assert.DoesNotContain("## Technical Design", content);
             Assert.DoesNotContain("## Questions", content);
             Assert.DoesNotContain("## Error", content);
-            Assert.Contains(other.Desc, content);
+            Assert.Contains(other.Body, content);
         }
     }
 
@@ -204,7 +204,7 @@ public class AgentRunnerDesignTests : IDisposable
     private void SetupBoardCards(string targetDescription)
     {
         _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
-            .Returns(new List<TrelloCard>
+            .Returns(new List<BoardCard>
             {
                 new(TargetCardId, "Build Auth Endpoint", targetDescription, DesignListId),
                 new("card-other", "Setup CI/CD", "Configure GitHub Actions pipeline", DesignListId),

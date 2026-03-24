@@ -1,5 +1,6 @@
 namespace TaskBoard.Worker.Clients;
 
+[Obsolete("Use ITaskBoardClient for new code. ITrelloClient is kept for Orchestrator backward compatibility.")]
 public interface ITrelloClient
 {
     Task<TrelloCard> GetCardAsync(string cardId, CancellationToken cancellationToken);

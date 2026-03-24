@@ -26,7 +26,7 @@ public class TaskFileManagerTests : IDisposable
     [Fact]
     public async Task WriteAllTaskFilesAsync_CreatesOneFilePerCard()
     {
-        var cards = new List<TrelloCard>
+        var cards = new List<BoardCard>
         {
             new("card1", "First Card", "Description one", "list-design"),
             new("card2", "Second Card", "Description two", "list-review"),
@@ -42,7 +42,7 @@ public class TaskFileManagerTests : IDisposable
     [Fact]
     public async Task WriteAllTaskFilesAsync_FileContainsFrontmatterAndDescription()
     {
-        var cards = new List<TrelloCard>
+        var cards = new List<BoardCard>
         {
             new("card1", "Auth Middleware", "Build JWT auth layer", "list-design"),
         };
@@ -61,7 +61,7 @@ public class TaskFileManagerTests : IDisposable
     [Fact]
     public async Task WriteAllTaskFilesAsync_UnknownListId_ShowsUnknown()
     {
-        var cards = new List<TrelloCard>
+        var cards = new List<BoardCard>
         {
             new("card1", "Card", "Desc", "unknown-list-id"),
         };
@@ -76,7 +76,7 @@ public class TaskFileManagerTests : IDisposable
     [Fact]
     public async Task ReadTaskFileAsync_ReturnsWrittenContent()
     {
-        var cards = new List<TrelloCard>
+        var cards = new List<BoardCard>
         {
             new("card1", "Test Card", "Some content here", "list-design"),
         };
@@ -101,7 +101,7 @@ public class TaskFileManagerTests : IDisposable
     [Fact]
     public void BuildTaskFileContent_CorrectFormat()
     {
-        var card = new TrelloCard("abc123", "My Task", "Task description body", "list-id-1");
+        var card = new BoardCard("abc123", "My Task", "Task description body", "list-id-1");
 
         var content = TaskFileManager.BuildTaskFileContent(card, "Design");
 
@@ -122,7 +122,7 @@ public class TaskFileManagerTests : IDisposable
     [Fact]
     public void BuildTaskFileContent_EmptyDescription_StillValid()
     {
-        var card = new TrelloCard("abc", "Title", "", "list-1");
+        var card = new BoardCard("abc", "Title", "", "list-1");
 
         var content = TaskFileManager.BuildTaskFileContent(card, "Backlog");
 
