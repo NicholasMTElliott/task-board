@@ -100,13 +100,13 @@
   },
   "roles": {
     "senior_engineer": {
-      "model": "claude-sonnet-4-6",
+      "model": "claude-opus-4-6",
       "systemPromptFile": "prompts/senior_engineer.md",
       "systemPrompt": "",
       "sections": ["Technical Design", "Decisions", "Implementation"]
     },
     "qa": {
-      "model": "claude-sonnet-4-6",
+      "model": "claude-opus-4-6",
       "systemPromptFile": "prompts/qa.md",
       "systemPrompt": "",
       "sections": ["Test Plan", "Test Results"]
