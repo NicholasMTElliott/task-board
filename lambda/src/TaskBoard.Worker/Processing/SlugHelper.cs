@@ -10,7 +10,7 @@ internal static partial class SlugHelper
     /// truncated at word boundary to maxLength.
     /// Returns empty string for null/empty/all-special-chars input.
     /// </summary>
-    public static string Sanitize(string? title, int maxLength = 60)
+    public static string Sanitize(string? title, int maxLength = 30)
     {
         if (string.IsNullOrWhiteSpace(title))
             return string.Empty;
