@@ -91,7 +91,8 @@ public sealed partial class AgentRunner(
                 WorkspacePath: worktreePath,
                 TaskPrompt: resolvedPrompt,
                 SystemPromptFilePath: systemPromptFilePath,
-                Model: role.Model);
+                Model: role.Model,
+                ProviderParams: state.ProviderParams);
 
             var agentResult = await agentExecutor.ExecuteAsync(context, cancellationToken);
 
@@ -331,6 +332,14 @@ public sealed partial class AgentRunner(
 
         if (!string.IsNullOrEmpty(gitNote))
             comment += $"\n\n---\n{gitNote}";
+
+        if (!string.IsNullOrEmpty(result.ConversationLog))
+        {
+            var log = result.ConversationLog.Length > 50_000
+                ? result.ConversationLog[..50_000] + "\n...[truncated]"
+                : result.ConversationLog;
+            comment += $"\n\n<details>\n<summary>Agent conversation log</summary>\n\n{log}\n\n</details>";
+        }
 
         return comment;
     }

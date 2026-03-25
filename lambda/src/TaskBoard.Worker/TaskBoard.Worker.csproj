@@ -6,11 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Npgmq" Version="1.11.0" />
-  </ItemGroup>
-
-  <ItemGroup>
+<ItemGroup>
     <InternalsVisibleTo Include="TaskBoard.Worker.Tests" />
   </ItemGroup>
 

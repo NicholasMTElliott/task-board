@@ -6,7 +6,7 @@ namespace TaskBoard.Worker.Clients;
 public sealed class TrelloClient(
     HttpClient httpClient,
     IOptions<TrelloClientOptions> options,
-    ILogger<TrelloClient> logger) : ITrelloClient, ITaskBoardClient
+    ILogger<TrelloClient> logger) : ITaskBoardClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -17,46 +17,50 @@ public sealed class TrelloClient(
     private readonly TrelloClientOptions _options = options.Value;
     private readonly ILogger<TrelloClient> _logger = logger;
 
-    public async Task<TrelloCard> GetCardAsync(string cardId, CancellationToken cancellationToken)
+    private sealed record TrelloCard(string Id, string Name, string Desc, string IdList);
+
+    public async Task<BoardCard> GetCardAsync(string cardId, CancellationToken cancellationToken)
     {
         var url = AppendAuth($"/1/cards/{cardId}?fields=id,name,desc,idList");
         using var response = await _httpClient.GetAsync(url, cancellationToken);
         await EnsureSuccessOrThrow(response, "GetCard", cardId);
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        return JsonSerializer.Deserialize<TrelloCard>(json, JsonOptions)
+        var card = JsonSerializer.Deserialize<TrelloCard>(json, JsonOptions)
                ?? throw new TrelloApiException("GetCard", cardId, response.StatusCode, "Null deserialization result");
+        return ToBoardCard(card);
     }
 
-    public async Task<IReadOnlyList<TrelloCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken)
     {
         var url = AppendAuth($"/1/boards/{boardId}/cards?fields=id,name,desc,idList");
         using var response = await _httpClient.GetAsync(url, cancellationToken);
         await EnsureSuccessOrThrow(response, "GetBoardCards", boardId);
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        return JsonSerializer.Deserialize<List<TrelloCard>>(json, JsonOptions)
+        var cards = JsonSerializer.Deserialize<List<TrelloCard>>(json, JsonOptions)
                ?? throw new TrelloApiException("GetBoardCards", boardId, response.StatusCode, "Null deserialization result");
+        return cards.Select(ToBoardCard).ToList();
     }
 
-    public async Task UpdateCardDescriptionAsync(string cardId, string description, CancellationToken cancellationToken)
+    public async Task UpdateCardBodyAsync(string cardId, string body, CancellationToken cancellationToken)
     {
         var url = AppendAuth($"/1/cards/{cardId}");
-        using var content = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("desc", description) });
+        using var content = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("desc", body) });
         using var response = await _httpClient.PutAsync(url, content, cancellationToken);
         await EnsureSuccessOrThrow(response, "UpdateCardDescription", cardId);
 
-        _logger.LogInformation("Updated description for card {CardId} ({Length} chars)", cardId, description.Length);
+        _logger.LogInformation("Updated description for card {CardId} ({Length} chars)", cardId, body.Length);
     }
 
-    public async Task MoveCardToListAsync(string cardId, string listId, CancellationToken cancellationToken)
+    public async Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken cancellationToken)
     {
         var url = AppendAuth($"/1/cards/{cardId}/idList");
-        using var content = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("value", listId) });
+        using var content = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("value", columnId) });
         using var response = await _httpClient.PutAsync(url, content, cancellationToken);
         await EnsureSuccessOrThrow(response, "MoveCardToList", cardId);
 
-        _logger.LogInformation("Moved card {CardId} to list {ListId}", cardId, listId);
+        _logger.LogInformation("Moved card {CardId} to list {ListId}", cardId, columnId);
     }
 
     public async Task UpsertAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken)
@@ -92,29 +96,6 @@ public sealed class TrelloClient(
             _logger.LogInformation("Created new agent comment on card {CardId}", cardId);
         }
     }
-
-    // ITaskBoardClient explicit implementations — delegate to Trello-specific methods
-
-    async Task<BoardCard> ITaskBoardClient.GetCardAsync(string cardId, CancellationToken cancellationToken)
-    {
-        var card = await GetCardAsync(cardId, cancellationToken);
-        return ToBoardCard(card);
-    }
-
-    async Task<IReadOnlyList<BoardCard>> ITaskBoardClient.GetBoardCardsAsync(string boardId, CancellationToken cancellationToken)
-    {
-        var cards = await GetBoardCardsAsync(boardId, cancellationToken);
-        return cards.Select(ToBoardCard).ToList();
-    }
-
-    Task ITaskBoardClient.UpdateCardBodyAsync(string cardId, string body, CancellationToken cancellationToken)
-        => UpdateCardDescriptionAsync(cardId, body, cancellationToken);
-
-    Task ITaskBoardClient.MoveCardToColumnAsync(string cardId, string columnId, CancellationToken cancellationToken)
-        => MoveCardToListAsync(cardId, columnId, cancellationToken);
-
-    Task ITaskBoardClient.UpsertAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken)
-        => UpsertAgentCommentAsync(cardId, commentBody, cancellationToken);
 
     private static BoardCard ToBoardCard(TrelloCard card)
         => new(card.Id, card.Name, card.Desc, card.IdList);

@@ -12,11 +12,26 @@ public class ClaudeAgentExecutorTests
             Microsoft.Extensions.Logging.Abstractions.NullLogger<ClaudeAgentExecutor>.Instance);
     }
 
+    private static AgentExecutionContext CreateContext(
+        string model = "claude-sonnet-4-6",
+        string systemPromptFilePath = "/tmp/system.md",
+        IReadOnlyDictionary<string, string>? providerParams = null)
+    {
+        return new AgentExecutionContext(
+            TargetCardId: "card-1",
+            TargetCardTitle: "Test Card",
+            WorkspacePath: "/tmp/workspace",
+            TaskPrompt: "test prompt",
+            SystemPromptFilePath: systemPromptFilePath,
+            Model: model,
+            ProviderParams: providerParams);
+    }
+
     [Fact]
     public void BuildArgumentList_UsesSystemPromptFileFlag()
     {
         var executor = CreateExecutor();
-        var args = executor.BuildArgumentList("claude-sonnet-4-6", "/tmp/system.md");
+        var args = executor.BuildArgumentList(CreateContext(), "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
 
         Assert.Contains("--append-system-prompt-file", args);
         Assert.Contains("/tmp/system.md", args);
@@ -26,7 +41,7 @@ public class ClaudeAgentExecutorTests
     public void BuildArgumentList_DoesNotContainInlineSystemPromptFlag()
     {
         var executor = CreateExecutor();
-        var args = executor.BuildArgumentList("claude-sonnet-4-6", "/tmp/system.md");
+        var args = executor.BuildArgumentList(CreateContext(), "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
 
         // The inline --append-system-prompt flag (without -file suffix) must not be present
         Assert.DoesNotContain("--append-system-prompt",
@@ -34,28 +49,61 @@ public class ClaudeAgentExecutorTests
     }
 
     [Fact]
-    public void BuildArgumentList_DoesNotContainPromptFlag()
+    public void BuildArgumentList_ContainsPromptFlag()
     {
         var executor = CreateExecutor();
-        var args = executor.BuildArgumentList("claude-sonnet-4-6", "/tmp/system.md");
+        var args = executor.BuildArgumentList(CreateContext(), "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
 
-        // Task prompt is piped via stdin; -p flag must not be present
-        Assert.DoesNotContain("-p", args);
+        Assert.Contains("-p", args);
+    }
+
+    [Fact]
+    public void BuildArgumentList_PromptIsLastArg()
+    {
+        var executor = CreateExecutor();
+        var args = executor.BuildArgumentList(CreateContext(), "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
+
+        // -p and prompt must be the last two args (flags before content to avoid Windows cmd.exe issues)
+        Assert.Equal("-p", args[^2]);
     }
 
     [Fact]
     public void BuildArgumentList_ContainsRequiredFlags()
     {
         var executor = CreateExecutor();
-        var args = executor.BuildArgumentList("my-model", "/path/to/prompt.md");
+        var args = executor.BuildArgumentList(CreateContext(model: "my-model"), "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
 
         Assert.Contains("--model", args);
         Assert.Contains("my-model", args);
         Assert.Contains("--output-format", args);
-        Assert.Contains("json", args);
+        Assert.Contains("stream-json", args);
         Assert.Contains("--json-schema", args);
         Assert.Contains("--permission-mode", args);
         Assert.Contains("bypassPermissions", args);
+        Assert.Contains("--no-session-persistence", args);
+        Assert.DoesNotContain("--bare", args);
+        Assert.DoesNotContain("--session-id", args);
+    }
+
+    [Fact]
+    public void BuildArgumentList_WithEffortParam_IncludesEffortFlag()
+    {
+        var executor = CreateExecutor();
+        var context = CreateContext(providerParams: new Dictionary<string, string> { ["effort"] = "max" });
+        var args = executor.BuildArgumentList(context, "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
+
+        var effortIndex = Array.IndexOf(args, "--effort");
+        Assert.True(effortIndex >= 0, "Expected --effort flag");
+        Assert.Equal("max", args[effortIndex + 1]);
+    }
+
+    [Fact]
+    public void BuildArgumentList_WithoutProviderParams_NoEffortFlag()
+    {
+        var executor = CreateExecutor();
+        var args = executor.BuildArgumentList(CreateContext(), "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
+
+        Assert.DoesNotContain("--effort", args);
     }
 
     [Fact]
@@ -235,5 +283,89 @@ public class ClaudeAgentExecutorTests
         var result = ClaudeAgentExecutor.ParseResult(stdout);
 
         Assert.Equal(AgentOutcome.ERROR, result.Outcome);
+    }
+
+    [Fact]
+    public void ParseStreamOutput_ExtractsResultAndConversation()
+    {
+        var stdout = string.Join("\n",
+            """{"type":"system","content":"You are..."}""",
+            """{"type":"assistant","message":{"content":[{"type":"text","text":"I will analyze the codebase."}]}}""",
+            """{"type":"assistant","message":{"content":[{"type":"text","text":"Based on my analysis, the design looks good."}]}}""",
+            """{"type":"result","result":"done","structured_output":{"outcome":"COMPLETE","detail":"All good"}}"""
+        );
+
+        var (resultJson, conversationLog) = CreateExecutor().ParseStreamOutput(stdout);
+
+        Assert.NotNull(resultJson);
+        Assert.Contains("structured_output", resultJson);
+        Assert.Contains("I will analyze the codebase.", conversationLog);
+        Assert.Contains("Based on my analysis", conversationLog);
+    }
+
+    [Fact]
+    public void ParseStreamOutput_NoAssistantMessages_EmptyLog()
+    {
+        var stdout = """{"type":"result","result":"done","structured_output":{"outcome":"COMPLETE"}}""";
+
+        var (resultJson, conversationLog) = CreateExecutor().ParseStreamOutput(stdout);
+
+        Assert.NotNull(resultJson);
+        Assert.Empty(conversationLog);
+    }
+
+    [Fact]
+    public void ParseStreamOutput_MalformedLines_SkippedGracefully()
+    {
+        var stdout = string.Join("\n",
+            "not json at all",
+            """{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}]}}""",
+            "{broken json",
+            """{"type":"result","structured_output":{"outcome":"NEEDS_INFO"}}"""
+        );
+
+        var (resultJson, conversationLog) = CreateExecutor().ParseStreamOutput(stdout);
+
+        Assert.NotNull(resultJson);
+        Assert.Contains("Hello", conversationLog);
+    }
+
+    [Fact]
+    public void ParseStreamOutput_NoResultLine_ReturnsNull()
+    {
+        var stdout = """{"type":"assistant","message":{"content":[{"type":"text","text":"Working..."}]}}""";
+
+        var (resultJson, conversationLog) = CreateExecutor().ParseStreamOutput(stdout);
+
+        Assert.Null(resultJson);
+        Assert.Contains("Working...", conversationLog);
+    }
+
+    [Fact]
+    public void ParseStreamOutput_MultipleResults_PrefersOneWithStructuredOutput()
+    {
+        var stdout = string.Join("\n",
+            """{"type":"result","subtype":"success","structured_output":{"outcome":"COMPLETE","detail":"All good"}}""",
+            """{"type":"result","subtype":"success","result":"Follow-up text with no structured output"}"""
+        );
+
+        var (resultJson, _) = CreateExecutor().ParseStreamOutput(stdout);
+
+        Assert.NotNull(resultJson);
+        Assert.Contains("structured_output", resultJson);
+        Assert.Contains("COMPLETE", resultJson);
+    }
+
+    [Fact]
+    public void ParseStreamOutput_SingleResultWithStructuredOutput_ReturnsIt()
+    {
+        var stdout = """{"type":"result","structured_output":{"outcome":"NEEDS_INFO","detail":"Need more info"}}""";
+
+        var (resultJson, _) = CreateExecutor().ParseStreamOutput(stdout);
+
+        Assert.NotNull(resultJson);
+        var parsed = ClaudeAgentExecutor.ParseResult(resultJson);
+        Assert.Equal(AgentOutcome.NEEDS_INFO, parsed.Outcome);
+        Assert.Equal("Need more info", parsed.Detail);
     }
 }

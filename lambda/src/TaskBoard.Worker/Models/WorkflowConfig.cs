@@ -11,7 +11,8 @@ public sealed record WorkflowState(
     string? TaskPrompt,
     Dictionary<string, string> Transitions,
     string? GitBehavior = null,
-    string? TaskPromptFile = null);
+    string? TaskPromptFile = null,
+    Dictionary<string, string>? ProviderParams = null);
 
 public sealed record WorkflowRole(
     string Model,

@@ -51,15 +51,14 @@ public sealed class ClaudeAgentExecutor(
         var taskFilePath = Processing.TaskFileManager.GetTaskFilePath(
             context.WorkspacePath, context.TargetCardId, context.TargetCardTitle);
 
-        var userPrompt = BuildUserPrompt(context, taskFilePath);
-        var args = BuildArgumentList(context.Model, context.SystemPromptFilePath);
+        var args = BuildArgumentList(context, taskFilePath);
 
         logger.LogDebug("Claude CLI command: {FileName} {Args}",
             OperatingSystem.IsWindows() ? "claude.cmd" : _options.ExecutablePath,
             FormatArgsForLogging(args));
 
         var (exitCode, stdout, stderr) = await RunProcessAsync(
-            _options.ExecutablePath, args, userPrompt, context.WorkspacePath,
+            _options.ExecutablePath, args, context.WorkspacePath,
             _options.TimeoutSeconds, cancellationToken);
 
         if (exitCode != 0)
@@ -85,12 +84,25 @@ public sealed class ClaudeAgentExecutor(
                 $"Claude CLI returned empty output. Stderr: {stderr[..Math.Min(500, stderr.Length)].Trim()}");
         }
 
-        logger.LogDebug("Claude agent raw stdout ({Length} chars): {Stdout}",
-            stdout.Length, stdout[..Math.Min(2000, stdout.Length)]);
+        logger.LogDebug("Claude agent raw stdout ({Length} chars):\n{Stdout}",
+            stdout.Length, stdout[..Math.Min(10000, stdout.Length)]);
 
-        var result = ParseResult(stdout);
-        logger.LogInformation("Claude agent complete, outcome={Outcome}", result.Outcome);
-        return result;
+        var (resultJson, conversationLog) = ParseStreamOutput(stdout);
+
+        if (!string.IsNullOrEmpty(conversationLog))
+        {
+            logger.LogInformation("Claude agent conversation ({Length} chars):\n{Log}",
+                conversationLog.Length, conversationLog[..Math.Min(5000, conversationLog.Length)]);
+        }
+
+        var result = resultJson is not null
+            ? ParseResult(resultJson)
+            : ParseResult(stdout); // fallback: treat entire stdout as single JSON (backward compat)
+
+        var resultWithLog = result with { ConversationLog = conversationLog };
+        logger.LogInformation("Claude agent complete, outcome={Outcome}, detail={Detail}, questions={QuestionCount}",
+            resultWithLog.Outcome, resultWithLog.Detail ?? "(none)", resultWithLog.Questions?.Count ?? 0);
+        return resultWithLog;
     }
 
     private static string BuildUserPrompt(AgentExecutionContext context, string taskFilePath)
@@ -104,26 +116,46 @@ public sealed class ClaudeAgentExecutor(
         sb.AppendLine();
         sb.AppendLine($"- The target task file is at: {taskFilePath}");
         sb.AppendLine("- All project tasks are in the .aiboard/tasks/ directory for context.");
-        sb.AppendLine("- Modify ONLY the target task file. Do not modify any other file.");
         sb.AppendLine("- If you can complete the work fully and accurately, respond with outcome COMPLETE.");
         sb.AppendLine("- If you have important questions that must be answered first, respond with outcome NEEDS_INFO and include your questions in the questions array, each with an optional list of recommendations.");
         sb.AppendLine("- If something goes wrong, respond with outcome ERROR and describe the issue in the detail field.");
+        sb.AppendLine("- Always include a summary in the detail field of your structured response, regardless of outcome. For COMPLETE, summarize what was accomplished or validated. For NEEDS_INFO, summarize what passed and what needs attention. This summary is posted as a comment on the ticket.");
+        sb.AppendLine("- Format the detail field as GitHub-flavored markdown. Use headings, tables, bullet points, and code blocks as appropriate. This content is rendered directly on a GitHub issue.");
         return sb.ToString();
     }
 
-    internal string[] BuildArgumentList(string model, string systemPromptFilePath)
+    internal string[] BuildArgumentList(AgentExecutionContext context, string taskFilePath)
     {
-        return
-        [
-            "--model", model,
-            "--output-format", "json",
+        // IMPORTANT: Flag-style args MUST come before content args (-p).
+        // On Windows, claude.cmd runs through cmd.exe which misparses double quotes —
+        // if a content arg with quotes appears early, all subsequent flags are corrupted.
+        var args = new List<string>
+        {
+            "--model", context.Model,
+            "--verbose",
+            "--output-format", "stream-json",
             "--max-budget-usd", _options.MaxBudgetUsd.ToString("F2"),
             "--permission-mode", "bypassPermissions",
             "--allowedTools", "*",
+            "--no-session-persistence",
             "--json-schema", MinifyJson(OutcomeSchema),
-            "--append-system-prompt-file", systemPromptFilePath,
-            // Task prompt is written to stdin — no -p flag
-        ];
+            "--append-system-prompt-file", context.SystemPromptFilePath,
+        };
+
+        // Provider-specific parameters from workflow config
+        if (context.ProviderParams is not null)
+        {
+            if (context.ProviderParams.TryGetValue("effort", out var effort))
+            {
+                args.AddRange(["--effort", effort]);
+            }
+        }
+
+        // Content args last (Windows cmd.exe quote mangling workaround)
+        var userPrompt = BuildUserPrompt(context, taskFilePath);
+        args.AddRange(["-p", userPrompt]);
+
+        return args.ToArray();
     }
 
     internal static AgentResult ParseResult(string stdout)
@@ -157,6 +189,127 @@ public sealed class ClaudeAgentExecutor(
         }
 
         return new AgentResult(TryParseOutcomeFromText(stdout));
+    }
+
+    internal (string? ResultJson, string ConversationLog) ParseStreamOutput(string stdout)
+    {
+        const int MaxConversationLogChars = 50_000;
+        string? resultWithStructuredOutput = null;
+        int resultWithStructuredOutputLine = 0;
+        string? lastResultJson = null;
+        int resultMessageCount = 0;
+        int structuredOutputCount = 0;
+        var conversationLog = new StringBuilder();
+        var lineNumber = 0;
+
+        foreach (var line in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            lineNumber++;
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0) continue;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed);
+                var root = doc.RootElement;
+
+                if (!root.TryGetProperty("type", out var typeEl))
+                    continue;
+
+                var type = typeEl.GetString();
+
+                logger.LogDebug("NDJSON line {LineNumber}: type={Type}, raw={Raw}",
+                    lineNumber, type, trimmed[..Math.Min(500, trimmed.Length)]);
+
+                // Check for structured_output in every message
+                var hasStructuredOutput = root.TryGetProperty("structured_output", out var so)
+                    && so.ValueKind == JsonValueKind.Object
+                    && so.TryGetProperty("outcome", out _);
+
+                if (hasStructuredOutput && type != "result")
+                {
+                    logger.LogWarning(
+                        "Found structured_output in unexpected message type={Type} at line {LineNumber}: {Raw}",
+                        type, lineNumber, trimmed[..Math.Min(1000, trimmed.Length)]);
+                }
+
+                if (type == "result")
+                {
+                    resultMessageCount++;
+                    lastResultJson = trimmed;
+                    logger.LogInformation("NDJSON result message #{Count} at line {LineNumber}: {Raw}",
+                        resultMessageCount, lineNumber, trimmed[..Math.Min(2000, trimmed.Length)]);
+
+                    if (hasStructuredOutput)
+                    {
+                        structuredOutputCount++;
+                        if (structuredOutputCount > 1)
+                        {
+                            logger.LogWarning(
+                                "Multiple result messages with structured_output! " +
+                                "Previous at line {PrevLine}, current at line {CurrLine}. Using first.",
+                                resultWithStructuredOutputLine, lineNumber);
+                        }
+                        else
+                        {
+                            resultWithStructuredOutput = trimmed;
+                            resultWithStructuredOutputLine = lineNumber;
+                        }
+                    }
+                }
+                else if (type == "assistant")
+                {
+                    // Assistant messages contain the model's text output
+                    if (root.TryGetProperty("message", out var message)
+                        && message.TryGetProperty("content", out var content)
+                        && content.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var block in content.EnumerateArray())
+                        {
+                            if (block.TryGetProperty("type", out var blockType)
+                                && blockType.GetString() == "text"
+                                && block.TryGetProperty("text", out var text))
+                            {
+                                var textValue = text.GetString();
+                                if (!string.IsNullOrEmpty(textValue) && conversationLog.Length < MaxConversationLogChars)
+                                {
+                                    if (conversationLog.Length > 0)
+                                        conversationLog.AppendLine("\n---\n");
+                                    conversationLog.Append(textValue);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                logger.LogDebug("NDJSON line {LineNumber}: malformed JSON, skipping", lineNumber);
+            }
+        }
+
+        // Prefer result message with structured_output; fall back to last result
+        var resultJson = resultWithStructuredOutput ?? lastResultJson;
+
+        if (resultWithStructuredOutput is not null && lastResultJson is not null
+            && resultWithStructuredOutput != lastResultJson)
+        {
+            logger.LogWarning(
+                "Used result from line {Line} (has structured_output), not the final result message. " +
+                "Total result messages: {Count}",
+                resultWithStructuredOutputLine, resultMessageCount);
+        }
+
+        logger.LogInformation(
+            "NDJSON parsing complete: {TotalLines} lines, resultMessages={ResultCount}, " +
+            "structuredOutputMessages={StructuredCount}, conversationLogChars={LogChars}",
+            lineNumber, resultMessageCount, structuredOutputCount, conversationLog.Length);
+
+        var log = conversationLog.Length > MaxConversationLogChars
+            ? conversationLog.ToString()[..MaxConversationLogChars] + "\n...[truncated]"
+            : conversationLog.ToString();
+
+        return (resultJson, log);
     }
 
     private static List<AgentQuestion>? ParseQuestions(JsonElement structured)
@@ -252,28 +405,27 @@ public sealed class ClaudeAgentExecutor(
         {
             if (i > 0) sb.Append(' ');
             var arg = args[i];
-            if (arg.Length > 200)
-                arg = arg[..200] + "...[truncated]";
+            if (arg.Length > 2000)
+                arg = arg[..2000] + "...[truncated]";
             sb.Append(arg.Contains(' ') ? $"\"{arg}\"" : arg);
         }
         return sb.ToString();
     }
 
-    private static string MinifyJson(string json)
+private static string MinifyJson(string json)
     {
         using var doc = JsonDocument.Parse(json);
         return JsonSerializer.Serialize(doc.RootElement);
     }
 
     private static async Task<(int ExitCode, string Stdout, string Stderr)> RunProcessAsync(
-        string executable, string[] argumentList, string taskPrompt, string workingDirectory,
+        string executable, string[] argumentList, string workingDirectory,
         int timeoutSeconds, CancellationToken cancellationToken)
     {
         using var process = new Process();
         var startInfo = new ProcessStartInfo
         {
             WorkingDirectory = workingDirectory,
-            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -307,15 +459,6 @@ public sealed class ClaudeAgentExecutor(
         process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
-
-        // Write task prompt to stdin and signal EOF.
-        // Wrapped in try/catch because the process may exit before we finish writing (e.g., budget exceeded).
-        try
-        {
-            await process.StandardInput.WriteAsync(taskPrompt);
-            process.StandardInput.Close();
-        }
-        catch (IOException) { /* process exited before stdin was fully read — not an error */ }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));

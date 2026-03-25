@@ -11,12 +11,14 @@ public sealed record AgentExecutionContext(
     string WorkspacePath,
     string TaskPrompt,
     string SystemPromptFilePath,
-    string Model);
+    string Model,
+    IReadOnlyDictionary<string, string>? ProviderParams = null);
 
 public sealed record AgentResult(
     AgentOutcome Outcome,
     string? Detail = null,
-    IReadOnlyList<AgentQuestion>? Questions = null);
+    IReadOnlyList<AgentQuestion>? Questions = null,
+    string? ConversationLog = null);
 
 public sealed record AgentQuestion(
     string Question,

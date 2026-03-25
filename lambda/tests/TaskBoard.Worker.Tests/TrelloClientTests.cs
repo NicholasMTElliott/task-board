@@ -15,7 +15,7 @@ public class TrelloClientTests
         AgentCommentMarker = "<!-- agent-status -->"
     };
 
-    private static (TrelloClient Client, MockHttpMessageHandler Handler) CreateSut(TrelloClientOptions? options = null)
+    private static (ITaskBoardClient Client, MockHttpMessageHandler Handler) CreateSut(TrelloClientOptions? options = null)
     {
         var opts = options ?? DefaultOptions;
         var handler = new MockHttpMessageHandler();
@@ -34,9 +34,9 @@ public class TrelloClientTests
         var card = await sut.GetCardAsync("c1", CancellationToken.None);
 
         Assert.Equal("c1", card.Id);
-        Assert.Equal("My Card", card.Name);
-        Assert.Equal("Card description", card.Desc);
-        Assert.Equal("list1", card.IdList);
+        Assert.Equal("My Card", card.Title);
+        Assert.Equal("Card description", card.Body);
+        Assert.Equal("list1", card.ColumnId);
 
         var request = Assert.Single(handler.SentRequests);
         Assert.Equal(HttpMethod.Get, request.Method);
@@ -57,8 +57,10 @@ public class TrelloClientTests
 
         Assert.Equal(2, cards.Count);
         Assert.Equal("c1", cards[0].Id);
-        Assert.Equal("Card One", cards[0].Name);
+        Assert.Equal("Card One", cards[0].Title);
         Assert.Equal("c2", cards[1].Id);
+        Assert.Equal("Desc 1", cards[0].Body);
+        Assert.Equal("list1", cards[0].ColumnId);
 
         var request = Assert.Single(handler.SentRequests);
         Assert.Equal(HttpMethod.Get, request.Method);
@@ -88,7 +90,7 @@ public class TrelloClientTests
         var (sut, handler) = CreateSut();
         handler.EnqueueResponse(HttpStatusCode.OK, "{}");
 
-        await sut.UpdateCardDescriptionAsync("c1", "new description", CancellationToken.None);
+        await sut.UpdateCardBodyAsync("c1", "new description", CancellationToken.None);
 
         var request = Assert.Single(handler.SentRequests);
         Assert.Equal(HttpMethod.Put, request.Method);
@@ -107,7 +109,7 @@ public class TrelloClientTests
         var (sut, handler) = CreateSut();
         handler.EnqueueResponse(HttpStatusCode.OK, "{}");
 
-        await sut.MoveCardToListAsync("c1", "list-2", CancellationToken.None);
+        await sut.MoveCardToColumnAsync("c1", "list-2", CancellationToken.None);
 
         var request = Assert.Single(handler.SentRequests);
         Assert.Equal(HttpMethod.Put, request.Method);
@@ -202,8 +204,8 @@ public class TrelloClientTests
         handler.EnqueueResponse(HttpStatusCode.OK, "{}");
 
         await sut.GetCardAsync("c1", CancellationToken.None);
-        await sut.UpdateCardDescriptionAsync("c1", "desc", CancellationToken.None);
-        await sut.MoveCardToListAsync("c1", "l2", CancellationToken.None);
+        await sut.UpdateCardBodyAsync("c1", "desc", CancellationToken.None);
+        await sut.MoveCardToColumnAsync("c1", "l2", CancellationToken.None);
 
         Assert.Equal(3, handler.SentRequests.Count);
         foreach (var request in handler.SentRequests)

@@ -13,7 +13,9 @@
       "gateType": "agent_run",
       "gitBehavior": "discard",
       "taskPromptFile": "prompts/states/ready_for_design.md",
-      "taskPrompt": null,
+      "providerParams": {
+        "effort": "max"
+      },
       "transitions": {
         "IN_PROGRESS": "Designing",
         "COMPLETE": "Designed",
@@ -47,8 +49,10 @@
       "role": "senior_engineer",
       "gateType": "agent_run",
       "gitBehavior": "commit_and_push",
-      "taskPrompt": "You are working on the task {TaskName} ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context. Using the approved technical design in the task file, implement the changes. Write production-quality code, follow existing patterns in the codebase, and ensure all changes are consistent with the design. Do not modify any task files other than the one for this task. Do not interact with git directly -- the orchestrator handles all git operations. When you are finished, write a concise commit message summarizing your changes to the file .aiboard/commit.md. This message will be used as the git commit message. You may respond with questions where there is ambiguity, conflict, or mistakes; you should only proceed when you are fully confident you understand the request and the subject material fully. It is always appropriate to say 'I do not understand', 'I need help', or 'This does not seem correct'.",
       "taskPromptFile": "prompts/states/ready_for_implementation.md",
+      "providerParams": {
+        "effort": "medium"
+      },
       "transitions": {
         "IN_PROGRESS": "Implementing",
         "COMPLETE": "Ready for Test",
@@ -76,12 +80,22 @@
       "gateType": "agent_run",
       "gitBehavior": "discard",
       "taskPromptFile": "prompts/states/ready_for_test.md",
-      "taskPrompt": null,
+      "providerParams": {
+        "effort": "medium"
+      },
       "transitions": {
+        "IN_PROGRESS": "Testing",
         "COMPLETE": "Tested",
         "NEEDS_INFO": "Design Questions",
         "ERROR": "Error"
       }
+    },
+    "Testing": {
+      "name": "Testing",
+      "role": null,
+      "gateType": "in_progress",
+      "taskPrompt": null,
+      "transitions": {}
     },
     "Tested": {
       "name": "Tested",
@@ -102,13 +116,11 @@
     "senior_engineer": {
       "model": "claude-opus-4-6",
       "systemPromptFile": "prompts/senior_engineer.md",
-      "systemPrompt": "",
       "sections": ["Technical Design", "Decisions", "Implementation"]
     },
     "qa": {
       "model": "claude-opus-4-6",
       "systemPromptFile": "prompts/qa.md",
-      "systemPrompt": "",
       "sections": ["Test Plan", "Test Results"]
     }
   }
