@@ -85,6 +85,7 @@ builder.Services.AddSingleton(sp =>
     new GitWorkspaceManager(sp.GetRequiredService<ILogger<GitWorkspaceManager>>(), worktreeBasePath));
 
 builder.Services.AddSingleton<AgentRunner>();
+builder.Services.AddSingleton<PollingRunner>();
 
 var app = builder.Build();
 
@@ -124,6 +125,58 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
 
     app.Logger.LogInformation("Agent run complete: outcome={Outcome}, error={ErrorDetail}",
         result.Outcome, result.ErrorDetail ?? "(none)");
+    return;
+}
+
+if (GetArgument(args, "--mode")?.ToLowerInvariant() == "polling")
+{
+    var boardId = GetArgument(args, "--board-id")
+        ?? Environment.GetEnvironmentVariable("BOARD_ID")
+        ?? Environment.GetEnvironmentVariable("TRELLO_BOARD_ID");
+    if (string.IsNullOrWhiteSpace(boardId))
+    {
+        app.Logger.LogError("--board-id or BOARD_ID is required for polling mode");
+        return;
+    }
+
+    var workspacePath = GetArgument(args, "--workspace")
+        ?? Environment.GetEnvironmentVariable("AGENT_WORKSPACE_PATH");
+    if (string.IsNullOrWhiteSpace(workspacePath))
+    {
+        app.Logger.LogError("--workspace or AGENT_WORKSPACE_PATH is required for polling mode");
+        return;
+    }
+
+    var pollIntervalStr = GetArgument(args, "--poll-interval")
+        ?? Environment.GetEnvironmentVariable("POLL_INTERVAL_SECONDS");
+    var pollInterval = TimeSpan.FromSeconds(
+        int.TryParse(pollIntervalStr, out var secs) ? secs : 60);
+
+    // Validate polling-specific config requirements
+    var pollingErrors = WorkflowConfigValidator.Validate(
+        app.Services.GetRequiredService<WorkflowConfig>(), validatePolling: true);
+    if (pollingErrors.Count > 0)
+    {
+        app.Logger.LogError("Workflow config polling validation failed:\n{Errors}",
+            string.Join("\n", pollingErrors));
+        return;
+    }
+
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        cts.Cancel();
+    };
+
+    using var scope = app.Services.CreateScope();
+    var pollingRunner = scope.ServiceProvider.GetRequiredService<PollingRunner>();
+
+    app.Logger.LogInformation(
+        "Polling mode: board={BoardId} workspace={Workspace} interval={Interval}s",
+        boardId, workspacePath, pollInterval.TotalSeconds);
+
+    await pollingRunner.RunAsync(boardId, workspacePath, pollInterval, cts.Token);
     return;
 }
 

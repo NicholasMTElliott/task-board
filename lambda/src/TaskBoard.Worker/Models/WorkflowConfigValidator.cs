@@ -2,7 +2,7 @@ namespace TaskBoard.Worker.Models;
 
 public static class WorkflowConfigValidator
 {
-    public static List<string> Validate(WorkflowConfig config)
+    public static List<string> Validate(WorkflowConfig config, bool validatePolling = false)
     {
         var errors = new List<string>();
 
@@ -44,6 +44,55 @@ public static class WorkflowConfigValidator
                 errors.Add($"Role '{roleId}' has an empty Sections list.");
         }
 
+        if (validatePolling)
+            ValidatePollingConfig(config, errors);
+
         return errors;
+    }
+
+    private static void ValidatePollingConfig(WorkflowConfig config, List<string> errors)
+    {
+        var agentRunStates = config.States
+            .Where(kvp => string.Equals(kvp.Value.GateType, "agent_run", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var (stateId, state) in agentRunStates)
+        {
+            if (state.PipelineOrder <= 0)
+                errors.Add($"State '{stateId}' ({state.Name}) is agent_run but has no pipelineOrder (must be > 0 for polling mode).");
+        }
+
+        var duplicateOrders = agentRunStates
+            .Where(kvp => kvp.Value.PipelineOrder > 0)
+            .GroupBy(kvp => kvp.Value.PipelineOrder)
+            .Where(g => g.Count() > 1)
+            .ToList();
+
+        foreach (var group in duplicateOrders)
+        {
+            var names = string.Join(", ", group.Select(kvp => $"'{kvp.Key}'"));
+            errors.Add($"Duplicate pipelineOrder {group.Key} on agent_run states: {names}.");
+        }
+
+        if (config.Polling is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(config.Polling.PriorityFieldName)
+                && (config.Polling.PriorityOrder is null || config.Polling.PriorityOrder.Count == 0))
+            {
+                errors.Add("polling.priorityFieldName is set but polling.priorityOrder is missing or empty.");
+            }
+
+            if (config.Polling.PriorityOrder is not null)
+            {
+                var duplicateValues = config.Polling.PriorityOrder
+                    .GroupBy(v => v, StringComparer.OrdinalIgnoreCase)
+                    .Where(g => g.Count() > 1)
+                    .Select(g => g.Key)
+                    .ToList();
+
+                if (duplicateValues.Count > 0)
+                    errors.Add($"polling.priorityOrder contains duplicate values: {string.Join(", ", duplicateValues)}.");
+            }
+        }
     }
 }

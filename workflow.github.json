@@ -12,6 +12,7 @@
       "name": "Ready for Design",
       "role": "senior_engineer",
       "gateType": "agent_run",
+      "pipelineOrder": 1,
       "gitBehavior": "discard",
       "taskPromptFile": "prompts/states/ready_for_design.md",
       "includeInAgentContext": false,
@@ -53,6 +54,7 @@
       "name": "Ready for Implementation",
       "role": "senior_engineer",
       "gateType": "agent_run",
+      "pipelineOrder": 2,
       "gitBehavior": "commit_and_push",
       "taskPromptFile": "prompts/states/ready_for_implementation.md",
       "includeInAgentContext": true,
@@ -86,6 +88,7 @@
       "name": "Ready for Test",
       "role": "qa",
       "gateType": "agent_run",
+      "pipelineOrder": 3,
       "gitBehavior": "discard",
       "taskPromptFile": "prompts/states/ready_for_test.md",
       "includeInAgentContext": true,
@@ -135,5 +138,9 @@
       "systemPromptFile": "prompts/qa.md",
       "sections": ["Test Plan", "Test Results"]
     }
+  },
+  "polling": {
+    "priorityFieldName": "priority",
+    "priorityOrder": ["P0", "P1", "P2"]
   }
 }
