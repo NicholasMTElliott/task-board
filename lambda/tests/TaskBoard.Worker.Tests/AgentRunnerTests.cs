@@ -391,6 +391,23 @@ public class AgentRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task ResolveSystemPromptFileAsync_NoFileAndEmptyInline_ThrowsInvalidOperationException()
+    {
+        var role = new WorkflowRole("model", "", new List<string>());
+        var tempDir = Path.Combine(Path.GetTempPath(), "syspmpt-empty-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => AgentRunner.ResolveSystemPromptFileAsync(role, "engineer", tempDir, CancellationToken.None));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ResolvePromptPlaceholders_ReplacesKnownPlaceholders()
     {
         var template = "Work on task {TaskName} ({TaskId}). Story: {UserStoryName}";

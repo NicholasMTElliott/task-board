@@ -21,8 +21,14 @@ public static class WorkflowConfigValidator
                 else if (!config.Roles.ContainsKey(state.Role))
                     errors.Add($"State '{stateId}' ({state.Name}) references role '{state.Role}' which does not exist in Roles.");
 
-                if (string.IsNullOrWhiteSpace(state.TaskPrompt))
-                    errors.Add($"State '{stateId}' ({state.Name}) is agent_run but has no taskPrompt.");
+                if (string.IsNullOrWhiteSpace(state.TaskPrompt) && string.IsNullOrWhiteSpace(state.TaskPromptFile))
+                    errors.Add($"State '{stateId}' ({state.Name}) is agent_run but has no taskPrompt or taskPromptFile.");
+
+                if (!string.IsNullOrWhiteSpace(state.Role) && config.Roles.TryGetValue(state.Role, out var role))
+                {
+                    if (string.IsNullOrWhiteSpace(role.SystemPrompt) && string.IsNullOrWhiteSpace(role.SystemPromptFile))
+                        errors.Add($"Role '{state.Role}' has no systemPrompt or systemPromptFile.");
+                }
             }
 
             foreach (var (outcome, targetStateId) in state.Transitions)
