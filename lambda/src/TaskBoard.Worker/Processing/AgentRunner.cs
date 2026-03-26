@@ -11,6 +11,7 @@ public sealed partial class AgentRunner(
     TaskFileManager taskFileManager,
     GitWorkspaceManager gitWorkspaceManager,
     WorkflowConfig workflowConfig,
+    ICrossReferenceResolver crossReferenceResolver,
     ILogger<AgentRunner> logger)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
@@ -67,13 +68,61 @@ public sealed partial class AgentRunner(
             var worktreePath = await gitWorkspaceManager.CreateWorktreeAsync(
                 workspacePath, branchName, cancellationToken);
 
-            // 5. Write filtered task files into the worktree
-            var contextCards = FilterContextCards(cards, cardId, workflowConfig);
-            await taskFileManager.WriteAllTaskFilesAsync(worktreePath, contextCards, workflowConfig, cancellationToken);
-
-            // 5.1 Fetch and write comments for the active card
-            string? commentsFilePath = null;
+            // 5. Fetch comments (used for both cross-references and comments file)
             var comments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
+
+            // 5.1 Resolve cross-references for target card
+            var referenceContext = await ResolveCrossReferencesAsync(
+                targetCard, cards, comments, cancellationToken);
+
+            // 5.2 Write filtered task files into the worktree (with reference annotations)
+            var referencedCardIds = referenceContext?.References
+                .Select(r => r.ReferencedCardId)
+                .ToHashSet();
+            var contextCards = GetContextCards(cards, cardId, workflowConfig, referencedCardIds);
+
+            // Fetch any referenced cards not already in allCards
+            if (referenceContext is not null)
+            {
+                var existingIds = contextCards.Select(c => c.Id).ToHashSet();
+                var additionalCards = new List<BoardCard>();
+                foreach (var refCard in referenceContext.References)
+                {
+                    if (existingIds.Contains(refCard.ReferencedCardId))
+                        continue;
+                    try
+                    {
+                        var fetched = await boardClient.GetCardAsync(refCard.ReferencedCardId, cancellationToken);
+                        additionalCards.Add(fetched);
+                        existingIds.Add(fetched.Id);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Failed to fetch referenced card {CardId}", refCard.ReferencedCardId);
+                    }
+                }
+
+                if (additionalCards.Count > 0)
+                {
+                    contextCards = [.. contextCards, .. additionalCards];
+                }
+
+                // Rebuild cardIdToFilePath with all context cards
+                var cardIdToFilePath = new Dictionary<string, string>();
+                foreach (var card in contextCards)
+                {
+                    var fileName = TaskFileManager.GetTaskFileName(card.Id, card.Title);
+                    cardIdToFilePath[card.Id] = $".aiboard/tasks/{fileName}";
+                }
+                referenceContext = new ReferenceAnnotationContext(
+                    referenceContext.TargetCardId, referenceContext.References, cardIdToFilePath);
+            }
+
+            await taskFileManager.WriteAllTaskFilesAsync(
+                worktreePath, contextCards, workflowConfig, referenceContext, cancellationToken);
+
+            // 5.3 Write comments file for the active card
+            string? commentsFilePath = null;
             if (comments.Count > 0)
             {
                 await taskFileManager.WriteCommentsFileAsync(
@@ -310,10 +359,11 @@ public sealed partial class AgentRunner(
         {
             var taskFileContent = await File.ReadAllTextAsync(taskFilePath, cancellationToken);
             var bodyFromFile = TaskFileManager.ExtractBodyFromTaskFile(taskFileContent);
+            var cleanBody = TaskFileManager.StripAnnotations(bodyFromFile);
 
-            if (!string.Equals(bodyFromFile, originalCard.Body, StringComparison.Ordinal))
+            if (!string.Equals(cleanBody, originalCard.Body, StringComparison.Ordinal))
             {
-                await boardClient.UpdateCardBodyAsync(originalCard.Id, bodyFromFile, cancellationToken);
+                await boardClient.UpdateCardBodyAsync(originalCard.Id, cleanBody, cancellationToken);
                 logger.LogInformation("Updated card body for {CardId}", originalCard.Id);
             }
         }
@@ -336,16 +386,79 @@ public sealed partial class AgentRunner(
         }
     }
 
-    private static IReadOnlyList<BoardCard> FilterContextCards(
+    private static IReadOnlyList<BoardCard> GetContextCards(
         IReadOnlyList<BoardCard> allCards,
         string activeCardId,
-        WorkflowConfig config)
+        WorkflowConfig config,
+        IReadOnlySet<string>? additionalCardIds = null)
     {
         return allCards.Where(card =>
             card.Id == activeCardId
             || (config.States.TryGetValue(card.ColumnId, out var state)
-                && state.IncludeInAgentContext))
+                && state.IncludeInAgentContext)
+            || (additionalCardIds?.Contains(card.Id) == true))
         .ToList();
+    }
+
+    private async Task<ReferenceAnnotationContext?> ResolveCrossReferencesAsync(
+        BoardCard targetCard,
+        IReadOnlyList<BoardCard> allCards,
+        IReadOnlyList<CardComment> comments,
+        CancellationToken cancellationToken)
+    {
+        // Parse body for text references
+        var bodyRefs = await crossReferenceResolver.ParseTextReferencesAsync(
+            targetCard.Body, cancellationToken);
+
+        // Parse comments for text references, then tag them for the cross-references section
+        var commentText = string.Join("\n", comments.Select(c => c.Body));
+        var rawCommentRefs = await crossReferenceResolver.ParseTextReferencesAsync(
+            commentText, cancellationToken);
+        var commentRefs = rawCommentRefs
+            .Select(r => new CardReference(r.ReferencedCardId, "mentioned_in_comments", null, r.Title))
+            .ToList();
+
+        // Fetch structured references
+        var structuredRefs = await crossReferenceResolver.GetStructuredReferencesAsync(
+            targetCard.Id, cancellationToken);
+
+        // Merge + deduplicate by ReferencedCardId (structured wins over text)
+        var merged = new Dictionary<string, CardReference>();
+        foreach (var r in bodyRefs)
+            merged.TryAdd(r.ReferencedCardId, r);
+        foreach (var r in commentRefs)
+            merged.TryAdd(r.ReferencedCardId, r);
+        foreach (var r in structuredRefs)
+            merged[r.ReferencedCardId] = r; // Structured overwrites
+
+        // Exclude self-references
+        merged.Remove(targetCard.Id);
+
+        if (merged.Count == 0)
+            return null;
+
+        // Populate Title from allCards where missing
+        var cardLookup = allCards.ToDictionary(c => c.Id);
+        var allReferences = new List<CardReference>();
+        foreach (var r in merged.Values)
+        {
+            var refWithTitle = r;
+            if (r.Title is null && cardLookup.TryGetValue(r.ReferencedCardId, out var card))
+            {
+                refWithTitle = r with { Title = card.Title };
+            }
+            allReferences.Add(refWithTitle);
+        }
+
+        // Build initial cardIdToFilePath (will be rebuilt after fetching additional cards)
+        var cardIdToFilePath = new Dictionary<string, string>();
+        foreach (var card in allCards)
+        {
+            var fileName = TaskFileManager.GetTaskFileName(card.Id, card.Title);
+            cardIdToFilePath[card.Id] = $".aiboard/tasks/{fileName}";
+        }
+
+        return new ReferenceAnnotationContext(targetCard.Id, allReferences, cardIdToFilePath);
     }
 
     private static string BuildCommentPrefix(WorkflowState state, WorkflowConfig config)

@@ -13,7 +13,8 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
         string workspacePath,
         IReadOnlyList<BoardCard> cards,
         WorkflowConfig workflowConfig,
-        CancellationToken cancellationToken)
+        ReferenceAnnotationContext? referenceContext = null,
+        CancellationToken cancellationToken = default)
     {
         var tasksDir = Path.Combine(workspacePath, TasksRelativePath);
         Directory.CreateDirectory(tasksDir);
@@ -24,7 +25,7 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
                 ? state.Name
                 : "Unknown";
 
-            var content = BuildTaskFileContent(card, listName);
+            var content = BuildTaskFileContent(card, listName, referenceContext);
             var filePath = GetTaskFilePath(workspacePath, card.Id, card.Title);
 
             await File.WriteAllTextAsync(filePath, content, Encoding.UTF8, cancellationToken);
@@ -42,13 +43,38 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
 
     public static string GetTaskFilePath(string workspacePath, string cardId, string? title = null)
     {
-        var slug = SlugHelper.Sanitize(title);
-        var fileName = string.IsNullOrEmpty(slug) ? $"{cardId}.md" : $"{cardId}-{slug}.md";
+        var fileName = GetTaskFileName(cardId, title);
         return Path.Combine(workspacePath, TasksRelativePath, fileName);
     }
 
-    internal static string BuildTaskFileContent(BoardCard card, string listName)
+    public static string GetTaskFileName(string cardId, string? title = null)
     {
+        var slug = SlugHelper.Sanitize(title);
+        return string.IsNullOrEmpty(slug) ? $"{cardId}.md" : $"{cardId}-{slug}.md";
+    }
+
+    internal static string BuildTaskFileContent(
+        BoardCard card, string listName, ReferenceAnnotationContext? referenceContext = null)
+    {
+        var body = card.Body;
+
+        if (referenceContext is not null && card.Id == referenceContext.TargetCardId)
+        {
+            // Separate text refs (have OriginalText) from non-text refs
+            var textRefs = referenceContext.References
+                .Where(r => r.OriginalText is not null)
+                .ToList();
+            var nonTextRefs = referenceContext.References
+                .Where(r => r.OriginalText is null)
+                .ToList();
+
+            body = AnnotateBodyWithReferences(body, textRefs, referenceContext.CardIdToFilePath);
+
+            var crossRefSection = BuildCrossReferencesSection(nonTextRefs, referenceContext.CardIdToFilePath);
+            if (crossRefSection is not null)
+                body = body + "\n\n" + crossRefSection;
+        }
+
         var sb = new StringBuilder();
         sb.AppendLine("---");
         sb.AppendLine($"id: {card.Id}");
@@ -57,8 +83,99 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
         sb.AppendLine($"list_id: {card.ColumnId}");
         sb.AppendLine("---");
         sb.AppendLine();
-        sb.Append(card.Body);
+        sb.Append(body);
         return sb.ToString();
+    }
+
+    internal static string AnnotateBodyWithReferences(
+        string body,
+        IReadOnlyList<CardReference> textReferences,
+        IReadOnlyDictionary<string, string> cardIdToFilePath)
+    {
+        if (string.IsNullOrEmpty(body) || textReferences.Count == 0)
+            return body;
+
+        // Collect all (index, length, annotation) tuples, then apply from end to start
+        var replacements = new List<(int Index, int Length, string Replacement)>();
+
+        foreach (var textRef in textReferences)
+        {
+            if (textRef.OriginalText is null)
+                continue;
+            if (!cardIdToFilePath.TryGetValue(textRef.ReferencedCardId, out var filePath))
+                continue;
+
+            var searchFrom = 0;
+            while (true)
+            {
+                var idx = body.IndexOf(textRef.OriginalText, searchFrom, StringComparison.Ordinal);
+                if (idx < 0)
+                    break;
+
+                replacements.Add((idx, textRef.OriginalText.Length,
+                    $"{textRef.OriginalText} ( see {filePath} )"));
+                searchFrom = idx + textRef.OriginalText.Length;
+            }
+        }
+
+        // Sort by index descending so replacements don't shift earlier indices
+        replacements.Sort((a, b) => b.Index.CompareTo(a.Index));
+
+        var sb = new StringBuilder(body);
+        foreach (var (index, length, replacement) in replacements)
+        {
+            sb.Remove(index, length);
+            sb.Insert(index, replacement);
+        }
+
+        return sb.ToString();
+    }
+
+    internal static string? BuildCrossReferencesSection(
+        IReadOnlyList<CardReference> references,
+        IReadOnlyDictionary<string, string> cardIdToFilePath)
+    {
+        var resolved = references
+            .Where(r => cardIdToFilePath.ContainsKey(r.ReferencedCardId))
+            .ToList();
+
+        if (resolved.Count == 0)
+            return null;
+
+        var sb = new StringBuilder("## Cross-References\n");
+
+        foreach (var r in resolved)
+        {
+            var filePath = cardIdToFilePath[r.ReferencedCardId];
+            var label = FormatReferenceTypeLabel(r.ReferenceType);
+            var cardLabel = r.Title is not null
+                ? $"#{r.ReferencedCardId} {r.Title}"
+                : $"#{r.ReferencedCardId}";
+            sb.AppendLine($"\n- **{label}**: {cardLabel} ( see {filePath} )");
+        }
+
+        return sb.ToString();
+    }
+
+    internal static string StripAnnotations(string body)
+    {
+        // Strip inline annotations: ( see .aiboard/tasks/....md )
+        body = Regex.Replace(body, @"\s*\(\s*see\s+\.aiboard/tasks/[^)]+\.md\s*\)", "");
+
+        // Strip the ## Cross-References section (always at end)
+        body = Regex.Replace(body, @"\n*## Cross-References\n[\s\S]*$", "");
+
+        return body;
+    }
+
+    private static string FormatReferenceTypeLabel(string referenceType)
+    {
+        // "sub_item" -> "Sub-item", "parent_item" -> "Parent item", etc.
+        return referenceType.Replace('_', ' ') switch
+        {
+            var s when s.Length > 0 => char.ToUpperInvariant(s[0]) + s[1..],
+            _ => referenceType
+        };
     }
 
     /// <summary>

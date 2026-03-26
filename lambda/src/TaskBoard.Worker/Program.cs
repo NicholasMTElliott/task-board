@@ -47,13 +47,20 @@ switch (boardProvider)
             var baseUrl = builder.Configuration.GetSection("Trello")["BaseUrl"] ?? "https://api.trello.com";
             client.BaseAddress = new Uri(baseUrl);
         });
+        builder.Services.AddHttpClient<ICrossReferenceResolver, TrelloCrossReferenceResolver>(client =>
+        {
+            var baseUrl = builder.Configuration.GetSection("Trello")["BaseUrl"] ?? "https://api.trello.com";
+            client.BaseAddress = new Uri(baseUrl);
+        });
         break;
     case "github":
         builder.Services.Configure<GitHubProjectsOptions>(builder.Configuration.GetSection(GitHubProjectsOptions.SectionName));
         builder.Services.AddSingleton<ITaskBoardClient, GitHubProjectsClient>();
+        builder.Services.AddSingleton<ICrossReferenceResolver, GitHubCrossReferenceResolver>();
         break;
     default:
         builder.Services.AddSingleton<ITaskBoardClient, StubTaskBoardClient>();
+        builder.Services.AddSingleton<ICrossReferenceResolver, StubCrossReferenceResolver>();
         break;
 }
 
