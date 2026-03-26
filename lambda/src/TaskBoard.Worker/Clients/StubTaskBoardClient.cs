@@ -40,4 +40,10 @@ public sealed class StubTaskBoardClient(ILogger<StubTaskBoardClient> logger) : I
         logger.LogInformation("[Stub] UpsertComment {CardId} ({Length} chars)", cardId, commentBody.Length);
         return Task.CompletedTask;
     }
+
+    public Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("[Stub] GetCardComments {CardId}", cardId);
+        return Task.FromResult<IReadOnlyList<CardComment>>(new List<CardComment>());
+    }
 }

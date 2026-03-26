@@ -67,8 +67,20 @@ public sealed partial class AgentRunner(
             var worktreePath = await gitWorkspaceManager.CreateWorktreeAsync(
                 workspacePath, branchName, cancellationToken);
 
-            // 5. Write all task files into the worktree
-            await taskFileManager.WriteAllTaskFilesAsync(worktreePath, cards, workflowConfig, cancellationToken);
+            // 5. Write filtered task files into the worktree
+            var contextCards = FilterContextCards(cards, cardId, workflowConfig);
+            await taskFileManager.WriteAllTaskFilesAsync(worktreePath, contextCards, workflowConfig, cancellationToken);
+
+            // 5.1 Fetch and write comments for the active card
+            string? commentsFilePath = null;
+            var comments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
+            if (comments.Count > 0)
+            {
+                await taskFileManager.WriteCommentsFileAsync(
+                    worktreePath, targetCard.Id, targetCard.Title, comments, cancellationToken);
+                commentsFilePath = TaskFileManager.GetCommentsFilePath(
+                    worktreePath, targetCard.Id, targetCard.Title);
+            }
 
             // 5a. Resolve system prompt file path (writes temp file for inline prompts)
             var systemPromptFilePath = await ResolveSystemPromptFileAsync(
@@ -92,7 +104,8 @@ public sealed partial class AgentRunner(
                 TaskPrompt: resolvedPrompt,
                 SystemPromptFilePath: systemPromptFilePath,
                 Model: role.Model,
-                ProviderParams: state.ProviderParams);
+                ProviderParams: state.ProviderParams,
+                CommentsFilePath: commentsFilePath);
 
             var agentResult = await agentExecutor.ExecuteAsync(context, cancellationToken);
 
@@ -101,7 +114,8 @@ public sealed partial class AgentRunner(
                 gitBehavior, worktreePath, branchName, targetCard, state, agentResult, cancellationToken);
 
             // 9. Post-process: update card on board, add comment, move to next state
-            await PostProcessAsync(targetCard, state, agentResult, worktreePath, branchName, gitNote, cancellationToken);
+            var commentPrefix = BuildCommentPrefix(state, workflowConfig);
+            await PostProcessAsync(targetCard, state, agentResult, worktreePath, branchName, gitNote, commentPrefix, cancellationToken);
 
             // 10. Cleanup worktree for discard stages
             if (gitBehavior == "discard")
@@ -149,7 +163,8 @@ public sealed partial class AgentRunner(
             try
             {
                 var errorResult = new AgentResult(AgentOutcome.ERROR, ex.Message);
-                var comment = FormatComment(errorResult);
+                var errorPrefix = BuildCommentPrefix(state, workflowConfig);
+                var comment = $"{errorPrefix}\n\n{FormatComment(errorResult)}";
                 await boardClient.UpsertAgentCommentAsync(cardId, comment, cancellationToken);
 
                 if (state.Transitions.TryGetValue("ERROR", out var errorColumnId))
@@ -286,6 +301,7 @@ public sealed partial class AgentRunner(
         string worktreePath,
         string branchName,
         string? gitNote,
+        string commentPrefix,
         CancellationToken cancellationToken)
     {
         // 9a. Read back the task file to detect agent changes to card content
@@ -302,8 +318,8 @@ public sealed partial class AgentRunner(
             }
         }
 
-        // 9b. Format and post comment (with optional git note)
-        var comment = FormatComment(agentResult, gitNote);
+        // 9b. Format and post comment (with optional git note and role/state prefix)
+        var comment = $"{commentPrefix}\n\n{FormatComment(agentResult, gitNote)}";
         await boardClient.UpsertAgentCommentAsync(originalCard.Id, comment, cancellationToken);
         logger.LogInformation("Posted agent comment for {CardId}", originalCard.Id);
 
@@ -318,6 +334,29 @@ public sealed partial class AgentRunner(
         {
             logger.LogWarning("No transition for {Outcome} in state {State}", outcomeKey, state.Name);
         }
+    }
+
+    private static IReadOnlyList<BoardCard> FilterContextCards(
+        IReadOnlyList<BoardCard> allCards,
+        string activeCardId,
+        WorkflowConfig config)
+    {
+        return allCards.Where(card =>
+            card.Id == activeCardId
+            || (config.States.TryGetValue(card.ColumnId, out var state)
+                && state.IncludeInAgentContext))
+        .ToList();
+    }
+
+    private static string BuildCommentPrefix(WorkflowState state, WorkflowConfig config)
+    {
+        var activeStateName = state.Transitions.TryGetValue("IN_PROGRESS", out var inProgressCol)
+            && config.States.TryGetValue(inProgressCol, out var inProgressState)
+            ? inProgressState.Name
+            : state.Name;
+
+        var roleName = state.Role ?? "agent";
+        return $"**{roleName} in {activeStateName}:**";
     }
 
     internal static string FormatComment(AgentResult result, string? gitNote = null)

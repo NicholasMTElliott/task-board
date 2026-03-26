@@ -208,6 +208,36 @@ public sealed class GitHubProjectsClient(
         }
     }
 
+    public async Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken)
+    {
+        var json = await RunGhAsync(
+            ["api", $"repos/{_options.Repo}/issues/{cardId}/comments", "--paginate"],
+            cancellationToken);
+
+        using var doc = JsonDocument.Parse(json);
+        var comments = new List<CardComment>();
+
+        foreach (var item in doc.RootElement.EnumerateArray())
+        {
+            var author = item.TryGetProperty("user", out var user)
+                && user.TryGetProperty("login", out var login)
+                ? login.GetString() ?? "unknown"
+                : "unknown";
+            var body = item.TryGetProperty("body", out var bodyProp)
+                ? bodyProp.GetString() ?? ""
+                : "";
+            var createdAt = item.TryGetProperty("created_at", out var createdProp)
+                ? DateTimeOffset.Parse(createdProp.GetString()!)
+                : DateTimeOffset.MinValue;
+
+            comments.Add(new CardComment(author, body, createdAt));
+        }
+
+        comments.Sort((a, b) => a.CreatedAt.CompareTo(b.CreatedAt));
+        logger.LogInformation("Fetched {Count} comments for issue {IssueNumber}", comments.Count, cardId);
+        return comments;
+    }
+
     private async Task<string> GetProjectNumberFromIssue(string issueNumber, CancellationToken cancellationToken)
     {
         // For now, we use the project items from the issue view.

@@ -116,6 +116,14 @@ public sealed class ClaudeAgentExecutor(
         sb.AppendLine();
         sb.AppendLine($"- The target task file is at: {taskFilePath}");
         sb.AppendLine("- All project tasks are in the .aiboard/tasks/ directory for context.");
+
+        if (context.CommentsFilePath is not null)
+        {
+            sb.AppendLine($"- The conversation history for this task is at: {context.CommentsFilePath}. "
+                + "This file is READ-ONLY — do not modify it. Use it for context about prior discussions, "
+                + "decisions, and feedback from humans and previous agent runs.");
+        }
+
         sb.AppendLine("- If you can complete the work fully and accurately, respond with outcome COMPLETE.");
         sb.AppendLine("- If you have important questions that must be answered first, respond with outcome NEEDS_INFO and include your questions in the questions array, each with an optional list of recommendations.");
         sb.AppendLine("- If something goes wrong, respond with outcome ERROR and describe the issue in the detail field.");

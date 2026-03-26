@@ -11,7 +11,13 @@ public interface ITaskBoardClient
     Task UpdateCardBodyAsync(string cardId, string body, CancellationToken cancellationToken);
     Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken cancellationToken);
     Task UpsertAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken);
+    Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken);
 }
+
+public sealed record CardComment(
+    string Author,
+    string Body,
+    DateTimeOffset CreatedAt);
 
 public sealed record BoardCard(
     string Id,

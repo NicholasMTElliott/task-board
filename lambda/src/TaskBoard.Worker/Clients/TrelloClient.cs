@@ -97,6 +97,39 @@ public sealed class TrelloClient(
         }
     }
 
+    public async Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken)
+    {
+        var url = AppendAuth($"/1/cards/{cardId}/actions?filter=commentCard&limit=1000");
+        using var response = await _httpClient.GetAsync(url, cancellationToken);
+        await EnsureSuccessOrThrow(response, "GetCardComments", cardId);
+
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var doc = JsonDocument.Parse(json);
+
+        var comments = new List<CardComment>();
+        foreach (var item in doc.RootElement.EnumerateArray())
+        {
+            var author = item.TryGetProperty("memberCreator", out var mc)
+                ? (mc.TryGetProperty("fullName", out var fn) ? fn.GetString() : null)
+                  ?? (mc.TryGetProperty("username", out var un) ? un.GetString() : null)
+                  ?? "unknown"
+                : "unknown";
+            var body = item.TryGetProperty("data", out var data)
+                && data.TryGetProperty("text", out var text)
+                ? text.GetString() ?? ""
+                : "";
+            var createdAt = item.TryGetProperty("date", out var dateProp)
+                ? DateTimeOffset.Parse(dateProp.GetString()!)
+                : DateTimeOffset.MinValue;
+
+            comments.Add(new CardComment(author, body, createdAt));
+        }
+
+        comments.Sort((a, b) => a.CreatedAt.CompareTo(b.CreatedAt));
+        _logger.LogInformation("Fetched {Count} comments for card {CardId}", comments.Count, cardId);
+        return comments;
+    }
+
     private static BoardCard ToBoardCard(TrelloCard card)
         => new(card.Id, card.Name, card.Desc, card.IdList);
 

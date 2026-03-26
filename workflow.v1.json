@@ -4,12 +4,14 @@
       "name": "Backlog",
       "role": null,
       "gateType": "manual_entry",
+      "includeInAgentContext": false,
       "transitions": {}
     },
     "LIST_ID_REQUIREMENTS": {
       "name": "Requirements",
       "role": "business_analyst",
       "gateType": "agent_run",
+      "includeInAgentContext": false,
       "taskPrompt": "Analyze the card description. Extract and document structured Requirements, identify Open Questions that need human clarification, and define measurable Acceptance Criteria. If the description is too vague to produce requirements, return NEEDS_INFO with specific questions.",
       "transitions": {
         "COMPLETE": "LIST_ID_REQUIREMENTS_REVIEW",
@@ -21,12 +23,14 @@
       "name": "Requirements Review",
       "role": null,
       "gateType": "manual_gate",
+      "includeInAgentContext": false,
       "transitions": {}
     },
     "69babbd339f6fccefafc73c7": {
       "name": "Design",
       "role": "senior_engineer",
       "gateType": "agent_run",
+      "includeInAgentContext": false,
       "taskPrompt": "You are working on the task {TaskName} ({TaskId}).  All project tasks are available in /.aiboard/tasks/ for context. Your job is to update ONLY the file for this task to add a detailed technical design approach. Include: architecture decisions, component interactions, data flow, edge cases, and implementation notes.  Do not modify any other file. You should include enough information for an unambiguous implementation. You may respond with questions where there is ambiguity, conflict, or mistakes; you should only proceed when you are fully confident you understand the request and the subject material fully.  It is always appropriate to say 'I do not understand', 'I need help', or 'This does not seem correct'.",
       "transitions": {
         "COMPLETE": "69babc43a79b65c19ea4b4c1",
@@ -38,12 +42,14 @@
       "name": "Design Review",
       "role": null,
       "gateType": "manual_gate",
+      "includeInAgentContext": true,
       "transitions": {}
     },
     "LIST_ID_IMPLEMENTATION": {
       "name": "Implementation",
       "role": "senior_engineer",
       "gateType": "agent_run",
+      "includeInAgentContext": true,
       "taskPrompt": "Using the approved technical design, produce a detailed implementation breakdown: ordered tasks, file/module targets, API contracts, and data model changes. Flag any design gaps that need resolution before coding begins.",
       "transitions": {
         "COMPLETE": "LIST_ID_CODE_REVIEW",
@@ -55,12 +61,14 @@
       "name": "Code Review",
       "role": null,
       "gateType": "manual_gate",
+      "includeInAgentContext": true,
       "transitions": {}
     },
     "LIST_ID_TESTING": {
       "name": "Testing",
       "role": "qa",
       "gateType": "agent_run",
+      "includeInAgentContext": true,
       "taskPrompt": "Using the requirements, technical design, and implementation breakdown, generate a comprehensive test plan covering: functional tests, edge cases, integration scenarios, and acceptance criteria verification.",
       "transitions": {
         "COMPLETE": "LIST_ID_DONE",
@@ -72,18 +80,21 @@
       "name": "Done",
       "role": null,
       "gateType": "terminal",
+      "includeInAgentContext": false,
       "transitions": {}
     },
     "69bac6d8981fecf53493f69f": {
       "name": "Questions",
       "role": null,
       "gateType": "holding",
+      "includeInAgentContext": false,
       "transitions": {}
     },
     "69bac71b142085ed522f3309": {
       "name": "Error",
       "role": null,
       "gateType": "holding",
+      "includeInAgentContext": false,
       "transitions": {}
     }
   },

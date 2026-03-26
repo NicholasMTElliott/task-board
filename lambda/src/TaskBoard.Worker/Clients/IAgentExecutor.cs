@@ -12,7 +12,8 @@ public sealed record AgentExecutionContext(
     string TaskPrompt,
     string SystemPromptFilePath,
     string Model,
-    IReadOnlyDictionary<string, string>? ProviderParams = null);
+    IReadOnlyDictionary<string, string>? ProviderParams = null,
+    string? CommentsFilePath = null);
 
 public sealed record AgentResult(
     AgentOutcome Outcome,

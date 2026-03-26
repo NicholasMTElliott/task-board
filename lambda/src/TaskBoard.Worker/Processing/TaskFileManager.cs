@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 
@@ -78,6 +79,60 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
         // Strip the leading newline(s) between front matter and body
         return afterFrontMatter.TrimStart('\r', '\n');
     }
+
+    public static string GetCommentsFilePath(string workspacePath, string cardId, string? title = null)
+    {
+        var taskFilePath = GetTaskFilePath(workspacePath, cardId, title);
+        return Path.ChangeExtension(taskFilePath, null) + "-comments.md";
+    }
+
+    public async Task WriteCommentsFileAsync(
+        string workspacePath,
+        string cardId,
+        string? title,
+        IReadOnlyList<CardComment> comments,
+        CancellationToken cancellationToken)
+    {
+        var ordered = comments.OrderBy(c => c.CreatedAt).ToList();
+
+        var filtered = new List<CardComment>();
+        foreach (var comment in ordered)
+        {
+            var stripped = StripHtmlMarkers(comment.Body);
+            if (!string.IsNullOrWhiteSpace(stripped))
+                filtered.Add(comment with { Body = stripped });
+        }
+
+        if (filtered.Count == 0)
+        {
+            logger.LogDebug("No comments to write for card {CardId} after filtering", cardId);
+            return;
+        }
+
+        var filePath = GetCommentsFilePath(workspacePath, cardId, title);
+        var sb = new StringBuilder();
+        sb.AppendLine("---");
+        sb.AppendLine($"type: comments");
+        sb.AppendLine($"card_id: {cardId}");
+        sb.AppendLine("note: \"READ-ONLY. Do not modify this file.\"");
+        sb.AppendLine("---");
+
+        foreach (var comment in filtered)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"### {comment.Author} — {comment.CreatedAt:yyyy-MM-dd HH:mm} UTC");
+            sb.AppendLine();
+            sb.AppendLine(comment.Body);
+            sb.AppendLine();
+            sb.AppendLine("---");
+        }
+
+        await File.WriteAllTextAsync(filePath, sb.ToString(), Encoding.UTF8, cancellationToken);
+        logger.LogInformation("Wrote comments file for card {CardId} with {Count} comments", cardId, filtered.Count);
+    }
+
+    private static string StripHtmlMarkers(string body)
+        => Regex.Replace(body, @"<!--.*?-->", "", RegexOptions.Singleline).Trim();
 
     internal static string EscapeYamlValue(string value)
     {

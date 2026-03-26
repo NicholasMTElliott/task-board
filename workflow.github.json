@@ -5,6 +5,7 @@
       "role": null,
       "gateType": "manual_entry",
       "taskPrompt": null,
+      "includeInAgentContext": false,
       "transitions": {}
     },
     "Ready for Design": {
@@ -13,6 +14,7 @@
       "gateType": "agent_run",
       "gitBehavior": "discard",
       "taskPromptFile": "prompts/states/ready_for_design.md",
+      "includeInAgentContext": false,
       "providerParams": {
         "effort": "max"
       },
@@ -28,6 +30,7 @@
       "role": null,
       "gateType": "in_progress",
       "taskPrompt": null,
+      "includeInAgentContext": false,
       "transitions": {}
     },
     "Design Questions": {
@@ -35,6 +38,7 @@
       "role": null,
       "gateType": "holding",
       "taskPrompt": null,
+      "includeInAgentContext": false,
       "transitions": {}
     },
     "Designed": {
@@ -42,6 +46,7 @@
       "role": null,
       "gateType": "manual_gate",
       "taskPrompt": null,
+      "includeInAgentContext": true,
       "transitions": {}
     },
     "Ready for Implementation": {
@@ -50,6 +55,7 @@
       "gateType": "agent_run",
       "gitBehavior": "commit_and_push",
       "taskPromptFile": "prompts/states/ready_for_implementation.md",
+      "includeInAgentContext": true,
       "providerParams": {
         "effort": "medium"
       },
@@ -65,6 +71,7 @@
       "role": null,
       "gateType": "in_progress",
       "taskPrompt": null,
+      "includeInAgentContext": true,
       "transitions": {}
     },
     "Implementation Questions": {
@@ -72,6 +79,7 @@
       "role": null,
       "gateType": "holding",
       "taskPrompt": null,
+      "includeInAgentContext": true,
       "transitions": {}
     },
     "Ready for Test": {
@@ -80,6 +88,7 @@
       "gateType": "agent_run",
       "gitBehavior": "discard",
       "taskPromptFile": "prompts/states/ready_for_test.md",
+      "includeInAgentContext": true,
       "providerParams": {
         "effort": "medium"
       },
@@ -95,6 +104,7 @@
       "role": null,
       "gateType": "in_progress",
       "taskPrompt": null,
+      "includeInAgentContext": true,
       "transitions": {}
     },
     "Tested": {
@@ -102,6 +112,7 @@
       "role": null,
       "gateType": "terminal",
       "taskPrompt": null,
+      "includeInAgentContext": true,
       "transitions": {}
     },
     "Error": {
@@ -109,6 +120,7 @@
       "role": null,
       "gateType": "holding",
       "taskPrompt": null,
+      "includeInAgentContext": false,
       "transitions": {}
     }
   },
