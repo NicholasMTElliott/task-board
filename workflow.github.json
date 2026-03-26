@@ -23,7 +23,8 @@
         "IN_PROGRESS": "Designing",
         "COMPLETE": "Designed",
         "NEEDS_INFO": "Design Questions",
-        "ERROR": "Error"
+        "ERROR": "Error",
+        "MERGE_CONFLICT": "Ready for Implementation"
       }
     },
     "Designing": {
@@ -99,7 +100,8 @@
         "IN_PROGRESS": "Testing",
         "COMPLETE": "Tested",
         "NEEDS_INFO": "Implementation Questions",
-        "ERROR": "Error"
+        "ERROR": "Error",
+        "MERGE_CONFLICT": "Ready for Implementation"
       }
     },
     "Testing": {
@@ -167,6 +169,17 @@
       "model": "claude-opus-4-6",
       "systemPromptFile": "prompts/qa.md",
       "sections": ["Test Plan", "Test Results"]
+    },
+    "merge_resolver": {
+      "model": "claude-sonnet-4-6",
+      "systemPromptFile": "prompts/merge_resolver.md",
+      "sections": []
+    }
+  },
+  "mergeResolution": {
+    "role": "merge_resolver",
+    "providerParams": {
+      "effort": "medium"
     }
   },
   "polling": {
