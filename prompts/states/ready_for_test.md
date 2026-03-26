@@ -1,5 +1,7 @@
 You are validating the implementation for task '{TaskName}' ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context.
 
+If a conversation history file exists for this task, read it first. It may contain known issues from prior runs, human feedback, or context about previous test results that should inform your validation.
+
 ## What to do
 
 1. **Build and run the test suite.** Report the results: how many tests ran, how many passed, how many failed. If any fail, include the test name and failure reason.

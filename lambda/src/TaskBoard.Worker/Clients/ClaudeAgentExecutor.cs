@@ -119,9 +119,14 @@ public sealed class ClaudeAgentExecutor(
 
         if (context.CommentsFilePath is not null)
         {
-            sb.AppendLine($"- The conversation history for this task is at: {context.CommentsFilePath}. "
-                + "This file is READ-ONLY — do not modify it. Use it for context about prior discussions, "
-                + "decisions, and feedback from humans and previous agent runs.");
+            sb.AppendLine();
+            sb.AppendLine("## Prior Conversation");
+            sb.AppendLine();
+            sb.AppendLine($"There is a conversation history file for this task at: {context.CommentsFilePath}.");
+            sb.AppendLine("This file contains comments from humans and previous agent runs — including "
+                + "feedback, decisions, and prior work. **Read this file before starting work.** "
+                + "It is READ-ONLY — do not modify it.");
+            sb.AppendLine();
         }
 
         sb.AppendLine("- If you can complete the work fully and accurately, respond with outcome COMPLETE.");
