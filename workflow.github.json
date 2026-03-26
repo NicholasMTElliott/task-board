@@ -95,7 +95,7 @@
       "transitions": {
         "IN_PROGRESS": "Testing",
         "COMPLETE": "Tested",
-        "NEEDS_INFO": "Design Questions",
+        "NEEDS_INFO": "Implementation Questions",
         "ERROR": "Error"
       }
     },
