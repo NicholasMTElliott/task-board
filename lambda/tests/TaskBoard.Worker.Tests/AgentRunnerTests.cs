@@ -42,6 +42,7 @@ public class AgentRunnerTests : IDisposable
             _taskFileManager,
             _gitWorkspaceManager,
             _workflowConfig,
+            new StubCrossReferenceResolver(),
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -188,7 +189,7 @@ public class AgentRunnerTests : IDisposable
 
         var runner = new AgentRunner(
             _trelloClient, throwingExecutor, _taskFileManager, _gitWorkspaceManager,
-            _workflowConfig, NullLogger<AgentRunner>.Instance);
+            _workflowConfig, new StubCrossReferenceResolver(), NullLogger<AgentRunner>.Instance);
 
         SetupBoardCards();
 
@@ -447,7 +448,7 @@ public class AgentRunnerTests : IDisposable
     {
         return new AgentRunner(
             _trelloClient, _agentExecutor, _taskFileManager, _gitWorkspaceManager,
-            config, NullLogger<AgentRunner>.Instance);
+            config, new StubCrossReferenceResolver(), NullLogger<AgentRunner>.Instance);
     }
 
     private static WorkflowConfig BuildWorkflowConfig()
