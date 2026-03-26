@@ -113,9 +113,39 @@
     "Tested": {
       "name": "Tested",
       "role": null,
-      "gateType": "terminal",
+      "gateType": "manual_gate",
       "taskPrompt": null,
       "includeInAgentContext": true,
+      "transitions": {}
+    },
+    "Accepted": {
+      "name": "Accepted",
+      "gateType": "system_merge",
+      "pipelineOrder": 4,
+      "includeInAgentContext": false,
+      "providerParams": {
+        "maxRetries": "3"
+      },
+      "transitions": {
+        "IN_PROGRESS": "Merging",
+        "COMPLETE": "Done",
+        "ERROR": "Error"
+      }
+    },
+    "Merging": {
+      "name": "Merging",
+      "role": null,
+      "gateType": "in_progress",
+      "taskPrompt": null,
+      "includeInAgentContext": false,
+      "transitions": {}
+    },
+    "Done": {
+      "name": "Done",
+      "role": null,
+      "gateType": "terminal",
+      "taskPrompt": null,
+      "includeInAgentContext": false,
       "transitions": {}
     },
     "Error": {

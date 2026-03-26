@@ -88,6 +88,7 @@ builder.Services.AddSingleton(sp =>
     new GitWorkspaceManager(sp.GetRequiredService<ILogger<GitWorkspaceManager>>(), worktreeBasePath));
 
 builder.Services.AddSingleton<AgentRunner>();
+builder.Services.AddSingleton<MergeRunner>();
 builder.Services.AddSingleton<PollingRunner>();
 
 var app = builder.Build();
@@ -119,12 +120,29 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
     }
 
     using var scope = app.Services.CreateScope();
-    var agentRunner = scope.ServiceProvider.GetRequiredService<AgentRunner>();
 
     app.Logger.LogInformation("Agent mode: card={CardId} board={BoardId} workspace={Workspace}",
         cardId, boardId, workspacePath);
 
-    var result = await agentRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+    // Determine dispatch: fetch card to check if it's in a system_merge state
+    var boardClientInstance = scope.ServiceProvider.GetRequiredService<ITaskBoardClient>();
+    var workflowConfigInstance = scope.ServiceProvider.GetRequiredService<WorkflowConfig>();
+    var boardCards = await boardClientInstance.GetBoardCardsAsync(boardId, CancellationToken.None);
+    var targetCard = boardCards.FirstOrDefault(c => c.Id == cardId);
+
+    AgentRunResult result;
+    if (targetCard is not null
+        && workflowConfigInstance.States.TryGetValue(targetCard.ColumnId, out var cardState)
+        && string.Equals(cardState.GateType, "system_merge", StringComparison.OrdinalIgnoreCase))
+    {
+        var mergeRunner = scope.ServiceProvider.GetRequiredService<MergeRunner>();
+        result = await mergeRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+    }
+    else
+    {
+        var agentRunner = scope.ServiceProvider.GetRequiredService<AgentRunner>();
+        result = await agentRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+    }
 
     app.Logger.LogInformation("Agent run complete: outcome={Outcome}, error={ErrorDetail}",
         result.Outcome, result.ErrorDetail ?? "(none)");

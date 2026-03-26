@@ -6,6 +6,7 @@ namespace TaskBoard.Worker.Processing;
 public sealed class PollingRunner(
     ITaskBoardClient boardClient,
     AgentRunner agentRunner,
+    MergeRunner mergeRunner,
     WorkflowConfig workflowConfig,
     ILogger<PollingRunner> logger)
 {
@@ -37,8 +38,10 @@ public sealed class PollingRunner(
                         "Selected card {CardId} ({Title}) in {ColumnId} (cycle {Cycle})",
                         selected.Id, selected.Title, selected.ColumnId, totalCycles);
 
-                    var result = await agentRunner.ExecuteAsync(
-                        selected.Id, boardId, workspacePath, cancellationToken);
+                    var selectedState = workflowConfig.States.GetValueOrDefault(selected.ColumnId);
+                    var result = string.Equals(selectedState?.GateType, "system_merge", StringComparison.OrdinalIgnoreCase)
+                        ? await mergeRunner.ExecuteAsync(selected.Id, boardId, workspacePath, cancellationToken)
+                        : await agentRunner.ExecuteAsync(selected.Id, boardId, workspacePath, cancellationToken);
 
                     logger.LogInformation(
                         "Card {CardId} completed: {Outcome}",

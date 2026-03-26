@@ -215,6 +215,108 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
         return !string.IsNullOrWhiteSpace(stdout);
     }
 
+    // ── Merge-related operations ────────────────────────────────────
+
+    public async Task FetchAsync(string repoPath, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("Fetching from origin in {Repo}", repoPath);
+        await RunGitAsync(repoPath, ["fetch", "origin"], cancellationToken, timeoutSeconds: 60);
+    }
+
+    public async Task<string> GetDefaultBranchAsync(string repoPath, CancellationToken cancellationToken)
+    {
+        // Try symbolic-ref first
+        try
+        {
+            var (_, stdout, _) = await RunGitAsync(repoPath,
+                ["symbolic-ref", "refs/remotes/origin/HEAD"], cancellationToken);
+            var refPath = stdout.Trim();
+            var branchName = refPath.Replace("refs/remotes/origin/", "");
+            if (!string.IsNullOrWhiteSpace(branchName))
+                return branchName;
+        }
+        catch (GitOperationException) { /* fallback to probing */ }
+
+        // Fallback: probe known defaults
+        foreach (var candidate in new[] { "main", "master", "mainline" })
+        {
+            if (await RemoteBranchExistsAsync(repoPath, candidate, cancellationToken))
+                return candidate;
+        }
+
+        throw new GitOperationException("Could not determine default branch", -1);
+    }
+
+    public async Task<bool> IsAncestorAsync(
+        string repoPath, string potentialAncestor, string descendant,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            // exit 0 = is ancestor, exit 1 = is not ancestor
+            await RunGitAsync(repoPath,
+                ["merge-base", "--is-ancestor", $"origin/{potentialAncestor}", $"origin/{descendant}"],
+                cancellationToken);
+            return true;
+        }
+        catch (GitOperationException ex) when (ex.ExitCode == 1)
+        {
+            return false;
+        }
+    }
+
+    public async Task DeleteRemoteBranchAsync(
+        string repoPath, string branchName, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("Deleting remote branch {Branch}", branchName);
+        await RunGitAsync(repoPath,
+            ["push", "origin", "--delete", branchName], cancellationToken, timeoutSeconds: 60);
+    }
+
+    public async Task<MergeStatus> MergeNoFfAsync(
+        string repoPath, string sourceBranch, string message,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (_, stdout, _) = await RunGitAsync(repoPath,
+                ["merge", "--no-ff", sourceBranch, "-m", message], cancellationToken);
+
+            if (stdout.Contains("Already up to date"))
+                return MergeStatus.AlreadyUpToDate;
+
+            return MergeStatus.Merged;
+        }
+        catch (GitOperationException ex) when (ex.ExitCode == 1)
+        {
+            return MergeStatus.Conflict;
+        }
+    }
+
+    public async Task AbortMergeAsync(string repoPath, CancellationToken cancellationToken)
+    {
+        await RunGitAsync(repoPath, ["merge", "--abort"], cancellationToken);
+    }
+
+    public async Task<PushStatus> PushRefAsync(
+        string repoPath, string localRef, string remoteRef,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RunGitAsync(repoPath,
+                ["push", "origin", $"{localRef}:{remoteRef}"], cancellationToken, timeoutSeconds: 60);
+            return PushStatus.Success;
+        }
+        catch (GitOperationException ex) when (
+            ex.Message.Contains("non-fast-forward", StringComparison.OrdinalIgnoreCase) ||
+            ex.Message.Contains("rejected", StringComparison.OrdinalIgnoreCase) ||
+            ex.Message.Contains("fetch first", StringComparison.OrdinalIgnoreCase))
+        {
+            return PushStatus.NonFastForward;
+        }
+    }
+
     // ── Common git operations ────────────────────────────────────────
 
     public async Task CommitAsync(
@@ -328,6 +430,10 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
         return (process.ExitCode, stdout, stderr);
     }
 }
+
+public enum MergeStatus { Merged, Conflict, AlreadyUpToDate }
+
+public enum PushStatus { Success, NonFastForward }
 
 public sealed class GitOperationException(string message, int exitCode)
     : Exception(message)

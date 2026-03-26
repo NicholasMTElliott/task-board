@@ -16,7 +16,7 @@ public static class CardSelector
             var card = cards[i];
             if (!workflowConfig.States.TryGetValue(card.ColumnId, out var state))
                 continue;
-            if (!string.Equals(state.GateType, "agent_run", StringComparison.OrdinalIgnoreCase))
+            if (state.GateType is not ("agent_run" or "system_merge"))
                 continue;
 
             eligible.Add((card, state, i));

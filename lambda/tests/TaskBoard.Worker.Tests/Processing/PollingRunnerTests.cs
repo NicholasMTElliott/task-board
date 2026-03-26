@@ -77,9 +77,16 @@ public class PollingRunnerTests
             new StubCrossReferenceResolver(),
             NullLogger<AgentRunner>.Instance);
 
+        var mergeRunner = new MergeRunner(
+            boardClient,
+            new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
+            TestConfig,
+            NullLogger<MergeRunner>.Instance);
+
         var pollingRunner = new PollingRunner(
             boardClient,
             agentRunner,
+            mergeRunner,
             TestConfig,
             NullLogger<PollingRunner>.Instance);
 
@@ -113,9 +120,16 @@ public class PollingRunnerTests
             new StubCrossReferenceResolver(),
             NullLogger<AgentRunner>.Instance);
 
+        var mergeRunner = new MergeRunner(
+            boardClient,
+            new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
+            TestConfig,
+            NullLogger<MergeRunner>.Instance);
+
         var pollingRunner = new PollingRunner(
             boardClient,
             agentRunner,
+            mergeRunner,
             TestConfig,
             NullLogger<PollingRunner>.Instance);
 
@@ -155,9 +169,16 @@ public class PollingRunnerTests
             new StubCrossReferenceResolver(),
             NullLogger<AgentRunner>.Instance);
 
+        var mergeRunner = new MergeRunner(
+            boardClient,
+            new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
+            TestConfig,
+            NullLogger<MergeRunner>.Instance);
+
         var pollingRunner = new PollingRunner(
             boardClient,
             agentRunner,
+            mergeRunner,
             TestConfig,
             NullLogger<PollingRunner>.Instance);
 

@@ -87,17 +87,17 @@ public static class WorkflowConfigValidator
 
     private static void ValidatePollingConfig(WorkflowConfig config, List<string> errors)
     {
-        var agentRunStates = config.States
-            .Where(kvp => string.Equals(kvp.Value.GateType, "agent_run", StringComparison.OrdinalIgnoreCase))
+        var runnableStates = config.States
+            .Where(kvp => kvp.Value.GateType is "agent_run" or "system_merge")
             .ToList();
 
-        foreach (var (stateId, state) in agentRunStates)
+        foreach (var (stateId, state) in runnableStates)
         {
             if (state.PipelineOrder <= 0)
-                errors.Add($"State '{stateId}' ({state.Name}) is agent_run but has no pipelineOrder (must be > 0 for polling mode).");
+                errors.Add($"State '{stateId}' ({state.Name}) is {state.GateType} but has no pipelineOrder (must be > 0 for polling mode).");
         }
 
-        var duplicateOrders = agentRunStates
+        var duplicateOrders = runnableStates
             .Where(kvp => kvp.Value.PipelineOrder > 0)
             .GroupBy(kvp => kvp.Value.PipelineOrder)
             .Where(g => g.Count() > 1)
@@ -106,7 +106,7 @@ public static class WorkflowConfigValidator
         foreach (var group in duplicateOrders)
         {
             var names = string.Join(", ", group.Select(kvp => $"'{kvp.Key}'"));
-            errors.Add($"Duplicate pipelineOrder {group.Key} on agent_run states: {names}.");
+            errors.Add($"Duplicate pipelineOrder {group.Key} on runnable states: {names}.");
         }
 
         if (config.Polling is not null)
