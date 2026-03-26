@@ -38,6 +38,30 @@ public class CardSelectorTests
             Polling: polling);
     }
 
+    private static WorkflowConfig MakeConfigWithMerge()
+    {
+        var baseConfig = MakeConfig();
+        var states = new Dictionary<string, WorkflowState>(baseConfig.States)
+        {
+            ["Accepted"] = new("Accepted", null, "system_merge",
+                null, new Dictionary<string, string>
+                {
+                    ["IN_PROGRESS"] = "Merging",
+                    ["COMPLETE"] = "Done",
+                    ["ERROR"] = "Error",
+                },
+                PipelineOrder: 4),
+            ["Merging"] = new("Merging", null, "in_progress",
+                null, new Dictionary<string, string>()),
+            ["Done"] = new("Done", null, "terminal",
+                null, new Dictionary<string, string>()),
+        };
+        // Change Tested from terminal to manual_gate
+        states["Tested"] = new("Tested", null, "manual_gate",
+            null, new Dictionary<string, string>());
+        return new WorkflowConfig(states, baseConfig.Roles, baseConfig.Polling);
+    }
+
     private static BoardCard Card(string id, string column,
         IReadOnlyDictionary<string, string>? metadata = null)
         => new(id, $"Card {id}", "body", column, metadata);
@@ -293,6 +317,39 @@ public class CardSelectorTests
 
         Assert.NotNull(result);
         Assert.Equal("8", result.Id); // Same stage as 7, but P0 > P1
+    }
+
+    // --- system_merge eligibility ---
+
+    [Fact]
+    public void SystemMergeCard_IsEligibleForSelection()
+    {
+        var config = MakeConfigWithMerge();
+        var cards = new List<BoardCard>
+        {
+            Card("1", "Accepted"),
+        };
+
+        var result = CardSelector.SelectNext(cards, config);
+
+        Assert.NotNull(result);
+        Assert.Equal("1", result.Id);
+    }
+
+    [Fact]
+    public void SystemMergeCard_HigherPipelineOrder_SelectedOverAgentRun()
+    {
+        var config = MakeConfigWithMerge();
+        var cards = new List<BoardCard>
+        {
+            Card("5", "Ready for Test"),      // agent_run, pipelineOrder=3
+            Card("1", "Accepted"),            // system_merge, pipelineOrder=4
+        };
+
+        var result = CardSelector.SelectNext(cards, config);
+
+        Assert.NotNull(result);
+        Assert.Equal("1", result.Id); // pipelineOrder 4 > 3
     }
 
     // --- Card in unknown column ---
