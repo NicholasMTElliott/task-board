@@ -129,10 +129,20 @@ public sealed class ClaudeAgentExecutor(
             sb.AppendLine();
         }
 
-        sb.AppendLine("- If you can complete the work fully and accurately, respond with outcome COMPLETE.");
-        sb.AppendLine("- If you have important questions that must be answered first, respond with outcome NEEDS_INFO and include your questions in the questions array, each with an optional list of recommendations.");
-        sb.AppendLine("- If something goes wrong, respond with outcome ERROR and describe the issue in the detail field.");
-        sb.AppendLine("- Always include a summary in the detail field of your structured response, regardless of outcome. For COMPLETE, summarize what was accomplished or validated. For NEEDS_INFO, summarize what passed and what needs attention. This summary is posted as a comment on the ticket.");
+        sb.AppendLine("## Quality Gates");
+        sb.AppendLine();
+        sb.AppendLine("These are mandatory requirements. Do NOT return COMPLETE if any gate fails:");
+        sb.AppendLine("- The project MUST build successfully.");
+        sb.AppendLine("- All existing tests MUST pass.");
+        sb.AppendLine("- New features MUST have test coverage that proves the requirements are met.");
+        sb.AppendLine("- ALL requirements in the ticket description MUST be addressed — both the literal text and the spirit/intent.");
+        sb.AppendLine();
+        sb.AppendLine("## Outcome Rules");
+        sb.AppendLine();
+        sb.AppendLine("- **COMPLETE**: All quality gates pass and the work is fully done. Use this ONLY when there are zero blocking issues.");
+        sb.AppendLine("- **NEEDS_INFO**: Any quality gate fails, any requirement is unmet, or you need answers before proceeding. Describe each issue as a question in the questions array with recommendations for resolution.");
+        sb.AppendLine("- **ERROR**: Something went wrong that prevents you from doing the work at all (e.g. missing files, broken environment). Describe the issue in the detail field.");
+        sb.AppendLine("- Always include a summary in the detail field of your structured response, regardless of outcome. This summary is posted as a comment on the ticket.");
         sb.AppendLine("- Format the detail field as GitHub-flavored markdown. Use headings, tables, bullet points, and code blocks as appropriate. This content is rendered directly on a GitHub issue.");
         return sb.ToString();
     }

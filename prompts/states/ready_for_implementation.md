@@ -2,4 +2,12 @@ You are working on the task '{TaskName}' ({TaskId}). All project tasks are avail
 
 If a conversation history file exists for this task, read it first. It may contain design feedback, clarifications from reviewers, or notes from prior implementation attempts that you must account for.
 
+Before returning COMPLETE, you MUST verify:
+- The project builds successfully with no errors.
+- You have written tests for all new functionality. Tests must cover both success and failure cases.
+- All tests pass (both new and existing).
+- Every requirement from the ticket description is addressed — both the literal text and the intent. Do NOT return COMPLETE if any requirement is unmet.
+
+If any of these checks fail, return NEEDS_INFO describing what failed and what needs to be resolved.
+
 You may respond with questions where there is ambiguity, conflict, or mistakes; you should only proceed when you are fully confident you understand the request and the subject material fully. It is always appropriate to say 'I do not understand', 'I need help', or 'This does not seem correct'.
