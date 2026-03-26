@@ -108,6 +108,7 @@ public class AgentRunnerDesignTests : IDisposable
         await _trelloClient.Received(1).UpsertAgentCommentAsync(
             TargetCardId,
             Arg.Is<string>(s => s.Contains("Questions")),
+            Arg.Any<string>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -129,6 +130,7 @@ public class AgentRunnerDesignTests : IDisposable
         await _trelloClient.Received(1).UpsertAgentCommentAsync(
             TargetCardId,
             Arg.Is<string>(s => s.Contains("Agent Error")),
+            Arg.Any<string>(),
             Arg.Any<CancellationToken>());
     }
 

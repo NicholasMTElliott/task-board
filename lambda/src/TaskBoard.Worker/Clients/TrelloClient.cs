@@ -63,9 +63,9 @@ public sealed class TrelloClient(
         _logger.LogInformation("Moved card {CardId} to list {ListId}", cardId, columnId);
     }
 
-    public async Task UpsertAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken)
+    public async Task UpsertAgentCommentAsync(string cardId, string commentBody, string commentMarker, CancellationToken cancellationToken)
     {
-        var markedBody = $"{_options.AgentCommentMarker}\n{commentBody}";
+        var markedBody = $"{commentMarker}\n{commentBody}";
 
         // Search for existing agent comment
         var searchUrl = AppendAuth($"/1/cards/{cardId}/actions?filter=commentCard");
@@ -73,7 +73,7 @@ public sealed class TrelloClient(
         await EnsureSuccessOrThrow(searchResponse, "SearchComments", cardId);
 
         var searchJson = await searchResponse.Content.ReadAsStringAsync(cancellationToken);
-        var existingCommentId = FindAgentCommentId(searchJson);
+        var existingCommentId = FindAgentCommentId(searchJson, commentMarker);
 
         if (existingCommentId is not null)
         {
@@ -133,7 +133,7 @@ public sealed class TrelloClient(
     private static BoardCard ToBoardCard(TrelloCard card)
         => new(card.Id, card.Name, card.Desc, card.IdList);
 
-    private string? FindAgentCommentId(string actionsJson)
+    private string? FindAgentCommentId(string actionsJson, string commentMarker)
     {
         try
         {
@@ -144,7 +144,7 @@ public sealed class TrelloClient(
                     && data.TryGetProperty("text", out var text))
                 {
                     var textValue = text.GetString();
-                    if (textValue is not null && textValue.Contains(_options.AgentCommentMarker, StringComparison.Ordinal))
+                    if (textValue is not null && textValue.Contains(commentMarker, StringComparison.Ordinal))
                     {
                         if (action.TryGetProperty("id", out var id))
                         {

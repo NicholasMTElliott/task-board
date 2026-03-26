@@ -33,10 +33,10 @@ Selection via `WORKFLOW_CONFIG_PATH` env var. Defaults to `workflow.v1.json` in 
 ### AI
 | Layer | Technology | Notes |
 |-------|------------|-------|
-| Agent executor (primary) | Claude CLI subprocess | Via `ClaudeAgentExecutor`; uses `--json-schema` for structured output |
-| LLM provider (legacy) | OpenAI / Anthropic HTTP | Via `ILlmClient` implementations; used by legacy Orchestrator path |
+| Agent executor (primary) | Claude CLI subprocess | Via `ClaudeAgentExecutor`; `--output-format stream-json` + `--json-schema` |
 
 Agent executor selection via `AGENT_EXECUTOR` env var: `claude-cli` or `stub`.
+Legacy LLM providers (OpenAI HTTP, Anthropic HTTP, Cline CLI) are being removed — only Claude CLI subprocess is active.
 
 ### External APIs
 | API | Purpose |
@@ -107,5 +107,5 @@ Config via env vars: `GitHubProjects__Owner`, `GitHubProjects__Repo`, `GitHubPro
 - [ ] Webhook/event-driven triggers (currently manual CLI invocation only)
 - [ ] .NET Lambda deployment model (native AOT vs. standard managed runtime)
 - [ ] IaC toolchain (Terraform vs. SAM vs. CDK)
-- [ ] Model selection per role (currently claude-sonnet-4-6 for all)
+- [x] Model selection per role (currently claude-opus-4-6 for both senior_engineer and qa)
 - [ ] Max retry and dead-letter policy for queue backend

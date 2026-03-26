@@ -9,6 +9,4 @@ public sealed class TrelloClientOptions
     public string ApiToken { get; init; } = string.Empty;
 
     public string BaseUrl { get; init; } = "https://api.trello.com";
-
-    public string AgentCommentMarker { get; init; } = "<!-- agent-status -->";
 }

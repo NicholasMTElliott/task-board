@@ -263,7 +263,7 @@ public class AgentRunnerTests : IDisposable
 
         // Verify comment was posted
         await _trelloClient.Received(1).UpsertAgentCommentAsync(
-            TargetCardId, Arg.Is<string>(s => s.Contains("Agent Complete")), Arg.Any<CancellationToken>());
+            TargetCardId, Arg.Is<string>(s => s.Contains("Agent Complete")), Arg.Any<string>(), Arg.Any<CancellationToken>());
 
         // Verify card was moved to COMPLETE column
         await _trelloClient.Received().MoveCardToColumnAsync(

@@ -148,9 +148,9 @@ public sealed class GitHubProjectsClient(
         logger.LogInformation("Moved issue {IssueNumber} to status {Status}", cardId, columnId);
     }
 
-    public async Task UpsertAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken)
+    public async Task UpsertAgentCommentAsync(string cardId, string commentBody, string commentMarker, CancellationToken cancellationToken)
     {
-        var markedBody = $"{_options.CommentMarker}\n{commentBody}";
+        var markedBody = $"{commentMarker}\n{commentBody}";
 
         // List existing comments and find one with our marker
         var commentsJson = await RunGhAsync(
@@ -164,7 +164,7 @@ public sealed class GitHubProjectsClient(
         foreach (var comment in comments.EnumerateArray())
         {
             var body = comment.TryGetProperty("body", out var bodyProp) ? bodyProp.GetString() : null;
-            if (body is not null && body.Contains(_options.CommentMarker, StringComparison.Ordinal))
+            if (body is not null && body.Contains(commentMarker, StringComparison.Ordinal))
             {
                 existingCommentUrl = comment.TryGetProperty("url", out var urlProp)
                     ? urlProp.GetString()

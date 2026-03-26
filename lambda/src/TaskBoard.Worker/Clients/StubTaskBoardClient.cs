@@ -35,7 +35,7 @@ public sealed class StubTaskBoardClient(ILogger<StubTaskBoardClient> logger) : I
         return Task.CompletedTask;
     }
 
-    public Task UpsertAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken)
+    public Task UpsertAgentCommentAsync(string cardId, string commentBody, string commentMarker, CancellationToken cancellationToken)
     {
         logger.LogInformation("[Stub] UpsertComment {CardId} ({Length} chars)", cardId, commentBody.Length);
         return Task.CompletedTask;

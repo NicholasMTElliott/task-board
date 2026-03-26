@@ -23,8 +23,10 @@ public sealed partial class AgentRunner(
     public async Task<AgentRunResult> ExecuteAsync(
         string cardId, string boardId, string workspacePath, CancellationToken cancellationToken)
     {
-        logger.LogInformation("Starting agent run for card {CardId} in workspace {Workspace}",
-            cardId, workspacePath);
+        var runId = $"run-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Random.Shared.Next(0x10000):x4}";
+        var runMarker = $"<!-- agent-run:{runId} -->";
+        logger.LogInformation("Starting agent run {RunId} for card {CardId} in workspace {Workspace}",
+            runId, cardId, workspacePath);
 
         // 1. Fetch all board cards
         var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken);
@@ -115,7 +117,7 @@ public sealed partial class AgentRunner(
 
             // 9. Post-process: update card on board, add comment, move to next state
             var commentPrefix = BuildCommentPrefix(state, workflowConfig);
-            await PostProcessAsync(targetCard, state, agentResult, worktreePath, branchName, gitNote, commentPrefix, cancellationToken);
+            await PostProcessAsync(targetCard, state, agentResult, worktreePath, branchName, gitNote, commentPrefix, runMarker, cancellationToken);
 
             // 10. Cleanup worktree for discard stages
             if (gitBehavior == "discard")
@@ -165,7 +167,7 @@ public sealed partial class AgentRunner(
                 var errorResult = new AgentResult(AgentOutcome.ERROR, ex.Message);
                 var errorPrefix = BuildCommentPrefix(state, workflowConfig);
                 var comment = $"{errorPrefix}\n\n{FormatComment(errorResult)}";
-                await boardClient.UpsertAgentCommentAsync(cardId, comment, cancellationToken);
+                await boardClient.UpsertAgentCommentAsync(cardId, comment, runMarker, cancellationToken);
 
                 if (state.Transitions.TryGetValue("ERROR", out var errorColumnId))
                 {
@@ -302,6 +304,7 @@ public sealed partial class AgentRunner(
         string branchName,
         string? gitNote,
         string commentPrefix,
+        string runMarker,
         CancellationToken cancellationToken)
     {
         // 9a. Read back the task file to detect agent changes to card content
@@ -320,7 +323,7 @@ public sealed partial class AgentRunner(
 
         // 9b. Format and post comment (with optional git note and role/state prefix)
         var comment = $"{commentPrefix}\n\n{FormatComment(agentResult, gitNote)}";
-        await boardClient.UpsertAgentCommentAsync(originalCard.Id, comment, cancellationToken);
+        await boardClient.UpsertAgentCommentAsync(originalCard.Id, comment, runMarker, cancellationToken);
         logger.LogInformation("Posted agent comment for {CardId}", originalCard.Id);
 
         // 9c. Move card to next state per transitions

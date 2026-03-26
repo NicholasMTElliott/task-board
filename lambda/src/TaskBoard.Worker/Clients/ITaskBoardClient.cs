@@ -10,7 +10,7 @@ public interface ITaskBoardClient
     Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken);
     Task UpdateCardBodyAsync(string cardId, string body, CancellationToken cancellationToken);
     Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken cancellationToken);
-    Task UpsertAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken);
+    Task UpsertAgentCommentAsync(string cardId, string commentBody, string commentMarker, CancellationToken cancellationToken);
     Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken);
 }
 

@@ -156,7 +156,7 @@ Agents update only their designated sections.
 One "Agent Status" comment per run — upserted, not appended. Prevents notification spam.
 
 ### Claude CLI Subprocess Pattern
-The .NET worker can invoke the Claude CLI (`claude`) as a subprocess via `ClaudeCliLlmClient`.
+The .NET worker invokes the Claude CLI (`claude`) as a subprocess via `ClaudeAgentExecutor`.
 
 **Windows invocation:**
 - Set `startInfo.FileName = "claude.cmd"` directly with `ArgumentList`
@@ -166,21 +166,29 @@ The .NET worker can invoke the Claude CLI (`claude`) as a subprocess via `Claude
 - **No double quotes in prompts:** Prompt templates must not contain `"` characters. Use plain text or single quotes instead. Double quotes in `-p` or `--system-prompt` values trigger `cmd.exe` quote-state mangling.
 
 **CLI flags (required for structured output):**
-- `--output-format json` — returns JSON envelope with `result` and `structured_output` fields
+- `--verbose --output-format stream-json` — NDJSON output, one JSON object per line; `--verbose` is required with `stream-json` in print mode
+- `--no-session-persistence` — prevents session reuse between runs
 - `--json-schema <minified-json>` — schema must be single-line (minified); produces `structured_output` object in response
 - `--max-budget-usd` — cost control per invocation (preferred over `--max-turns`)
 - `--permission-mode bypassPermissions --allowedTools *` — headless execution without permission prompts
 - Do NOT use `--max-turns` — causes premature termination before structured output is produced
 
-**Prompt constraints:**
-- Prompts passed as CLI arguments must not contain literal newlines — escape them as `\\n`
-- Schema instruction in system prompt is redundant when `--json-schema` is used (the CLI handles structured output natively)
+**Provider-specific params:**
+- Workflow config supports `providerParams` per state (e.g., `{"effort": "max"}` for Claude CLI `--effort` flag)
+- Passed through `AgentExecutionContext.ProviderParams` and applied in `BuildArgumentList`
 
-**Output parsing (`ParseResult`):**
-- Primary path: parse `structured_output` object from JSON envelope → extract `outcome`, `detail`, `questions`
-- Fallback: parse `result` string field, stripping markdown fences if present
-- Last resort: treat raw stdout as content, strip markdown fences
-- Returns `AgentResult` record with typed `Outcome`, `Detail`, and `Questions` list
+**Prompt constraints:**
+- System prompt delivered via `--append-system-prompt-file` (file path, not inline)
+- Task prompt delivered via stdin (`RedirectStandardInput`), not `-p` flag
+- Schema instruction in system prompt is redundant when `--json-schema` is used
+- Agent is instructed to format `detail` field as GitHub-flavored markdown for rendering on issues
+
+**Output parsing (NDJSON `ParseStreamOutput` → `ParseResult`):**
+- NDJSON stream may contain **multiple `type: "result"` messages** (e.g., if Claude CLI auto-continues after a tool failure)
+- Parser finds the result message that contains `structured_output` — prefers that over others
+- If multiple result messages have `structured_output`, logs a warning and uses the first
+- Conversation log is assembled from `type: "assistant"` messages (text content blocks)
+- `AgentResult` record carries: `Outcome`, `Detail`, `Questions`, `ConversationLog`
 
 **Timeout observability:**
 - Use event-based capture (`OutputDataReceived`/`ErrorDataReceived` + `StringBuilder`) instead of `ReadToEndAsync`
@@ -215,7 +223,10 @@ Schema:
       "name": "<display_name>",
       "role": "<role_key>",
       "gateType": "agent_run | manual_gate | manual_entry | in_progress | holding | terminal",
-      "taskPrompt": "<prompt with {TaskName} {TaskId} placeholders>",
+      "taskPrompt": "<inline prompt>",
+      "taskPromptFile": "<path relative to repo root>",
+      "gitBehavior": "discard | commit_only | commit_and_push",
+      "providerParams": { "<key>": "<value>" },
       "transitions": {
         "IN_PROGRESS": "<in_progress_column>",
         "COMPLETE": "<next_column>",
@@ -226,13 +237,17 @@ Schema:
   },
   "roles": {
     "<role_key>": {
-      "model": "claude-sonnet-4-6",
-      "systemPrompt": "...",
+      "model": "claude-opus-4-6",
+      "systemPromptFile": "<path relative to repo root>",
       "sections": ["Technical Design", "Decisions"]
     }
   }
 }
 ```
+
+- `taskPromptFile` takes precedence over `taskPrompt` (inline fallback preserved)
+- `systemPromptFile` takes precedence over `systemPrompt` (inline written to temp file as fallback)
+- `providerParams` are passed to the agent executor as key-value pairs (e.g., `{"effort": "max"}` for Claude CLI)
 
 State keys are **column names** for GitHub Projects (status option names) or **list IDs** for Trello.
 

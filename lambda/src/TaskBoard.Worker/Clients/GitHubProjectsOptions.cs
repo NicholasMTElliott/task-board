@@ -10,9 +10,6 @@ public sealed class GitHubProjectsOptions
     /// <summary>Repository in "owner/repo" format for issue operations.</summary>
     public string Repo { get; init; } = "";
 
-    /// <summary>HTML comment marker used to identify agent comments for upsert.</summary>
-    public string CommentMarker { get; init; } = "<!-- agent-status -->";
-
     /// <summary>Project number (the number in the project URL, e.g. "1").</summary>
     public string ProjectNumber { get; init; } = "";
 

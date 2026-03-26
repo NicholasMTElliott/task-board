@@ -8,11 +8,12 @@ namespace TaskBoard.Worker.Tests;
 
 public class TrelloClientTests
 {
+    private const string TestMarker = "<!-- agent-run:test-run-1 -->";
+
     private static readonly TrelloClientOptions DefaultOptions = new()
     {
         ApiKey = "test-key",
-        ApiToken = "test-token",
-        AgentCommentMarker = "<!-- agent-status -->"
+        ApiToken = "test-token"
     };
 
     private static (ITaskBoardClient Client, MockHttpMessageHandler Handler) CreateSut(TrelloClientOptions? options = null)
@@ -130,7 +131,7 @@ public class TrelloClientTests
         // POST new comment
         handler.EnqueueResponse(HttpStatusCode.OK, "{}");
 
-        await sut.UpsertAgentCommentAsync("c1", "Agent summary here", CancellationToken.None);
+        await sut.UpsertAgentCommentAsync("c1", "Agent summary here", TestMarker, CancellationToken.None);
 
         Assert.Equal(2, handler.SentRequests.Count);
 
@@ -146,7 +147,7 @@ public class TrelloClientTests
         Assert.Contains("/1/cards/c1/actions/comments", postRequest.RequestUri!.ToString());
 
         var body = handler.RequestBodies[1];
-        Assert.Contains("agent-status", body);
+        Assert.Contains("agent-run%3Atest-run-1", body);
         Assert.Contains("Agent+summary+here", body);
     }
 
@@ -158,14 +159,14 @@ public class TrelloClientTests
         // GET comments — one with marker
         handler.EnqueueResponse(HttpStatusCode.OK, """
             [
-                {"id":"action-123","data":{"text":"<!-- agent-status -->\nOld summary"}},
+                {"id":"action-123","data":{"text":"<!-- agent-run:test-run-1 -->\nOld summary"}},
                 {"id":"action-456","data":{"text":"A normal comment"}}
             ]
             """);
         // PUT update
         handler.EnqueueResponse(HttpStatusCode.OK, "{}");
 
-        await sut.UpsertAgentCommentAsync("c1", "Updated summary", CancellationToken.None);
+        await sut.UpsertAgentCommentAsync("c1", "Updated summary", TestMarker, CancellationToken.None);
 
         Assert.Equal(2, handler.SentRequests.Count);
 
@@ -175,7 +176,7 @@ public class TrelloClientTests
         Assert.Contains("/1/actions/action-123/text", putRequest.RequestUri!.ToString());
 
         var body = handler.RequestBodies[1];
-        Assert.Contains("agent-status", body);
+        Assert.Contains("agent-run%3Atest-run-1", body);
         Assert.Contains("Updated+summary", body);
     }
 
@@ -186,7 +187,7 @@ public class TrelloClientTests
         handler.EnqueueResponse(HttpStatusCode.InternalServerError, "server error");
 
         var ex = await Assert.ThrowsAsync<TrelloApiException>(
-            () => sut.UpsertAgentCommentAsync("c1", "comment", CancellationToken.None));
+            () => sut.UpsertAgentCommentAsync("c1", "comment", TestMarker, CancellationToken.None));
 
         Assert.Equal("SearchComments", ex.Operation);
         Assert.Equal(HttpStatusCode.InternalServerError, ex.StatusCode);

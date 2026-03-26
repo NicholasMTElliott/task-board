@@ -12,7 +12,7 @@ Manual ticket management is repetitive: drafting technical designs, generating t
 ## How It Should Work (Operator Perspective)
 1. Operator creates an issue and adds it to the project board in **Backlog**.
 2. Operator writes requirements/scope/context and moves card to **Ready for Design**.
-3. Operator runs the CLI: `dotnet run -- --mode agent --card-id {N} --board-id 1 --workspace .`
+3. Operator runs: `.\scripts\run_once.ps1 -CardId {N}` (sets env vars and invokes dotnet)
 4. Senior Engineer agent moves card to **Designing**, produces Technical Design, moves to **Designed**.
 5. Operator reviews design, approves by moving to **Ready for Implementation**.
 6. Operator runs CLI again. Senior Engineer agent moves to **Implementing**, writes code, moves to **Ready for Test**.
