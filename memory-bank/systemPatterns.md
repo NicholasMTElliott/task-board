@@ -121,7 +121,8 @@ Fallback semantics (if PGMQ fails on Neon):
 Agent execution uses git worktrees for isolated working directories:
 - `GitWorkspaceManager.CreateWorktreeAsync(repoPath, branchName)` → returns worktree path
 - Convention: `{repoPath}-worktrees/aiboard/{cardId}`
-- Edge cases handled: worktree already exists (reuse), branch already exists (attach without `-b`), stale directory (prune + recreate)
+- Edge cases handled: worktree already exists (reuse), branch already exists locally or on remote (fetch + track), stale directory (prune + recreate)
+- Branch lookup: `FindBranchByPrefixAsync` checks local then remote refs; if found only on remote, fetches and creates a local tracking branch before creating the worktree
 - `.aiboard/` task files are gitignored and ephemeral — not committed to git
 - `CommitAsync` uses `git add .` (respects `.gitignore`) with `HasStagedChangesAsync` check before committing
 - Main repo working tree is never modified during agent execution
