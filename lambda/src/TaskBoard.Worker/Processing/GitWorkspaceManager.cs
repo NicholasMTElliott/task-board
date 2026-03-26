@@ -40,12 +40,21 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
         // Ensure parent directory exists
         Directory.CreateDirectory(Path.GetDirectoryName(fullWorktreePath)!);
 
-        var branchExists = await BranchExistsAsync(repoPath, branchName, cancellationToken);
+        var branchExistsLocally = await BranchExistsAsync(repoPath, branchName, cancellationToken);
+        var branchExistsOnRemote = !branchExistsLocally
+            && await RemoteBranchExistsAsync(repoPath, branchName, cancellationToken);
 
-        if (branchExists)
+        if (branchExistsLocally)
         {
-            logger.LogInformation("Creating worktree at {Path} for existing branch {Branch}", fullWorktreePath, branchName);
+            logger.LogInformation("Creating worktree at {Path} for existing local branch {Branch}", fullWorktreePath, branchName);
             await RunGitAsync(repoPath, ["worktree", "add", fullWorktreePath, branchName], cancellationToken);
+        }
+        else if (branchExistsOnRemote)
+        {
+            // Create local tracking branch from remote in one step
+            logger.LogInformation("Creating worktree at {Path} tracking remote branch {Branch}", fullWorktreePath, branchName);
+            await RunGitAsync(repoPath,
+                ["worktree", "add", fullWorktreePath, "-b", branchName, $"origin/{branchName}"], cancellationToken);
         }
         else
         {
@@ -94,14 +103,32 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
 
     /// <summary>
     /// Finds an existing branch matching the card ID prefix pattern.
-    /// Checks for slugged branches (aiboard/{cardId}-*) and legacy branches (aiboard/{cardId}).
+    /// Checks local branches first, then fetches and checks remote branches.
     /// Returns the branch name if found, null otherwise.
     /// </summary>
     public async Task<string?> FindBranchByPrefixAsync(
         string repoPath, string cardId, CancellationToken cancellationToken)
     {
-        // Check for slugged branch: aiboard/{cardId}-*
+        // Check local slugged branch: aiboard/{cardId}-*
         // Trailing hyphen prevents aiboard/2-* matching aiboard/20-*
+        var localBranch = await FindLocalBranchAsync(repoPath, cardId, cancellationToken);
+        if (localBranch is not null)
+            return localBranch;
+
+        // Fetch remote refs and check for remote-only branches
+        var remoteBranch = await FindRemoteBranchAsync(repoPath, cardId, cancellationToken);
+        if (remoteBranch is not null)
+        {
+            logger.LogInformation("Found remote-only branch {Branch} for card {CardId}", remoteBranch, cardId);
+            return remoteBranch;
+        }
+
+        return null;
+    }
+
+    private async Task<string?> FindLocalBranchAsync(
+        string repoPath, string cardId, CancellationToken cancellationToken)
+    {
         var (_, sluggedOutput, _) = await RunGitAsync(
             repoPath, ["branch", "--list", $"aiboard/{cardId}-*"], cancellationToken);
 
@@ -116,6 +143,40 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
         // Check for legacy exact branch: aiboard/{cardId}
         if (await BranchExistsAsync(repoPath, $"aiboard/{cardId}", cancellationToken))
             return $"aiboard/{cardId}";
+
+        return null;
+    }
+
+    private async Task<string?> FindRemoteBranchAsync(
+        string repoPath, string cardId, CancellationToken cancellationToken)
+    {
+        // Fetch latest remote refs
+        try
+        {
+            await RunGitAsync(repoPath, ["fetch", "origin"], cancellationToken, timeoutSeconds: 60);
+        }
+        catch (GitOperationException ex)
+        {
+            logger.LogWarning(ex, "Failed to fetch from origin — skipping remote branch check");
+            return null;
+        }
+
+        // Check for remote slugged branch: origin/aiboard/{cardId}-*
+        var (_, remoteOutput, _) = await RunGitAsync(
+            repoPath, ["branch", "-r", "--list", $"origin/aiboard/{cardId}-*"], cancellationToken);
+
+        var remoteBranch = remoteOutput
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim('*', '+', ' ', '\r', '\t'))
+            .FirstOrDefault(b => !string.IsNullOrWhiteSpace(b));
+
+        if (remoteBranch is not null)
+        {
+            // Strip "origin/" prefix to return the local branch name
+            return remoteBranch.StartsWith("origin/", StringComparison.Ordinal)
+                ? remoteBranch["origin/".Length..]
+                : remoteBranch;
+        }
 
         return null;
     }
@@ -143,6 +204,14 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
         string repoPath, string branchName, CancellationToken cancellationToken)
     {
         var (_, stdout, _) = await RunGitAsync(repoPath, ["branch", "--list", branchName], cancellationToken);
+        return !string.IsNullOrWhiteSpace(stdout);
+    }
+
+    internal async Task<bool> RemoteBranchExistsAsync(
+        string repoPath, string branchName, CancellationToken cancellationToken)
+    {
+        var (_, stdout, _) = await RunGitAsync(
+            repoPath, ["branch", "-r", "--list", $"origin/{branchName}"], cancellationToken);
         return !string.IsNullOrWhiteSpace(stdout);
     }
 
