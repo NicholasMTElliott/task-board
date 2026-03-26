@@ -87,6 +87,15 @@ public sealed class GitHubProjectsClient(
                 metadata["projectItemId"] = itemIdProp.GetString() ?? "";
             }
 
+            // Parse additional custom fields (e.g., Priority) into metadata
+            foreach (var prop in item.EnumerateObject())
+            {
+                if (prop.Name is "id" or "content" or "status")
+                    continue;
+                if (prop.Value.ValueKind == JsonValueKind.String)
+                    metadata[prop.Name] = prop.Value.GetString() ?? "";
+            }
+
             cards.Add(new BoardCard(id, title, body, columnId, metadata));
         }
 

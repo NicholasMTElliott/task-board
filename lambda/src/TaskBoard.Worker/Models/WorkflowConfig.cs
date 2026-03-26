@@ -2,7 +2,8 @@ namespace TaskBoard.Worker.Models;
 
 public sealed record WorkflowConfig(
     Dictionary<string, WorkflowState> States,
-    Dictionary<string, WorkflowRole> Roles);
+    Dictionary<string, WorkflowRole> Roles,
+    PollingConfig? Polling = null);
 
 public sealed record WorkflowState(
     string Name,
@@ -13,10 +14,15 @@ public sealed record WorkflowState(
     string? GitBehavior = null,
     string? TaskPromptFile = null,
     Dictionary<string, string>? ProviderParams = null,
-    bool IncludeInAgentContext = false);
+    bool IncludeInAgentContext = false,
+    int PipelineOrder = 0);
 
 public sealed record WorkflowRole(
     string Model,
     string SystemPrompt,
     List<string> Sections,
     string? SystemPromptFile = null);
+
+public sealed record PollingConfig(
+    string? PriorityFieldName = null,
+    List<string>? PriorityOrder = null);
