@@ -2,6 +2,15 @@ You are working on the task '{TaskName}' ({TaskId}). All project tasks are avail
 
 If a conversation history file exists for this task, read it first. It may contain answers to previously asked questions, human feedback on prior design attempts, or clarifications that must be incorporated into your design.
 
+## Review related tasks
+
+Before designing, scan other task files in /.aiboard/tasks/ for related work. Look for:
+- Tasks this one depends on or extends — shared components, APIs, data models, or infrastructure.
+- Tasks with overlapping scope that could conflict with or duplicate this design.
+- Prior design decisions on related tasks that constrain or inform this one.
+
+When your design depends on, extends, or is significantly affected by another card, add a reference to it in the task file using the card number (e.g., #5, #12). This creates a tracked relationship so that future phases (implementation, testing) will automatically pull that card's context into the agent's workspace. Only reference cards where the relationship is meaningful — not every card that happens to exist.
+
 Your design MUST:
 - Address every requirement in the ticket description — both the literal text and the intent behind it. If a requirement is ambiguous, ask rather than assume.
 - Include a testing strategy: what tests should be written, what they should cover, and how they prove the requirements are met.
