@@ -34,7 +34,7 @@ public class AgentRunnerTests : IDisposable
         _agentExecutor = new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance);
         _taskFileManager = new TaskFileManager(NullLogger<TaskFileManager>.Instance);
         _gitWorkspaceManager = new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance);
-        _workflowConfig = BuildWorkflowConfig();
+        _workflowConfig = BuildWorkflowConfig().Normalised();
 
         _runner = new AgentRunner(
             _trelloClient,
@@ -177,7 +177,7 @@ public class AgentRunnerTests : IDisposable
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
 
         Assert.Equal(AgentOutcome.ERROR, result.Outcome);
-        Assert.Contains("No valid role", result.ErrorDetail);
+        Assert.Contains("No steps configured", result.ErrorDetail);
     }
 
     [Fact]
@@ -189,7 +189,7 @@ public class AgentRunnerTests : IDisposable
 
         var runner = new AgentRunner(
             _trelloClient, throwingExecutor, _taskFileManager, _gitWorkspaceManager,
-            _workflowConfig, new StubCrossReferenceResolver(), NullLogger<AgentRunner>.Instance);
+            BuildWorkflowConfig().Normalised(), new StubCrossReferenceResolver(), NullLogger<AgentRunner>.Instance);
 
         SetupBoardCards();
 
@@ -219,7 +219,7 @@ public class AgentRunnerTests : IDisposable
             {
                 ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
                     new List<string> { "Technical Design", "Decisions" }),
-            });
+            }).Normalised();
 
         var runner = CreateRunnerWithConfig(configWithInProgress);
         SetupBoardCards();
@@ -262,8 +262,8 @@ public class AgentRunnerTests : IDisposable
 
         await _runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
 
-        // Verify comment was posted
-        await _trelloClient.Received(1).UpsertAgentCommentAsync(
+        // Verify comments were posted (step comment + run-level comment)
+        await _trelloClient.Received().UpsertAgentCommentAsync(
             TargetCardId, Arg.Is<string>(s => s.Contains("Agent Complete")), Arg.Any<string>(), Arg.Any<CancellationToken>());
 
         // Verify card was moved to COMPLETE column
@@ -509,7 +509,7 @@ public class AgentRunnerTests : IDisposable
             {
                 ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
                     new List<string> { "Technical Design", "Decisions" }),
-            });
+            }).Normalised();
     }
 
     private static void InitGitRepo(string path)
@@ -521,6 +521,122 @@ public class AgentRunnerTests : IDisposable
         File.WriteAllText(Path.Combine(path, ".gitkeep"), "");
         RunGitSync(path, "add", ".");
         RunGitSync(path, "commit", "-m", "initial");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MultiStep_AllComplete_RunsBothStepsAndMovesToComplete()
+    {
+        var config = BuildMultiStepWorkflowConfig().Normalised();
+        var runner = CreateRunnerWithConfig(config);
+        SetupBoardCards("list-multi");
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+
+        // Should have 2 step comments + 1 run-level comment = at least 3 upsert calls
+        var commentCalls = _trelloClient.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == "UpsertAgentCommentAsync")
+            .ToList();
+        Assert.True(commentCalls.Count >= 3,
+            $"Expected at least 3 comment upserts (2 steps + 1 run), got {commentCalls.Count}");
+
+        // Verify step markers are used
+        var markers = commentCalls.Select(c => (string)c.GetArguments()[2]!).ToList();
+        Assert.Contains(markers, m => m.Contains("agent-step:step_one"));
+        Assert.Contains(markers, m => m.Contains("agent-step:step_two"));
+
+        // Card should be moved to COMPLETE column
+        await _trelloClient.Received().MoveCardToColumnAsync(
+            TargetCardId, "list-review", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MultiStep_SecondStepNeedsInfo_HaltsAndTransitions()
+    {
+        var callCount = 0;
+        var sequencedExecutor = Substitute.For<IAgentExecutor>();
+        sequencedExecutor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callCount++;
+                // First step completes, second needs info
+                return callCount == 1
+                    ? new AgentResult(AgentOutcome.COMPLETE, "Step 1 done")
+                    : new AgentResult(AgentOutcome.NEEDS_INFO, "Need clarification",
+                        [new AgentQuestion("What scale?")]);
+            });
+
+        var config = BuildMultiStepWorkflowConfig().Normalised();
+        var runner = new AgentRunner(
+            _trelloClient, sequencedExecutor, _taskFileManager, _gitWorkspaceManager,
+            config, new StubCrossReferenceResolver(), NullLogger<AgentRunner>.Instance);
+        SetupBoardCards("list-multi");
+
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
+        Assert.Equal(2, callCount); // Both steps were attempted
+
+        // Card should be moved to NEEDS_INFO column
+        await _trelloClient.Received().MoveCardToColumnAsync(
+            TargetCardId, "list-questions", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MultiStep_FirstStepErrors_HaltsWithoutRunningSecond()
+    {
+        var callCount = 0;
+        var errorExecutor = Substitute.For<IAgentExecutor>();
+        errorExecutor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callCount++;
+                return new AgentResult(AgentOutcome.ERROR, "Something went wrong");
+            });
+
+        var config = BuildMultiStepWorkflowConfig().Normalised();
+        var runner = new AgentRunner(
+            _trelloClient, errorExecutor, _taskFileManager, _gitWorkspaceManager,
+            config, new StubCrossReferenceResolver(), NullLogger<AgentRunner>.Instance);
+        SetupBoardCards("list-multi");
+
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.ERROR, result.Outcome);
+        Assert.Equal(1, callCount); // Only first step ran
+
+        // Card should be moved to ERROR column
+        await _trelloClient.Received().MoveCardToColumnAsync(
+            TargetCardId, "list-error", Arg.Any<CancellationToken>());
+    }
+
+    private static WorkflowConfig BuildMultiStepWorkflowConfig()
+    {
+        return new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-multi"] = new("Multi-Step Design", null, "agent_run",
+                    null,
+                    new Dictionary<string, string>
+                    {
+                        ["COMPLETE"] = "list-review",
+                        ["NEEDS_INFO"] = "list-questions",
+                        ["ERROR"] = "list-error",
+                    },
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("step_one", "senior_engineer", TaskPrompt: "First step for {TaskName}"),
+                        new WorkflowStep("step_two", "senior_engineer", TaskPrompt: "Second step for {TaskName}"),
+                    ]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
+                    new List<string> { "Technical Design", "Decisions" }),
+            });
     }
 
     private static void RunGitSync(string workingDirectory, params string[] args)

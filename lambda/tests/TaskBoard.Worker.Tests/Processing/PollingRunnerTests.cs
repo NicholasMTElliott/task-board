@@ -12,7 +12,7 @@ public class PollingRunnerTests
     private const string BoardId = "board-1";
     private const string Workspace = "C:/fake/workspace";
 
-    private static readonly WorkflowConfig TestConfig = new(
+    private static readonly WorkflowConfig TestConfig = new WorkflowConfig(
         States: new Dictionary<string, WorkflowState>
         {
             ["Ready for Design"] = new("Ready for Design", "se", "agent_run",
@@ -34,7 +34,7 @@ public class PollingRunnerTests
         Roles: new Dictionary<string, WorkflowRole>
         {
             ["se"] = new("claude-opus-4-6", "You are an engineer.", new List<string> { "Design" }),
-        });
+        }).Normalised();
 
     private static BoardCard MakeCard(string id, string column) =>
         new(id, $"Card {id}", "body", column);

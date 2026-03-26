@@ -47,7 +47,7 @@ public class AgentRunnerDesignTests : IDisposable
         _trelloClient = Substitute.For<ITaskBoardClient>();
         _taskFileManager = new TaskFileManager(NullLogger<TaskFileManager>.Instance);
         _gitWorkspaceManager = new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance);
-        _workflowConfig = BuildDesignWorkflowConfig();
+        _workflowConfig = BuildDesignWorkflowConfig().Normalised();
     }
 
     public void Dispose()

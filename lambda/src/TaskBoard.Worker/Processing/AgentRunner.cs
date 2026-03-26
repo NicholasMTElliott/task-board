@@ -47,10 +47,22 @@ public sealed partial class AgentRunner(
             return new AgentRunResult(AgentOutcome.ERROR, "Card column not in workflow config");
         }
 
-        if (state.Role is null || !workflowConfig.Roles.TryGetValue(state.Role, out var role))
+        if (state.Steps is not { Count: > 0 })
         {
-            logger.LogError("State {StateName} has no valid role", state.Name);
-            return new AgentRunResult(AgentOutcome.ERROR, $"No valid role for state {state.Name}");
+            logger.LogError("State {StateName} has no steps configured", state.Name);
+            return new AgentRunResult(AgentOutcome.ERROR, $"No steps configured for state {state.Name}");
+        }
+
+        // Validate all step roles exist up front
+        foreach (var step in state.Steps)
+        {
+            if (!workflowConfig.Roles.ContainsKey(step.Role))
+            {
+                logger.LogError("State {StateName} step {StepName} references missing role {Role}",
+                    state.Name, step.Name, step.Role);
+                return new AgentRunResult(AgentOutcome.ERROR,
+                    $"Step '{step.Name}' references missing role '{step.Role}' in state {state.Name}");
+            }
         }
 
         // 2b. Move card to in-progress state if defined
@@ -133,40 +145,94 @@ public sealed partial class AgentRunner(
                     worktreePath, targetCard.Id, targetCard.Title);
             }
 
-            // 5a. Resolve system prompt file path (writes temp file for inline prompts)
-            var systemPromptFilePath = await ResolveSystemPromptFileAsync(
-                role, state.Role!, worktreePath, cancellationToken);
+            // 6. Execute steps sequentially
+            var commentPrefix = BuildCommentPrefix(state, workflowConfig);
+            AgentResult? lastResult = null;
 
-            // 5b. Resolve task prompt (from file or inline), with placeholder substitution
-            var resolvedPrompt = await ResolveTaskPromptAsync(state, worktreePath, targetCard, cancellationToken);
-
-            if (isExistingBranch)
+            for (var stepIndex = 0; stepIndex < state.Steps.Count; stepIndex++)
             {
-                resolvedPrompt += "\n\nNote: This task has been worked on previously. A branch with prior changes already exists. " +
-                    "Review the existing state of the codebase and any changes already made before beginning new work. " +
-                    "Avoid duplicating or overwriting prior progress.";
+                var step = state.Steps[stepIndex];
+                var stepRole = workflowConfig.Roles[step.Role];
+
+                logger.LogInformation("Executing step {StepIndex}/{StepCount} '{StepName}' (role={Role}) for card {CardId}",
+                    stepIndex + 1, state.Steps.Count, step.Name, step.Role, cardId);
+
+                // 6a. Resolve system prompt file path for this step's role
+                var systemPromptFilePath = await ResolveSystemPromptFileAsync(
+                    stepRole, step.Role, worktreePath, cancellationToken);
+
+                // 6b. Resolve task prompt for this step
+                var resolvedPrompt = await ResolveStepTaskPromptAsync(
+                    step, worktreePath, targetCard, cancellationToken);
+
+                if (isExistingBranch && stepIndex == 0)
+                {
+                    resolvedPrompt += "\n\nNote: This task has been worked on previously. A branch with prior changes already exists. " +
+                        "Review the existing state of the codebase and any changes already made before beginning new work. " +
+                        "Avoid duplicating or overwriting prior progress.";
+                }
+
+                // 6c. Execute agent for this step
+                var context = new AgentExecutionContext(
+                    TargetCardId: cardId,
+                    TargetCardTitle: targetCard.Title,
+                    WorkspacePath: worktreePath,
+                    TaskPrompt: resolvedPrompt,
+                    SystemPromptFilePath: systemPromptFilePath,
+                    Model: stepRole.Model,
+                    ProviderParams: state.ProviderParams,
+                    CommentsFilePath: commentsFilePath);
+
+                lastResult = await agentExecutor.ExecuteAsync(context, cancellationToken);
+
+                // 6d. Update card body from task file after each step (write-after-each-step strategy)
+                await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken);
+
+                // 6e. Upsert step-specific comment
+                var stepMarker = $"<!-- agent-step:{step.Name} -->";
+                var stepComment = $"{commentPrefix}\n\n**Step: {step.Name}**\n\n{FormatComment(lastResult)}";
+                await boardClient.UpsertAgentCommentAsync(cardId, stepComment, stepMarker, cancellationToken);
+
+                logger.LogInformation("Step '{StepName}' for card {CardId}: outcome={Outcome}",
+                    step.Name, cardId, lastResult.Outcome);
+
+                // 6f. If step did not complete, halt the chain and transition
+                if (lastResult.Outcome != AgentOutcome.COMPLETE)
+                {
+                    var outcomeKey = lastResult.Outcome.ToString();
+                    if (state.Transitions.TryGetValue(outcomeKey, out var targetColumnId))
+                    {
+                        await boardClient.MoveCardToColumnAsync(cardId, targetColumnId, cancellationToken);
+                        logger.LogInformation("Step '{StepName}' returned {Outcome}, moved card {CardId} to {Column}",
+                            step.Name, outcomeKey, cardId, targetColumnId);
+                    }
+
+                    // Handle git for non-complete (still need to commit if applicable)
+                    await HandleGitBehaviorAsync(
+                        gitBehavior, worktreePath, branchName, targetCard, state, lastResult, cancellationToken);
+
+                    if (gitBehavior == "discard")
+                        await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
+
+                    return new AgentRunResult(lastResult.Outcome, lastResult.Detail, lastResult.Questions);
+                }
             }
 
-            // 7. Execute agent — WorkspacePath is the worktree, so Claude CLI runs there
-            var context = new AgentExecutionContext(
-                TargetCardId: cardId,
-                TargetCardTitle: targetCard.Title,
-                WorkspacePath: worktreePath,
-                TaskPrompt: resolvedPrompt,
-                SystemPromptFilePath: systemPromptFilePath,
-                Model: role.Model,
-                ProviderParams: state.ProviderParams,
-                CommentsFilePath: commentsFilePath);
-
-            var agentResult = await agentExecutor.ExecuteAsync(context, cancellationToken);
-
+            // All steps complete
             // 8. Handle git operations based on stage-specific behavior
             var gitNote = await HandleGitBehaviorAsync(
-                gitBehavior, worktreePath, branchName, targetCard, state, agentResult, cancellationToken);
+                gitBehavior, worktreePath, branchName, targetCard, state, lastResult!, cancellationToken);
 
-            // 9. Post-process: update card on board, add comment, move to next state
-            var commentPrefix = BuildCommentPrefix(state, workflowConfig);
-            await PostProcessAsync(targetCard, state, agentResult, worktreePath, branchName, gitNote, commentPrefix, runMarker, cancellationToken);
+            // 9. Post-process: upsert run-level comment, move card to next state
+            var runComment = $"{commentPrefix}\n\n{FormatComment(lastResult!, gitNote)}";
+            await boardClient.UpsertAgentCommentAsync(cardId, runComment, runMarker, cancellationToken);
+
+            var completeKey = lastResult!.Outcome.ToString();
+            if (state.Transitions.TryGetValue(completeKey, out var completeColumnId))
+            {
+                await boardClient.MoveCardToColumnAsync(cardId, completeColumnId, cancellationToken);
+                logger.LogInformation("Moved card {CardId} to column {ColumnId}", cardId, completeColumnId);
+            }
 
             // 10. Cleanup worktree for discard stages
             if (gitBehavior == "discard")
@@ -175,8 +241,8 @@ public sealed partial class AgentRunner(
             }
 
             logger.LogInformation("Agent run complete for card {CardId}: outcome={Outcome}, detail={Detail}",
-                cardId, agentResult.Outcome, agentResult.Detail ?? "(none)");
-            return new AgentRunResult(agentResult.Outcome, agentResult.Detail, agentResult.Questions);
+                cardId, lastResult.Outcome, lastResult.Detail ?? "(none)");
+            return new AgentRunResult(lastResult.Outcome, lastResult.Detail, lastResult.Questions);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -464,6 +530,46 @@ public sealed partial class AgentRunner(
         return new ReferenceAnnotationContext(targetCard.Id, allReferences, cardIdToFilePath);
     }
 
+    private async Task UpdateCardBodyFromTaskFileAsync(
+        BoardCard originalCard, string worktreePath, CancellationToken cancellationToken)
+    {
+        var taskFilePath = TaskFileManager.GetTaskFilePath(worktreePath, originalCard.Id, originalCard.Title);
+        if (!File.Exists(taskFilePath))
+            return;
+
+        var taskFileContent = await File.ReadAllTextAsync(taskFilePath, cancellationToken);
+        var bodyFromFile = TaskFileManager.ExtractBodyFromTaskFile(taskFileContent);
+        var cleanBody = TaskFileManager.StripAnnotations(bodyFromFile);
+
+        if (!string.Equals(cleanBody, originalCard.Body, StringComparison.Ordinal))
+        {
+            await boardClient.UpdateCardBodyAsync(originalCard.Id, cleanBody, cancellationToken);
+            logger.LogInformation("Updated card body for {CardId}", originalCard.Id);
+        }
+    }
+
+    internal static async Task<string> ResolveStepTaskPromptAsync(
+        WorkflowStep step, string worktreePath, BoardCard card, CancellationToken cancellationToken)
+    {
+        string template;
+
+        if (step.TaskPromptFile is not null)
+        {
+            var path = Path.GetFullPath(Path.Combine(worktreePath, step.TaskPromptFile));
+            if (!File.Exists(path))
+                throw new FileNotFoundException(
+                    $"Task prompt file not found: {path} (configured as '{step.TaskPromptFile}' for step '{step.Name}')",
+                    path);
+            template = await File.ReadAllTextAsync(path, cancellationToken);
+        }
+        else
+        {
+            template = step.TaskPrompt ?? "";
+        }
+
+        return ResolvePromptPlaceholders(template, card);
+    }
+
     private static string BuildCommentPrefix(WorkflowState state, WorkflowConfig config)
     {
         var activeStateName = state.Transitions.TryGetValue("IN_PROGRESS", out var inProgressCol)
@@ -471,7 +577,10 @@ public sealed partial class AgentRunner(
             ? inProgressState.Name
             : state.Name;
 
-        var roleName = state.Role ?? "agent";
+        // For multi-step states, use the first step's role or fall back to state-level role
+        var roleName = state.Steps is { Count: > 0 }
+            ? state.Steps[0].Role
+            : state.Role ?? "agent";
         return $"**{roleName} in {activeStateName}:**";
     }
 

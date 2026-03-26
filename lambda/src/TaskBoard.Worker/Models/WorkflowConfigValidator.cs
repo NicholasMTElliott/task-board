@@ -16,18 +16,53 @@ public static class WorkflowConfigValidator
         {
             if (string.Equals(state.GateType, "agent_run", StringComparison.OrdinalIgnoreCase))
             {
-                if (string.IsNullOrWhiteSpace(state.Role))
-                    errors.Add($"State '{stateId}' ({state.Name}) is agent_run but has no role.");
-                else if (!config.Roles.ContainsKey(state.Role))
-                    errors.Add($"State '{stateId}' ({state.Name}) references role '{state.Role}' which does not exist in Roles.");
-
-                if (string.IsNullOrWhiteSpace(state.TaskPrompt) && string.IsNullOrWhiteSpace(state.TaskPromptFile))
-                    errors.Add($"State '{stateId}' ({state.Name}) is agent_run but has no taskPrompt or taskPromptFile.");
-
-                if (!string.IsNullOrWhiteSpace(state.Role) && config.Roles.TryGetValue(state.Role, out var role))
+                if (state.Steps is { Count: > 0 })
                 {
-                    if (string.IsNullOrWhiteSpace(role.SystemPrompt) && string.IsNullOrWhiteSpace(role.SystemPromptFile))
-                        errors.Add($"Role '{state.Role}' has no systemPrompt or systemPromptFile.");
+                    // Multi-step validation
+                    var stepNames = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var step in state.Steps)
+                    {
+                        if (string.IsNullOrWhiteSpace(step.Name))
+                            errors.Add($"State '{stateId}' ({state.Name}) has a step with an empty name.");
+
+                        if (!stepNames.Add(step.Name))
+                            errors.Add($"State '{stateId}' ({state.Name}) has duplicate step name '{step.Name}'.");
+
+                        if (string.IsNullOrWhiteSpace(step.Role))
+                            errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' has no role.");
+                        else if (!config.Roles.ContainsKey(step.Role))
+                            errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' references role '{step.Role}' which does not exist in Roles.");
+
+                        if (string.IsNullOrWhiteSpace(step.TaskPrompt) && string.IsNullOrWhiteSpace(step.TaskPromptFile))
+                            errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' has no taskPrompt or taskPromptFile.");
+                    }
+
+                    // Validate roles referenced by steps have system prompts
+                    foreach (var step in state.Steps)
+                    {
+                        if (!string.IsNullOrWhiteSpace(step.Role) && config.Roles.TryGetValue(step.Role, out var stepRole))
+                        {
+                            if (string.IsNullOrWhiteSpace(stepRole.SystemPrompt) && string.IsNullOrWhiteSpace(stepRole.SystemPromptFile))
+                                errors.Add($"Role '{step.Role}' has no systemPrompt or systemPromptFile.");
+                        }
+                    }
+                }
+                else
+                {
+                    // Legacy single-step validation (state without steps array)
+                    if (string.IsNullOrWhiteSpace(state.Role))
+                        errors.Add($"State '{stateId}' ({state.Name}) is agent_run but has no role.");
+                    else if (!config.Roles.ContainsKey(state.Role))
+                        errors.Add($"State '{stateId}' ({state.Name}) references role '{state.Role}' which does not exist in Roles.");
+
+                    if (string.IsNullOrWhiteSpace(state.TaskPrompt) && string.IsNullOrWhiteSpace(state.TaskPromptFile))
+                        errors.Add($"State '{stateId}' ({state.Name}) is agent_run but has no taskPrompt or taskPromptFile.");
+
+                    if (!string.IsNullOrWhiteSpace(state.Role) && config.Roles.TryGetValue(state.Role, out var role))
+                    {
+                        if (string.IsNullOrWhiteSpace(role.SystemPrompt) && string.IsNullOrWhiteSpace(role.SystemPromptFile))
+                            errors.Add($"Role '{state.Role}' has no systemPrompt or systemPromptFile.");
+                    }
                 }
             }
 

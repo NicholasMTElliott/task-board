@@ -31,6 +31,9 @@ builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
             $"Workflow config validation failed:\n{string.Join("\n", errors)}");
     }
 
+    // Normalise legacy single-step states into canonical steps-based model
+    config = config.Normalised();
+
     return config;
 });
 

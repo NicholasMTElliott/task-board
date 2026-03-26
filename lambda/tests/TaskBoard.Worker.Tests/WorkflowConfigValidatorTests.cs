@@ -218,6 +218,145 @@ public class WorkflowConfigValidatorTests
     }
 
     [Fact]
+    public void MultiStepState_ValidSteps_PassesValidation()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", null, "agent_run",
+                    null, new Dictionary<string, string>(),
+                    Steps:
+                    [
+                        new WorkflowStep("design", "ba", TaskPrompt: "Design it."),
+                        new WorkflowStep("review", "ba", TaskPrompt: "Review it."),
+                    ])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("taskPrompt") || e.Contains("role"));
+    }
+
+    [Fact]
+    public void MultiStepState_DuplicateStepNames_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", null, "agent_run",
+                    null, new Dictionary<string, string>(),
+                    Steps:
+                    [
+                        new WorkflowStep("design", "ba", TaskPrompt: "Design it."),
+                        new WorkflowStep("design", "ba", TaskPrompt: "Design again."),
+                    ])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("duplicate step name") && e.Contains("design"));
+    }
+
+    [Fact]
+    public void MultiStepState_StepReferencesMissingRole_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", null, "agent_run",
+                    null, new Dictionary<string, string>(),
+                    Steps:
+                    [
+                        new WorkflowStep("design", "nonexistent_role", TaskPrompt: "Design it."),
+                    ])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("nonexistent_role") && e.Contains("does not exist"));
+    }
+
+    [Fact]
+    public void MultiStepState_StepMissingTaskPrompt_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", null, "agent_run",
+                    null, new Dictionary<string, string>(),
+                    Steps:
+                    [
+                        new WorkflowStep("design", "ba"),
+                    ])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("taskPrompt") && e.Contains("design"));
+    }
+
+    [Fact]
+    public void Normalise_LegacyState_CreatesStepsArray()
+    {
+        var raw = new WorkflowState("Design", "senior_engineer", "agent_run",
+            "Design it.", new Dictionary<string, string>());
+
+        var normalised = WorkflowState.Normalise(raw);
+
+        Assert.NotNull(normalised.Steps);
+        Assert.Single(normalised.Steps);
+        Assert.Equal("senior_engineer", normalised.Steps[0].Name);
+        Assert.Equal("senior_engineer", normalised.Steps[0].Role);
+        Assert.Equal("Design it.", normalised.Steps[0].TaskPrompt);
+    }
+
+    [Fact]
+    public void Normalise_StateWithSteps_ReturnsUnchanged()
+    {
+        var steps = new List<WorkflowStep>
+        {
+            new("step1", "ba", TaskPrompt: "Do it."),
+        };
+        var raw = new WorkflowState("Design", null, "agent_run",
+            null, new Dictionary<string, string>(), Steps: steps);
+
+        var normalised = WorkflowState.Normalise(raw);
+
+        Assert.Same(raw, normalised);
+    }
+
+    [Fact]
+    public void Normalise_NonAgentState_ReturnsUnchanged()
+    {
+        var raw = new WorkflowState("Review", null, "manual_gate",
+            null, new Dictionary<string, string>());
+
+        var normalised = WorkflowState.Normalise(raw);
+
+        Assert.Same(raw, normalised);
+    }
+
+    [Fact]
     public void RoleWithEmptySections_ReportsError()
     {
         var config = new WorkflowConfig(
