@@ -33,7 +33,7 @@ public class TaskFileManagerTests : IDisposable
         };
         var config = BuildWorkflowConfig();
 
-        await _manager.WriteAllTaskFilesAsync(_tempDir, cards, config, CancellationToken.None);
+        await _manager.WriteAllTaskFilesAsync(_tempDir, cards, config, cancellationToken: CancellationToken.None);
 
         Assert.True(File.Exists(TaskFileManager.GetTaskFilePath(_tempDir, "card1", "First Card")));
         Assert.True(File.Exists(TaskFileManager.GetTaskFilePath(_tempDir, "card2", "Second Card")));
@@ -48,7 +48,7 @@ public class TaskFileManagerTests : IDisposable
         };
         var config = BuildWorkflowConfig();
 
-        await _manager.WriteAllTaskFilesAsync(_tempDir, cards, config, CancellationToken.None);
+        await _manager.WriteAllTaskFilesAsync(_tempDir, cards, config, cancellationToken: CancellationToken.None);
 
         var content = await File.ReadAllTextAsync(TaskFileManager.GetTaskFilePath(_tempDir, "card1", "Auth Middleware"));
         Assert.Contains("id: card1", content);
@@ -67,7 +67,7 @@ public class TaskFileManagerTests : IDisposable
         };
         var config = BuildWorkflowConfig();
 
-        await _manager.WriteAllTaskFilesAsync(_tempDir, cards, config, CancellationToken.None);
+        await _manager.WriteAllTaskFilesAsync(_tempDir, cards, config, cancellationToken: CancellationToken.None);
 
         var content = await File.ReadAllTextAsync(TaskFileManager.GetTaskFilePath(_tempDir, "card1", "Card"));
         Assert.Contains("list: Unknown", content);
@@ -82,7 +82,7 @@ public class TaskFileManagerTests : IDisposable
         };
         var config = BuildWorkflowConfig();
 
-        await _manager.WriteAllTaskFilesAsync(_tempDir, cards, config, CancellationToken.None);
+        await _manager.WriteAllTaskFilesAsync(_tempDir, cards, config, cancellationToken: CancellationToken.None);
         var content = await _manager.ReadTaskFileAsync(_tempDir, "card1", "Test Card", CancellationToken.None);
 
         Assert.Contains("Some content here", content);

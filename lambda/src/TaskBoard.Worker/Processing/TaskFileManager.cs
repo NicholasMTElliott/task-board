@@ -112,9 +112,17 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
                 if (idx < 0)
                     break;
 
+                // Avoid substring matching: e.g. "#5" should not match inside "#50"
+                var afterIdx = idx + textRef.OriginalText.Length;
+                if (afterIdx < body.Length && char.IsDigit(body[afterIdx]))
+                {
+                    searchFrom = afterIdx;
+                    continue;
+                }
+
                 replacements.Add((idx, textRef.OriginalText.Length,
                     $"{textRef.OriginalText} ( see {filePath} )"));
-                searchFrom = idx + textRef.OriginalText.Length;
+                searchFrom = afterIdx;
             }
         }
 
@@ -142,7 +150,7 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
         if (resolved.Count == 0)
             return null;
 
-        var sb = new StringBuilder("## Cross-References\n");
+        var sb = new StringBuilder("## Cross-References\n\n");
 
         foreach (var r in resolved)
         {
@@ -151,7 +159,7 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
             var cardLabel = r.Title is not null
                 ? $"#{r.ReferencedCardId} {r.Title}"
                 : $"#{r.ReferencedCardId}";
-            sb.AppendLine($"\n- **{label}**: {cardLabel} ( see {filePath} )");
+            sb.AppendLine($"- **{label}**: {cardLabel} ( see {filePath} )");
         }
 
         return sb.ToString();
@@ -170,8 +178,8 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
 
     private static string FormatReferenceTypeLabel(string referenceType)
     {
-        // "sub_item" -> "Sub-item", "parent_item" -> "Parent item", etc.
-        return referenceType.Replace('_', ' ') switch
+        // "sub_item" -> "Sub-item", "parent_item" -> "Parent-item", etc.
+        return referenceType.Replace('_', '-') switch
         {
             var s when s.Length > 0 => char.ToUpperInvariant(s[0]) + s[1..],
             _ => referenceType
