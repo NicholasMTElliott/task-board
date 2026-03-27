@@ -54,7 +54,7 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 ### Migration Tooling
 - Flyway via Docker (`redgate/flyway`) for SQL-first schema migrations
 - Scripts in `db/migrations`, applied via `scripts/migrate.ps1`
-- Migration chain: V1 (processed_events) → V2 (pgmq_core) → V3 (events_queue) → V4 (card_state) → V5 (run_log)
+- Migration chain: V1 (processed_events) → V2 (pgmq_core) → V3 (events_queue) → V4 (card_state) → V5 (run_log) → V6 (run_log step_name)
 
 ## Decided Architecture Items
 - ✅ Board abstraction: `ITaskBoardClient` with GitHub Projects and Trello implementations

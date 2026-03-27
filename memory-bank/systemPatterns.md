@@ -256,5 +256,6 @@ Schema:
 | run_id | UUID (PK) |
 | card_id | Card ID |
 | role | Agent role executed |
+| step_name | Step name within multi-step execution (nullable) |
 | outcome | COMPLETE / NEEDS_INFO / ERROR |
 | created_at_utc | Execution time |

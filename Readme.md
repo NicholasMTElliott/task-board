@@ -2,7 +2,7 @@
 
 An autonomous, state-driven multi-agent workflow system built on top of a kanban board.
 
-This project turns a GitHub Projects board (or Trello) into an asynchronous control plane where AI agents act as specialized SDLC roles (Senior Engineer, QA), automatically progressing tickets through a structured pipeline.
+This project turns a GitHub Projects board (or Trello) into an asynchronous control plane where AI agents act as specialized SDLC roles (Senior Engineer, Implementer, Code Reviewer, QA, Gate Checker, Merge Resolver), automatically progressing tickets through a structured pipeline.
 
 The board is the human-facing surface.
 The orchestrator is the automation brain.
@@ -43,50 +43,71 @@ The orchestrator becomes:
 ## Architecture
 
 ```
-CLI invocation: .\scripts\run_once.ps1 -CardId N
-    |
-AgentRunner (C#)
-    | fetch cards
-ITaskBoardClient (GitHub Projects / Trello / Stub)
-    | move to IN_PROGRESS column
-    | create git worktree, write task files
-ClaudeAgentExecutor (claude CLI subprocess)
-    | parse structured output (NDJSON stream)
-Post-process: upsert comment, move to outcome column
+Execution modes:
+  --mode agent --card-id N    (direct, single card)
+  --mode polling --board-id 1 (automatic, priority-sorted pickup)
+
+AgentRunner flow (agent_run states):
+  Fetch card → move to IN_PROGRESS column
+  → create git worktree, resolve cross-references
+  → write task files + comments file
+  → execute steps sequentially (each step = Claude CLI subprocess)
+  → optional gate check (lightweight Haiku validation)
+  → post-process: upsert step comments, handle git, move to outcome column
+
+MergeRunner flow (system_merge states):
+  Fetch card → find work branch → merge to main (--no-ff)
+  → on conflict: abort + transition to MERGE_CONFLICT target
+  → on success: push, cleanup branch, move to Done
 ```
 
 ---
 
 ## Board Structure (GitHub Projects)
 
-| # | Column | Role | Gate Type |
-|---|--------|------|-----------|
+| # | Column | Role(s) | Gate Type |
+|---|--------|---------|-----------|
 | 1 | Backlog | -- | Manual entry |
-| 2 | Ready for Design | Senior Engineer | Agent trigger |
+| 2 | Ready for Design | Senior Engineer (3 steps) | agent_run |
 | 3 | Designing | -- | In-progress |
 | 4 | Design Questions | -- | Holding (NEEDS_INFO) |
 | 5 | Designed | -- | Manual gate |
-| 6 | Ready for Implementation | Senior Engineer | Agent trigger |
+| 6 | Ready for Implementation | Implementer + Code Reviewer (2 steps) | agent_run |
 | 7 | Implementing | -- | In-progress |
 | 8 | Implementation Questions | -- | Holding (NEEDS_INFO) |
-| 9 | Ready for Test | QA | Agent trigger |
+| 9 | Ready for Test | QA | agent_run |
 | 10 | Testing | -- | In-progress |
-| 11 | Tested | -- | Terminal |
-| 12 | Error | -- | Holding |
+| 11 | Tested | -- | Manual gate |
+| 12 | Approved | -- | system_merge |
+| 13 | Merging | -- | In-progress |
+| 14 | Done | -- | Terminal |
+| 15 | Error | -- | Holding |
 
-Each column maps to exactly one agent role or manual gate.
+---
+
+## Roles
+
+| Role | Model | Purpose |
+|------|-------|---------|
+| `senior_engineer` | claude-opus-4-6 | Design pipeline (3 steps: review related tickets, create design, review conflicts) |
+| `implementer` | claude-sonnet-4-6 | Code implementation (uses senior_engineer system prompt) |
+| `code_reviewer` | claude-opus-4-6 | Post-implementation code review |
+| `qa` | claude-opus-4-6 | Test validation |
+| `gate_checker` | claude-haiku-4-5 | Lightweight gate checks after design and implementation |
+| `merge_resolver` | claude-sonnet-4-6 | Merge conflict resolution |
 
 ---
 
 ## How It Works
 
 1. Operator creates an issue, adds it to the project board in **Backlog**.
-2. Operator writes requirements and moves card to **Ready for Design**.
-3. Operator runs: `.\scripts\run_once.ps1 -CardId 3`
-4. Senior Engineer agent moves card to **Designing**, produces a Technical Design, moves to **Designed**.
+2. Operator writes requirements/scope and moves card to **Ready for Design**.
+3. Operator runs: `.\scripts\run_once.ps1 -CardId 3` (or uses `--mode polling` for automatic pickup)
+4. Design runs 3 steps: review related tickets -> create technical design -> review for cross-ticket conflicts. Gate check validates output. Card moves to **Designed**.
 5. Operator reviews design, approves by moving to **Ready for Implementation**.
-6. Operator runs CLI again. Agent moves to **Implementing**, writes code in an isolated worktree, commits and pushes, moves to **Ready for Test**.
-7. Operator runs CLI again. QA agent validates the implementation, moves to **Tested** on success.
+6. Implementation runs 2 steps: implement code (Sonnet) -> code review (Opus). Gate check validates output. Card moves to **Ready for Test**.
+7. QA agent validates the implementation, moves to **Tested** on success.
+8. Operator approves by moving to **Approved**. System auto-merges the PR branch and moves to **Done**.
 
 If the agent needs more information, the card moves to a **Questions** column with questions posted as a comment. The operator answers and moves the card back to re-trigger.
 
@@ -112,7 +133,7 @@ Each agent returns structured JSON output:
 ```
 
 The orchestrator:
-1. Posts the `detail` as a markdown comment on the issue.
+1. Posts the `detail` as a markdown comment on the issue (one comment per step).
 2. Transitions the card to the next column based on `outcome`.
 3. Agents do NOT move cards directly -- the orchestrator controls all transitions.
 
@@ -126,16 +147,26 @@ File-based config (`workflow.github.json`) maps columns to roles and transitions
 {
   "states": {
     "Ready for Design": {
-      "role": "senior_engineer",
+      "name": "Ready for Design",
       "gateType": "agent_run",
       "gitBehavior": "discard",
-      "taskPromptFile": "prompts/states/ready_for_design.md",
+      "pipelineOrder": 1,
       "providerParams": { "effort": "max" },
+      "steps": [
+        { "name": "review_related_tickets", "role": "senior_engineer", "taskPromptFile": "prompts/states/steps/review_related_tickets.md" },
+        { "name": "create_design", "role": "senior_engineer", "taskPromptFile": "prompts/states/ready_for_design.md" },
+        { "name": "review_design_conflicts", "role": "senior_engineer", "taskPromptFile": "prompts/states/steps/review_design_conflicts.md" }
+      ],
+      "gateCheck": {
+        "role": "gate_checker",
+        "taskPromptFile": "prompts/gates/post_design.md"
+      },
       "transitions": {
         "IN_PROGRESS": "Designing",
         "COMPLETE": "Designed",
         "NEEDS_INFO": "Design Questions",
-        "ERROR": "Error"
+        "ERROR": "Error",
+        "GATE_FAIL": "Ready for Design"
       }
     }
   },
@@ -145,13 +176,20 @@ File-based config (`workflow.github.json`) maps columns to roles and transitions
       "systemPromptFile": "prompts/senior_engineer.md",
       "sections": ["Technical Design", "Decisions", "Implementation"]
     }
+  },
+  "polling": {
+    "priorityFieldName": "priority",
+    "priorityOrder": ["P0", "P1", "P2"]
   }
 }
 ```
 
+- `steps` array defines sequential agent invocations within a state (each with its own role and prompt)
+- `gateCheck` runs a lightweight agent after all steps complete to validate output
 - `providerParams` passes executor-specific flags (e.g., `effort` for Claude CLI)
 - `gitBehavior`: `discard` (design/test), `commit_and_push` (implementation)
 - `taskPromptFile` / `systemPromptFile` point to markdown files under `prompts/`
+- `pipelineOrder` determines polling priority (higher = picked first)
 
 ---
 
@@ -182,7 +220,13 @@ File-based config (`workflow.github.json`) maps columns to roles and transitions
 .\scripts\run_once.ps1 -CardId 3
 ```
 
-Or manually with env vars:
+### Run in polling mode (automatic pickup)
+
+```powershell
+.\scripts\run_polling.ps1
+```
+
+### Manual invocation with env vars
 
 ```powershell
 $env:BOARD_PROVIDER = "github"
@@ -192,7 +236,11 @@ $env:GitHubProjects__Owner = "YourGitHubUser"
 $env:GitHubProjects__Repo = "YourUser/your-repo"
 $env:GitHubProjects__ProjectNumber = "1"
 
+# Single card
 dotnet run --project lambda/src/TaskBoard.Worker -- --mode agent --card-id 3 --board-id 1 --workspace .
+
+# Polling (auto-pickup highest priority card from "Ready for" columns)
+dotnet run --project lambda/src/TaskBoard.Worker -- --mode polling --board-id 1 --workspace .
 ```
 
 ---
@@ -201,8 +249,10 @@ dotnet run --project lambda/src/TaskBoard.Worker -- --mode agent --card-id 3 --b
 
 - Agents cannot transition state directly -- the orchestrator validates all transitions.
 - Manual approval gates block progression until a human moves the card.
+- Automated gate checks (Haiku) validate agent output before state transitions.
 - Agent execution happens in isolated git worktrees; the main repo is never modified.
-- All agent output is posted as a single upserted comment (no spam).
+- System merge includes conflict detection with retry logic (max 3 attempts).
+- All agent output is posted as upserted comments per step (no spam).
 
 ---
 
@@ -214,7 +264,7 @@ Idle cost: $0. Costs scale only when an agent executes (LLM tokens are the prima
 
 ## Future Expansion
 
-- Webhook-triggered automation (currently manual CLI invocation)
+- Webhook-triggered automation (currently manual CLI or polling)
 - PR creation automation
 - Parallel agent branches
 - SLA timers / retry policies
