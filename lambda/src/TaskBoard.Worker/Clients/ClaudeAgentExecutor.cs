@@ -52,13 +52,14 @@ public sealed class ClaudeAgentExecutor(
             context.WorkspacePath, context.TargetCardId, context.TargetCardTitle);
 
         var args = BuildArgumentList(context, taskFilePath);
+        var userPrompt = BuildUserPrompt(context, taskFilePath);
 
         logger.LogDebug("Claude CLI command: {FileName} {Args}",
             _options.ExecutablePath, FormatArgsForLogging(args));
 
         var (exitCode, stdout, stderr) = await RunProcessAsync(
             _options.ExecutablePath, args, context.WorkspacePath,
-            _options.TimeoutSeconds, cancellationToken);
+            _options.TimeoutSeconds, cancellationToken, stdinData: userPrompt);
 
         if (exitCode != 0)
         {
@@ -187,9 +188,9 @@ public sealed class ClaudeAgentExecutor(
             }
         }
 
-        // Content args last (Windows cmd.exe quote mangling workaround)
-        var userPrompt = BuildUserPrompt(context, taskFilePath);
-        args.AddRange(["-p", userPrompt]);
+        // Print mode: run non-interactively (prompt piped via stdin to avoid
+        // Windows command-line length limits — cmd.exe caps at ~8 191 chars).
+        args.Add("--print");
 
         return args.ToArray();
     }
@@ -456,7 +457,7 @@ private static string MinifyJson(string json)
 
     private static async Task<(int ExitCode, string Stdout, string Stderr)> RunProcessAsync(
         string executable, string[] argumentList, string workingDirectory,
-        int timeoutSeconds, CancellationToken cancellationToken)
+        int timeoutSeconds, CancellationToken cancellationToken, string? stdinData = null)
     {
         using var process = new Process();
         var startInfo = new ProcessStartInfo
@@ -464,6 +465,7 @@ private static string MinifyJson(string json)
             WorkingDirectory = workingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = stdinData is not null,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
@@ -484,6 +486,14 @@ private static string MinifyJson(string json)
         process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderrBuf.AppendLine(e.Data); };
 
         process.Start();
+
+        // Pipe prompt via stdin to avoid Windows command-line length limits
+        if (stdinData is not null)
+        {
+            await process.StandardInput.WriteAsync(stdinData);
+            process.StandardInput.Close();
+        }
+
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 

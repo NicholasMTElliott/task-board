@@ -49,22 +49,22 @@ public class ClaudeAgentExecutorTests
     }
 
     [Fact]
-    public void BuildArgumentList_ContainsPromptFlag()
+    public void BuildArgumentList_ContainsPrintFlag()
     {
         var executor = CreateExecutor();
         var args = executor.BuildArgumentList(CreateContext(), "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
 
-        Assert.Contains("-p", args);
+        Assert.Contains("--print", args);
     }
 
     [Fact]
-    public void BuildArgumentList_PromptIsLastArg()
+    public void BuildArgumentList_PrintIsLastArg()
     {
         var executor = CreateExecutor();
         var args = executor.BuildArgumentList(CreateContext(), "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
 
-        // -p and prompt must be the last two args (flags before content to avoid Windows cmd.exe issues)
-        Assert.Equal("-p", args[^2]);
+        // --print must be the last arg (prompt is piped via stdin)
+        Assert.Equal("--print", args[^1]);
     }
 
     [Fact]

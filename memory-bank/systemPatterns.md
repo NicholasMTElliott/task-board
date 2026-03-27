@@ -107,10 +107,10 @@ The .NET worker invokes the Claude CLI (`claude`) as a subprocess via `ClaudeAge
 - Explicit `ExecutablePath` config overrides auto-detection
 - Do NOT use `cmd.exe /c claude` (mangles quoted arguments) or PowerShell wrappers
 - Remove `CLAUDECODE` env var from subprocess environment or the CLI refuses to run as a subprocess
-- Flag-style args must come BEFORE content args (Windows `cmd.exe` quote-state mangling)
 - No double quotes in prompts — use plain text or single quotes
 
 **CLI flags (required for structured output):**
+- `--print` — non-interactive mode (prompt read from stdin)
 - `--verbose --output-format stream-json` — NDJSON output; `--verbose` required with `stream-json`
 - `--no-session-persistence` — prevents session reuse between runs
 - `--json-schema <minified-json>` — must be single-line (minified)
@@ -120,7 +120,7 @@ The .NET worker invokes the Claude CLI (`claude`) as a subprocess via `ClaudeAge
 
 **Prompt delivery:**
 - System prompt via `--append-system-prompt-file` (file path)
-- Task prompt via stdin (`RedirectStandardInput`)
+- Task prompt piped via stdin (`RedirectStandardInput` + `StandardInput.WriteAsync`) — avoids Windows command-line length limits (~8,191 chars for cmd.exe)
 - `providerParams` per state (e.g., `{"effort": "max"}` → `--effort` flag)
 
 **Output parsing (NDJSON `ParseStreamOutput` → `ParseResult`):**
