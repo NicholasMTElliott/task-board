@@ -573,18 +573,12 @@ public class WorkflowConfigValidatorTests
 
         var errors = WorkflowConfigValidator.Validate(config);
 
-        // Filter out known pre-existing issue: merge_resolver has empty sections
-        // because it doesn't write card description sections (it resolves merge conflicts)
-        var unexpectedErrors = errors
-            .Where(e => !e.Contains("merge_resolver") || !e.Contains("empty Sections"))
-            .ToList();
-
-        Assert.True(unexpectedErrors.Count == 0,
-            $"Production workflow.github.json has validation errors:\n{string.Join("\n", unexpectedErrors)}");
+        Assert.True(errors.Count == 0,
+            $"Production workflow.github.json has validation errors:\n{string.Join("\n", errors)}");
     }
 
     [Fact]
-    public void RoleWithEmptySections_ReportsError()
+    public void RoleWithEmptySections_PassesValidation()
     {
         var config = new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
@@ -600,7 +594,7 @@ public class WorkflowConfigValidatorTests
 
         var errors = WorkflowConfigValidator.Validate(config);
 
-        Assert.Contains(errors, e => e.Contains("empty Sections"));
+        Assert.DoesNotContain(errors, e => e.Contains("empty Sections"));
     }
 
     private static string FindRepoRoot()

@@ -45,9 +45,7 @@ public class AgentRunnerIntegrationTests : IDisposable
     public AgentRunnerIntegrationTests(ITestOutputHelper output)
     {
         _output = output;
-        _enabled =
-            true;
-            //!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AGENT_INTEGRATION_TESTS"));
+        _enabled = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AGENT_INTEGRATION_TESTS"));
 
         _repoRoot = FindRepoRoot();
 
@@ -56,7 +54,7 @@ public class AgentRunnerIntegrationTests : IDisposable
         _trelloClient = Substitute.For<ITaskBoardClient>();
         _taskFileManager = new TaskFileManager(NullLogger<TaskFileManager>.Instance);
         _gitWorkspaceManager = new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance);
-        _workflowConfig = BuildDesignWorkflowConfig();
+        _workflowConfig = BuildDesignWorkflowConfig().Normalised();
     }
 
     public void Dispose()

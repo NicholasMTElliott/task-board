@@ -9,19 +9,20 @@ A single founder/operator can place a card in a "Ready for" column on their kanb
 ## v1 Scope
 
 ### In Scope
-- Full end-to-end pipeline from Backlog to Tested
-- Senior Engineer and QA agent roles
-- Manual approval gates at Designed and Ready for Implementation
+- Full end-to-end pipeline from Backlog to Done (including automated merge)
+- Multi-step agent execution within states (e.g., implement → code review)
+- Senior Engineer, QA, Implementer, Code Reviewer, Gate Checker, and Merge Resolver roles
+- Manual approval gates at Designed and Tested
 - Provider-agnostic board abstraction (`ITaskBoardClient`) — supports GitHub Projects and Trello
 - IN_PROGRESS transitions (card moves to "X-ing" column while agent works)
 - Human-in-the-loop via Questions holding columns
-- Questions/NEEDS_INFO handling with per-phase question columns
-- Direct CLI invocation (`--mode agent --card-id N`)
+- Direct CLI invocation (`--mode agent --card-id N`) and polling mode (`--mode polling`)
 - Git worktree isolation for agent execution
+- Gate checks after design and implementation steps
 - Single board, single operator
 
 ### Out of Scope (v1)
-- Webhook-triggered automation (currently manual CLI invocation)
+- Webhook-triggered automation (currently manual CLI invocation or polling)
 - Parallel agent branches
 - SLA timers / retry policies
 - State replay
@@ -31,16 +32,20 @@ A single founder/operator can place a card in a "Ready for" column on their kanb
 - Autonomous production deployment
 
 ## Active State Pipeline (GitHub Projects)
-| # | State | Role | Gate Type |
-|---|-------|------|-----------|
+| # | State | Role(s) | Gate Type |
+|---|-------|---------|-----------|
 | 1 | Backlog | — | Manual entry |
-| 2 | Ready for Design | Senior Engineer | Trigger (agent_run) |
+| 2 | Ready for Design | Senior Engineer (3 steps) | agent_run |
 | 3 | Designing | — | In-progress |
 | 4 | Design Questions | — | Holding (NEEDS_INFO) |
 | 5 | Designed | — | Manual gate |
-| 6 | Ready for Implementation | Senior Engineer | Trigger (agent_run) |
+| 6 | Ready for Implementation | Implementer + Code Reviewer (2 steps) | agent_run |
 | 7 | Implementing | — | In-progress |
 | 8 | Implementation Questions | — | Holding (NEEDS_INFO) |
-| 9 | Ready for Test | QA | Agent-run |
-| 10 | Tested | — | Terminal |
-| 11 | Error | — | Holding |
+| 9 | Ready for Test | QA | agent_run |
+| 10 | Testing | — | In-progress |
+| 11 | Tested | — | Manual gate |
+| 12 | Approved | — | system_merge |
+| 13 | Merging | — | In-progress |
+| 14 | Done | — | Terminal |
+| 15 | Error | — | Holding |

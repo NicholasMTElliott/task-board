@@ -18,3 +18,4 @@ Verify the implementation produced for task '{TaskName}' ({TaskId}).
 2. Does the diff contain changes not described in the requirements?
 3. Are there any obvious issues visible in the diff (syntax errors, placeholder
    code, TODO comments for required features, missing imports)?
+4. Does the diff contain test coverage for new or changed requirements?

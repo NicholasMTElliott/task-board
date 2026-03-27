@@ -225,6 +225,16 @@ public sealed partial class AgentRunner(
                 var stepComment = $"{commentPrefix}\n\n**Step: {step.Name}**\n\n{FormatComment(lastResult)}";
                 await boardClient.UpsertAgentCommentAsync(cardId, stepComment, stepMarker, cancellationToken);
 
+                // 6e-ii. Refresh comments file so the next step sees this step's output
+                comments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
+                if (comments.Count > 0)
+                {
+                    await taskFileManager.WriteCommentsFileAsync(
+                        worktreePath, targetCard.Id, targetCard.Title, comments, cancellationToken);
+                    commentsFilePath ??= TaskFileManager.GetCommentsFilePath(
+                        worktreePath, targetCard.Id, targetCard.Title);
+                }
+
                 logger.LogInformation("Step '{StepName}' for card {CardId}: outcome={Outcome}",
                     step.Name, cardId, lastResult.Outcome);
 

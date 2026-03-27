@@ -657,6 +657,31 @@ public class AgentRunnerTests : IDisposable
             TargetCardId, "list-error", Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task ExecuteAsync_MultiStep_RefreshesCommentsFileBetweenSteps()
+    {
+        var config = BuildMultiStepWorkflowConfig().Normalised();
+        var runner = CreateRunnerWithConfig(config);
+        SetupBoardCards("list-multi");
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+
+        // Setup GetCardCommentsAsync to return comments (simulating step comments being fetched back)
+        _trelloClient.GetCardCommentsAsync(TargetCardId, Arg.Any<CancellationToken>())
+            .Returns(new List<CardComment>
+            {
+                new("Step 1 output", "agent", DateTime.UtcNow),
+            });
+
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+
+        // GetCardCommentsAsync should be called:
+        // 1x initial fetch (before step loop) + 1x after each step (2 steps) = 3 total
+        await _trelloClient.Received(3).GetCardCommentsAsync(
+            TargetCardId, Arg.Any<CancellationToken>());
+    }
+
     private static WorkflowConfig BuildMultiStepWorkflowConfig()
     {
         return new WorkflowConfig(

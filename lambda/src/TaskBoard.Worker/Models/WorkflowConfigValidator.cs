@@ -83,11 +83,8 @@ public static class WorkflowConfigValidator
             }
         }
 
-        foreach (var (roleId, role) in config.Roles)
-        {
-            if (role.Sections.Count == 0)
-                errors.Add($"Role '{roleId}' has an empty Sections list.");
-        }
+        // Note: Sections can be empty for roles that don't write to card body
+        // (e.g., gate_checker, code_reviewer — they produce comments only)
 
         if (validatePolling)
             ValidatePollingConfig(config, errors);

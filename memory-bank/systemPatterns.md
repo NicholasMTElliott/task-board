@@ -10,10 +10,18 @@ AgentRunner (C#)
     ↓ fetch cards
 ITaskBoardClient (GitHub Projects / Trello / Stub)
     ↓ move to IN_PROGRESS column
-    ↓ create git worktree, write task files
-ClaudeAgentExecutor (claude CLI subprocess)
-    ↓ parse structured output
-Post-process: update card body, upsert comment, move to outcome column
+    ↓ create git worktree, write task files + comments file
+    ↓ execute steps sequentially (each step = Claude CLI subprocess)
+Post-process: update card body, upsert step comments, move to outcome column
+```
+
+### Polling Mode
+```
+dotnet run -- --mode polling --board-id 1 --workspace .
+    ↓ scans all cards on the board
+    ↓ finds cards in "Ready for" trigger columns
+    ↓ picks highest-priority card (via priority field)
+    ↓ runs AgentRunner.ExecuteAsync() same as agent mode
 ```
 
 ### Queue-based Mode (legacy, for webhook-triggered flows)
@@ -21,25 +29,49 @@ Post-process: update card body, upsert comment, move to outcome column
 Webhook → Cloudflare Worker → PGMQ on Neon → .NET EventProcessor → Orchestrator → Board API
 ```
 
-> **Current focus:** Direct CLI agent mode with GitHub Projects. Queue-based flow preserved for future webhook integration.
+> **Current focus:** Direct CLI agent mode and polling mode with GitHub Projects. Queue-based flow preserved for future webhook integration.
 
 ## Core Design Patterns
 
 ### State Machine
 Board columns (GitHub Projects status field / Trello lists) are the authoritative state of a card. Each column maps to exactly one role or manual gate. The AgentRunner determines transitions deterministically based on workflow config.
 
+### Multi-Step Execution
+States can define multiple sequential steps, each with its own role (and therefore model) and task prompt. Steps execute in order within the same worktree. Communication between steps happens via:
+- **Task file on disk** (`/.aiboard/tasks/{id}.md`) — steps read/write sections; card body is updated after each step.
+- **Comments file on disk** — refreshed after each step's comment is upserted to the board, so subsequent steps see prior step output as a conversation chain.
+- **Step-specific comments** — each step gets its own comment marker (`<!-- agent-step:{step.Name} -->`) on the card.
+
+If any step returns non-COMPLETE, the chain halts and the card transitions based on that outcome.
+
+Legacy single-step states (top-level `role` + `taskPrompt`) are auto-normalized to a one-element steps array via `WorkflowState.Normalise()`.
+
+### Current Multi-Step Configurations
+**Ready for Design** (3 steps, all opus 4.6 via `senior_engineer`):
+1. `review_related_tickets` — scan related tickets, assess impact
+2. `create_design` — produce technical design
+3. `review_design_conflicts` — verify no cross-ticket conflicts
+
+**Ready for Implementation** (2 steps):
+1. `implement` — write code (sonnet 4.6 via `implementer`)
+2. `code_review` — review changes (opus 4.6 via `code_reviewer`)
+
+### Gate Checks
+After all steps complete for a state, an optional `gateCheck` runs a lightweight agent (typically `gate_checker` on Haiku) to validate the output before transitioning. On failure, card moves to `GATE_FAIL` target (typically back to the trigger column for retry).
+
 ### IN_PROGRESS Transition
-When an agent picks up a card from a "Ready for X" trigger column, it first moves the card to the "X-ing" in-progress column before starting work. This provides visual feedback on the board that work is happening. Defined as `"IN_PROGRESS": "Designing"` in the state's transitions map. Optional — if not defined, the agent runs in-place.
+When an agent picks up a card from a "Ready for X" trigger column, it first moves the card to the "X-ing" in-progress column before starting work. Defined as `"IN_PROGRESS": "Designing"` in the state's transitions map.
 
 ### ITaskBoardClient Abstraction
 Provider-agnostic interface for all board operations:
 - `GetCardAsync(cardId)` / `GetBoardCardsAsync(boardId)` — read cards
+- `GetCardCommentsAsync(cardId)` — read comments
 - `UpdateCardBodyAsync(cardId, body)` — write card content
 - `MoveCardToColumnAsync(cardId, columnId)` — state transitions
-- `UpsertAgentCommentAsync(cardId, body)` — agent feedback
+- `UpsertAgentCommentAsync(cardId, body, marker)` — agent feedback with HTML marker for idempotent upsert
 
 Implementations: `GitHubProjectsClient` (via `gh` CLI), `TrelloClient` (HTTP), `StubTaskBoardClient` (testing).
-Selection via `BOARD_PROVIDER` env var: `github`, `trello`/`live`, or default `stub`.
+Selection via `BOARD_PROVIDER` env var: `github`, `trello`, or default `stub`.
 
 ### Agent Contract
 The agent executor (`ClaudeAgentExecutor`) uses `--json-schema` to enforce structured output:
@@ -47,153 +79,58 @@ The agent executor (`ClaudeAgentExecutor`) uses `--json-schema` to enforce struc
 {
   "outcome": "COMPLETE | NEEDS_INFO | ERROR",
   "detail": "optional summary string",
-  "questions": [
-    {
-      "question": "What is the target component?",
-      "recommendations": ["Auth module", "API gateway"]
-    }
-  ]
+  "questions": [{ "question": "...", "recommendations": ["..."] }]
 }
 ```
 - `outcome` is required; `detail` and `questions` are optional
-- `questions` array is populated when outcome is `NEEDS_INFO`
-- Each question has optional `recommendations` (suggested answers)
 - Agents do NOT move cards. The orchestrator owns all transitions.
-- The C# `AgentOutcome` enum uses: `COMPLETE`, `NEEDS_INFO`, `ERROR`
-- The `AgentResult` record carries: `Outcome`, `Detail`, `Questions`
 - Backward compat: parser also accepts `SUCCESS` → `COMPLETE`, `QUESTIONS` → `NEEDS_INFO`
-
-### Webhook Authentication
-Trello webhooks are validated using HMAC-SHA1 signature verification:
-- Trello sends `x-trello-webhook` header with Base64-encoded HMAC-SHA1 digest
-- Digest is computed over `(request body + callback URL)` using `TRELLO_API_SECRET` as key
-- Worker performs constant-time comparison to prevent timing attacks
-- HEAD requests to `/webhooks/trello` return 200 (Trello URL verification)
-- Non-card events (board, list, member changes) are accepted but not enqueued
-
-### Idempotency
-Idempotency key: **Trello `actionId`** (from webhook payload) — unique per event at source.  
-A unique constraint on the `processed_events` table enforces exactly-once execution.  
-If `actionId` already exists → skip entire execution before any agent invocation.
-
-### Queue Backend Strategy (Prototype)
-Queue backend uses **PGMQ on Neon** with SQL-only install script applied per environment.  
-Fallback `jobs` table remains available as contingency.
-
-Current PGMQ semantics:
-- `pgmq.send()` — enqueue webhook event (raw JSON payload)
-- `pgmq.read()` with visibility timeout — claim a message (replaces `FOR UPDATE SKIP LOCKED`)
-- `pgmq.delete()` — ack on successful execution
-- `pgmq.archive()` — move to audit/replay archive table on completion (replaces custom dead-letter)
-- Visibility timeout auto-returns unacked messages for retry
-
-Current implementation note:
-- .NET queue repository now uses strongly typed Npgmq methods (`ReadBatchAsync<string>`, `DeleteAsync`, `ArchiveAsync`) to avoid reflection and improve AOT/trimming compatibility.
-
-### Dead-Letter / Max-Retry
-Messages that exceed `MaxRetries` (default 3) are dead-lettered: archived to `pgmq.a_events` and removed from the active queue.
-Detection uses `NpgmqMessage<T>.ReadCt` (PGMQ's built-in read counter).
-Check happens before idempotency or processing — poison messages are caught early.
-Configurable via `QueueProcessing:MaxRetries` in appsettings / environment.
-
-### Migration Pattern
-Schema migrations are SQL-first and versioned under `db/migrations` for Flyway execution.
-
-Execution pattern:
-- Migrations are applied through `scripts/migrate.ps1`, which invokes Flyway via Docker (`redgate/flyway`).
-- This avoids local Flyway installation and keeps migration runtime aligned across developer machines.
-
-Current tracked chain:
-- `V1__processed_events.sql`
-- `V2__pgmq_core.sql`
-- `V3__pgmq_create_events_queue.sql`
-- `V4__card_state.sql`
-- `V5__run_log.sql`
-
-Contingency fallback migration (`db/sql/0003_jobs_fallback.sql`) is intentionally manual and not part of the primary Flyway chain.
-
-Fallback semantics (if PGMQ fails on Neon):
-- `jobs.status = pending|claimed|succeeded|failed`
-- claim via transactional `FOR UPDATE SKIP LOCKED`
-- retry by returning failed jobs to pending with backoff
 
 ### Git Worktree Isolation
 Agent execution uses git worktrees for isolated working directories:
 - `GitWorkspaceManager.CreateWorktreeAsync(repoPath, branchName)` → returns worktree path
 - Convention: `{repoPath}-worktrees/aiboard/{cardId}`
 - Edge cases handled: worktree already exists (reuse), branch already exists locally or on remote (fetch + track), stale directory (prune + recreate)
-- Branch lookup: `FindBranchByPrefixAsync` checks local then remote refs; if found only on remote, fetches and creates a local tracking branch before creating the worktree
+- Branch lookup: `FindBranchByPrefixAsync` checks local then remote refs; if found only on remote, fetches and creates a local tracking branch
 - `.aiboard/` task files are gitignored and ephemeral — not committed to git
-- `CommitAsync` uses `git add .` (respects `.gitignore`) with `HasStagedChangesAsync` check before committing
 - Main repo working tree is never modified during agent execution
 
-### Locking
-Before execution: write lock `(cardId, runId)` to Postgres.
-If lock exists → skip.
-After execution: release lock.
-Prevents duplicate agent runs from concurrent worker instances claiming different jobs for the same card.
-
-### Human-in-the-Loop
-`NEEDS_INFO` outcome → card moved to Questions sidebar list, `WaitingOnHuman = true` and `origin_list_id` set in `card_state`.
-**Re-trigger (v1 rule):** operator moves card back to prior agent state. `origin_list_id` enables the orchestrator to validate the return move.
-Comment-marker re-trigger is explicitly out of scope for v1.
-
-### Manual Gates
-"Designed" and "Ready for Implementation" are passive columns. The orchestrator takes no action on cards in these states. Only operator card movement triggers the next agent.
-
-### Card Description Structure
-Agents read and write structured sections inside the card description:
-```
-# Requirements
-# Decisions
-# Technical Design
-# Open Questions
-# Acceptance Criteria
-```
-Agents update only their designated sections.
-
-### Comment Strategy
-One "Agent Status" comment per run — upserted, not appended. Prevents notification spam.
+### Cross-Reference Resolution
+Task files can reference other cards (e.g., `#5`, `#12`). The `CrossReferenceResolver` parses these, fetches referenced cards, and includes them in the agent's workspace. This creates tracked relationships so dependent context flows through the pipeline.
 
 ### Claude CLI Subprocess Pattern
 The .NET worker invokes the Claude CLI (`claude`) as a subprocess via `ClaudeAgentExecutor`.
 
 **Windows invocation:**
 - Set `startInfo.FileName = "claude.cmd"` directly with `ArgumentList`
-- Do NOT use `cmd.exe /c claude` (mangles quoted arguments) or PowerShell wrappers (unnecessary indirection)
+- Do NOT use `cmd.exe /c claude` (mangles quoted arguments) or PowerShell wrappers
 - Remove `CLAUDECODE` env var from subprocess environment or the CLI refuses to run as a subprocess
-- **Argument ordering:** Flag-style args (`--model`, `--output-format`, `--permission-mode`, etc.) must come BEFORE content args (`--system-prompt`, `-p`). On Windows, `claude.cmd` runs through `cmd.exe` which misparses double quotes — if a content arg with quotes appears early, all subsequent flags are corrupted.
-- **No double quotes in prompts:** Prompt templates must not contain `"` characters. Use plain text or single quotes instead. Double quotes in `-p` or `--system-prompt` values trigger `cmd.exe` quote-state mangling.
+- Flag-style args must come BEFORE content args (Windows `cmd.exe` quote-state mangling)
+- No double quotes in prompts — use plain text or single quotes
 
 **CLI flags (required for structured output):**
-- `--verbose --output-format stream-json` — NDJSON output, one JSON object per line; `--verbose` is required with `stream-json` in print mode
+- `--verbose --output-format stream-json` — NDJSON output; `--verbose` required with `stream-json`
 - `--no-session-persistence` — prevents session reuse between runs
-- `--json-schema <minified-json>` — schema must be single-line (minified); produces `structured_output` object in response
+- `--json-schema <minified-json>` — must be single-line (minified)
 - `--max-budget-usd` — cost control per invocation (preferred over `--max-turns`)
-- `--permission-mode bypassPermissions --allowedTools *` — headless execution without permission prompts
-- Do NOT use `--max-turns` — causes premature termination before structured output is produced
+- `--permission-mode bypassPermissions --allowedTools *` — headless execution
+- Do NOT use `--max-turns` — causes premature termination before structured output
 
-**Provider-specific params:**
-- Workflow config supports `providerParams` per state (e.g., `{"effort": "max"}` for Claude CLI `--effort` flag)
-- Passed through `AgentExecutionContext.ProviderParams` and applied in `BuildArgumentList`
-
-**Prompt constraints:**
-- System prompt delivered via `--append-system-prompt-file` (file path, not inline)
-- Task prompt delivered via stdin (`RedirectStandardInput`), not `-p` flag
-- Schema instruction in system prompt is redundant when `--json-schema` is used
-- Agent is instructed to format `detail` field as GitHub-flavored markdown for rendering on issues
+**Prompt delivery:**
+- System prompt via `--append-system-prompt-file` (file path)
+- Task prompt via stdin (`RedirectStandardInput`)
+- `providerParams` per state (e.g., `{"effort": "max"}` → `--effort` flag)
 
 **Output parsing (NDJSON `ParseStreamOutput` → `ParseResult`):**
-- NDJSON stream may contain **multiple `type: "result"` messages** (e.g., if Claude CLI auto-continues after a tool failure)
-- Parser finds the result message that contains `structured_output` — prefers that over others
-- If multiple result messages have `structured_output`, logs a warning and uses the first
-- Conversation log is assembled from `type: "assistant"` messages (text content blocks)
-- `AgentResult` record carries: `Outcome`, `Detail`, `Questions`, `ConversationLog`
+- Stream may contain multiple `type: "result"` messages; parser finds the one with `structured_output`
+- Conversation log assembled from `type: "assistant"` messages (text content blocks)
+- Timeout: event-based capture (`OutputDataReceived`/`ErrorDataReceived`) for partial output on timeout
 
-**Timeout observability:**
-- Use event-based capture (`OutputDataReceived`/`ErrorDataReceived` + `StringBuilder`) instead of `ReadToEndAsync`
-- `ReadToEndAsync` blocks until the process exits — unusable for partial output on timeout
-- On timeout, partial stdout/stderr is included in the exception message for diagnostics
+### Merge Resolution
+When a merge conflict is detected (via `MERGE_CONFLICT` transition), a `merge_resolver` agent (Sonnet 4.6) is invoked to resolve conflicts before retrying. Configured in `workflow.github.json` under `mergeResolution`.
+
+### System Merge (Approved → Done)
+The `Approved` state has `gateType: "system_merge"`. The system automatically merges the PR and moves the card to `Done`. On merge conflict, falls back to `Ready for Implementation`.
 
 ## Component Relationships
 
@@ -203,17 +140,16 @@ The .NET worker invokes the Claude CLI (`claude`) as a subprocess via `ClaudeAge
 | ITaskBoardClient | Provider-agnostic board abstraction |
 | GitHubProjectsClient | GitHub Projects v2 via `gh` CLI (GraphQL + REST) |
 | TrelloClient | Trello REST API |
-| AgentRunner | Direct agent execution: fetch cards → worktree → agent → post-process |
+| AgentRunner | Direct agent execution: fetch cards → worktree → steps → post-process |
 | ClaudeAgentExecutor | Claude CLI subprocess with `--json-schema` structured output |
 | GitWorkspaceManager | Git worktree lifecycle for isolated agent execution |
-| TaskFileManager | Write board cards as `.aiboard/tasks/{id}.md` files |
-| Cloudflare Worker | Webhook ingestion (legacy queue path) |
-| Neon Postgres | Queue storage + idempotency + run metadata (legacy queue path) |
-| workflow.github.json | Workflow config for GitHub Projects |
+| TaskFileManager | Write board cards as `.aiboard/tasks/{id}.md` files + comments files |
+| CrossReferenceResolver | Parse card references, fetch dependent cards |
+| workflow.github.json | Workflow config for GitHub Projects (active) |
 | workflow.v1.json | Workflow config for Trello (legacy) |
 
 ## Workflow Configuration
-**File-based** — `workflow.github.json` or `workflow.v1.json` in repository, selected via `WORKFLOW_CONFIG_PATH` env var.
+**File-based** — `workflow.github.json` or `workflow.v1.json`, selected via `WORKFLOW_CONFIG_PATH` env var.
 
 Schema:
 ```json
@@ -221,74 +157,104 @@ Schema:
   "states": {
     "<column_name>": {
       "name": "<display_name>",
-      "role": "<role_key>",
-      "gateType": "agent_run | manual_gate | manual_entry | in_progress | holding | terminal",
-      "taskPrompt": "<inline prompt>",
-      "taskPromptFile": "<path relative to repo root>",
+      "gateType": "agent_run | manual_gate | manual_entry | in_progress | holding | terminal | system_merge",
       "gitBehavior": "discard | commit_only | commit_and_push",
       "providerParams": { "<key>": "<value>" },
+      "includeInAgentContext": true,
+      "pipelineOrder": 1,
+      "steps": [
+        { "name": "<step_name>", "role": "<role_key>", "taskPromptFile": "<path>" }
+      ],
+      "gateCheck": {
+        "role": "<role_key>",
+        "taskPromptFile": "<path>"
+      },
       "transitions": {
-        "IN_PROGRESS": "<in_progress_column>",
-        "COMPLETE": "<next_column>",
-        "NEEDS_INFO": "<questions_column>",
-        "ERROR": "<error_column>"
+        "IN_PROGRESS": "<column>",
+        "COMPLETE": "<column>",
+        "NEEDS_INFO": "<column>",
+        "ERROR": "<column>",
+        "GATE_FAIL": "<column>",
+        "MERGE_CONFLICT": "<column>"
       }
     }
   },
   "roles": {
     "<role_key>": {
-      "model": "claude-opus-4-6",
-      "systemPromptFile": "<path relative to repo root>",
-      "sections": ["Technical Design", "Decisions"]
+      "model": "<model_id>",
+      "systemPromptFile": "<path>",
+      "sections": ["<section_name>"]
     }
-  }
+  },
+  "mergeResolution": { "role": "<role_key>", "providerParams": {} },
+  "polling": { "priorityFieldName": "<field>", "priorityOrder": ["P0", "P1"] }
 }
 ```
 
+- `steps` array replaces legacy top-level `role`/`taskPrompt` (auto-normalized on load)
 - `taskPromptFile` takes precedence over `taskPrompt` (inline fallback preserved)
-- `systemPromptFile` takes precedence over `systemPrompt` (inline written to temp file as fallback)
-- `providerParams` are passed to the agent executor as key-value pairs (e.g., `{"effort": "max"}` for Claude CLI)
+- `systemPromptFile` takes precedence over `systemPrompt`
+- `providerParams` are state-level (shared across all steps)
+- `sections` can be empty for roles that only produce comments (gate_checker, code_reviewer)
+- State keys are column names for GitHub Projects or list IDs for Trello
 
-State keys are **column names** for GitHub Projects (status option names) or **list IDs** for Trello.
+## Roles
 
-## Database Tables
+| Role | Model | Purpose |
+|------|-------|---------|
+| `senior_engineer` | claude-opus-4-6 | Design and design review steps |
+| `implementer` | claude-sonnet-4-6 | Code implementation (same system prompt as senior_engineer) |
+| `code_reviewer` | claude-opus-4-6 | Post-implementation code review |
+| `qa` | claude-opus-4-6 | Test validation |
+| `gate_checker` | claude-haiku-4-5 | Lightweight gate checks after design/implementation |
+| `merge_resolver` | claude-sonnet-4-6 | Merge conflict resolution |
 
-### queue tables
-Queue tables are managed by PGMQ in `pgmq` schema:
+## Prompt File Structure
 
+| File | Used By |
+|------|---------|
+| `prompts/senior_engineer.md` | senior_engineer, implementer (system prompt) |
+| `prompts/code_reviewer.md` | code_reviewer (system prompt) |
+| `prompts/qa.md` | qa (system prompt) |
+| `prompts/gate_checker.md` | gate_checker (system prompt) |
+| `prompts/merge_resolver.md` | merge_resolver (system prompt) |
+| `prompts/states/ready_for_design.md` | Design step 2 (create_design) |
+| `prompts/states/steps/review_related_tickets.md` | Design step 1 |
+| `prompts/states/steps/review_design_conflicts.md` | Design step 3 |
+| `prompts/states/ready_for_implementation.md` | Implementation step 1 (implement) |
+| `prompts/states/steps/code_review.md` | Implementation step 2 |
+| `prompts/states/ready_for_test.md` | QA testing |
+| `prompts/gates/post_design.md` | Gate check after design |
+| `prompts/gates/post_implementation.md` | Gate check after implementation |
+
+## Database Tables (Legacy Queue Path)
+
+### queue tables (PGMQ)
 | Table | Purpose |
 |-------|---------|
-| `pgmq.q_events` | Active event queue (pending/claimed messages) |
-| `pgmq.a_events` | Archive table (completed/dead-lettered messages for audit/replay) |
-
-If runtime issues emerge later, fallback is application-managed `jobs` table with claim/update semantics.
-
-In both paths, `actionId` uniqueness is enforced by application-layer `processed_events` constraint.
+| `pgmq.q_events` | Active event queue |
+| `pgmq.a_events` | Archive table (completed/dead-lettered) |
 
 ### processed_events (idempotency)
 | Column | Description |
 |--------|-------------|
 | action_id | Trello action ID (PK) |
-| processed_at_utc | Timestamp (default `now()`) |
+| processed_at_utc | Timestamp |
 
 ### card_state
 | Column | Description |
 |--------|-------------|
-| card_id | Trello card ID (PK) |
-| last_processed_event | Last processed action ID |
+| card_id | Card ID (PK) |
 | current_lock | Active run lock ID |
 | last_known_list | Last confirmed list ID |
-| origin_list_id | List the card was in before moving to Questions (for return-path validation) |
+| origin_list_id | Pre-Questions list (for return-path validation) |
 | waiting_on_human | Boolean flag |
-| updated_at_utc | Last update timestamp |
 
 ### run_log
 | Column | Description |
 |--------|-------------|
 | run_id | UUID (PK) |
-| card_id | Trello card ID |
+| card_id | Card ID |
 | role | Agent role executed |
-| input_hash | Hash of card state at execution time |
-| output_hash | Hash of agent output |
-| outcome | COMPLETE / NEEDS_INFO / BLOCKED / ERROR |
+| outcome | COMPLETE / NEEDS_INFO / ERROR |
 | created_at_utc | Execution time |
