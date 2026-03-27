@@ -223,6 +223,93 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
         await RunGitAsync(repoPath, ["fetch", "origin"], cancellationToken, timeoutSeconds: 60);
     }
 
+    /// <summary>
+    /// Pulls the work branch from remote (fast-forward only). Failures are logged and swallowed.
+    /// </summary>
+    public async Task PullWorkBranchAsync(
+        string repoPath, string branchName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RunGitAsync(repoPath,
+                ["pull", "--ff-only", "origin", branchName], cancellationToken, timeoutSeconds: 60);
+        }
+        catch (GitOperationException ex)
+        {
+            logger.LogWarning(ex, "Pull failed for {Branch} — continuing with local state", branchName);
+        }
+    }
+
+    /// <summary>
+    /// Merges origin/{defaultBranch} into the current branch using --no-ff --no-commit.
+    /// Returns the merge result without committing, allowing the caller to inspect and decide.
+    /// </summary>
+    public async Task<MergeMainResult> MergeMainBranchAsync(
+        string repoPath, string defaultBranch, CancellationToken cancellationToken)
+    {
+        // Count commits to merge (for summary)
+        var commitCount = 0;
+        try
+        {
+            var (_, logOutput, _) = await RunGitAsync(repoPath,
+                ["log", "--oneline", $"HEAD..origin/{defaultBranch}"], cancellationToken);
+            commitCount = logOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+        }
+        catch (GitOperationException) { /* best effort */ }
+
+        // Attempt merge
+        var hasConflicts = false;
+        try
+        {
+            var (_, stdout, _) = await RunGitAsync(repoPath,
+                ["merge", $"origin/{defaultBranch}", "--no-ff", "--no-commit"], cancellationToken);
+
+            if (stdout.Contains("Already up to date"))
+                return new MergeMainResult(MergeMainStatus.UpToDate, defaultBranch, [], [], 0, "Already up to date");
+        }
+        catch (GitOperationException ex) when (ex.ExitCode == 1)
+        {
+            hasConflicts = true;
+        }
+
+        // Gather file lists
+        var (_, cachedOutput, _) = await RunGitAsync(repoPath,
+            ["diff", "--cached", "--name-only"], cancellationToken);
+        var changedFiles = cachedOutput
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(f => f.Trim())
+            .ToList();
+
+        var conflictFiles = new List<string>();
+        if (hasConflicts)
+        {
+            var (_, conflictOutput, _) = await RunGitAsync(repoPath,
+                ["diff", "--name-only", "--diff-filter=U"], cancellationToken);
+            conflictFiles = conflictOutput
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(f => f.Trim())
+                .ToList();
+        }
+
+        var status = hasConflicts ? MergeMainStatus.Conflicts : MergeMainStatus.Merged;
+        var summary = hasConflicts
+            ? $"{conflictFiles.Count} conflict(s) in {changedFiles.Count} changed files"
+            : $"{changedFiles.Count} files changed, {commitCount} commit(s) merged";
+
+        return new MergeMainResult(status, defaultBranch, changedFiles, conflictFiles, commitCount, summary);
+    }
+
+    /// <summary>
+    /// Commits a staged merge with a descriptive message.
+    /// </summary>
+    public async Task CommitMergeAsync(
+        string repoPath, string defaultBranch, string branchName, CancellationToken cancellationToken)
+    {
+        await RunGitAsync(repoPath, ["add", "."], cancellationToken);
+        await RunGitAsync(repoPath,
+            ["commit", "-m", $"Merge origin/{defaultBranch} into {branchName}"], cancellationToken);
+    }
+
     public async Task<string> GetDefaultBranchAsync(string repoPath, CancellationToken cancellationToken)
     {
         // Try symbolic-ref first

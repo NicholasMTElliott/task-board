@@ -82,6 +82,33 @@ public sealed partial class AgentRunner(
             var worktreePath = await gitWorkspaceManager.CreateWorktreeAsync(
                 workspacePath, branchName, cancellationToken);
 
+            // 4a. Merge main branch for existing branches
+            string? mergePromptAugmentation = null;
+            if (isExistingBranch)
+            {
+                var mergeOutcome = await HandleMergeStepAsync(
+                    worktreePath, branchName, cardId, targetCard, state, cancellationToken);
+
+                switch (mergeOutcome.Action)
+                {
+                    case MergeStepAction.KickBack:
+                        await boardClient.UpsertAgentCommentAsync(
+                            cardId, mergeOutcome.KickBackComment!, runMarker, cancellationToken);
+                        await boardClient.MoveCardToColumnAsync(
+                            cardId, mergeOutcome.KickBackColumnId!, cancellationToken);
+                        logger.LogInformation("Card {CardId} kicked back due to merge conflict", cardId);
+                        return new AgentRunResult(AgentOutcome.ERROR,
+                            "Merge conflict with upstream — card returned to implementation");
+
+                    case MergeStepAction.ProceedWithConflictContext:
+                        mergePromptAugmentation = mergeOutcome.PromptAugmentation;
+                        break;
+
+                    case MergeStepAction.Proceed:
+                        break;
+                }
+            }
+
             // 5. Fetch comments (used for both cross-references and comments file)
             var comments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
 
@@ -170,6 +197,11 @@ public sealed partial class AgentRunner(
                     resolvedPrompt += "\n\nNote: This task has been worked on previously. A branch with prior changes already exists. " +
                         "Review the existing state of the codebase and any changes already made before beginning new work. " +
                         "Avoid duplicating or overwriting prior progress.";
+
+                    if (mergePromptAugmentation is not null)
+                    {
+                        resolvedPrompt += "\n\n" + mergePromptAugmentation;
+                    }
                 }
 
                 // 6c. Execute agent for this step
@@ -409,6 +441,238 @@ public sealed partial class AgentRunner(
         {
             logger.LogWarning(ex, "Failed to clean up worktree for branch {Branch}", branchName);
         }
+    }
+
+    // ── Merge step logic ──────────────────────────────────────────────
+
+    private enum MergeStepAction { Proceed, KickBack, ProceedWithConflictContext }
+
+    private sealed record MergeStepOutcome(
+        MergeStepAction Action,
+        string? PromptAugmentation = null,
+        string? KickBackComment = null,
+        string? KickBackColumnId = null);
+
+    private async Task<MergeStepOutcome> HandleMergeStepAsync(
+        string worktreePath,
+        string branchName,
+        string cardId,
+        BoardCard targetCard,
+        WorkflowState state,
+        CancellationToken cancellationToken)
+    {
+        // 1. Fetch origin
+        try
+        {
+            await gitWorkspaceManager.FetchAsync(worktreePath, cancellationToken);
+        }
+        catch (GitOperationException ex)
+        {
+            logger.LogWarning(ex, "Failed to fetch origin — skipping merge step");
+            return new MergeStepOutcome(MergeStepAction.Proceed);
+        }
+
+        // 2. Pull work branch
+        await gitWorkspaceManager.PullWorkBranchAsync(worktreePath, branchName, cancellationToken);
+
+        // 3. Detect default branch
+        string defaultBranch;
+        try
+        {
+            defaultBranch = await gitWorkspaceManager.GetDefaultBranchAsync(worktreePath, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Cannot detect default branch — skipping merge step");
+            return new MergeStepOutcome(MergeStepAction.Proceed);
+        }
+
+        // 4. Attempt merge
+        var mergeResult = await gitWorkspaceManager.MergeMainBranchAsync(worktreePath, defaultBranch, cancellationToken);
+
+        if (mergeResult.Status == MergeMainStatus.UpToDate)
+        {
+            logger.LogInformation("Branch {Branch} is up to date with origin/{Default}", branchName, defaultBranch);
+            return new MergeStepOutcome(MergeStepAction.Proceed);
+        }
+
+        logger.LogInformation("Merge from origin/{Default}: status={Status}, {ChangedCount} changed, {ConflictCount} conflicts",
+            defaultBranch, mergeResult.Status, mergeResult.ChangedFiles.Count, mergeResult.ConflictFiles.Count);
+
+        var hasMergeConflictTransition = state.Transitions.ContainsKey("MERGE_CONFLICT");
+
+        // 5. Handle based on stage type
+        if (!hasMergeConflictTransition)
+        {
+            // Implementation-style: handle inline
+            if (mergeResult.Status == MergeMainStatus.Merged)
+            {
+                // Clean merge — commit directly
+                await gitWorkspaceManager.CommitMergeAsync(worktreePath, defaultBranch, branchName, cancellationToken);
+                logger.LogInformation("Committed clean merge of origin/{Default} into {Branch}", defaultBranch, branchName);
+                return new MergeStepOutcome(MergeStepAction.Proceed);
+            }
+            else
+            {
+                // Conflicts — leave them for the implementing agent
+                var conflictContext = BuildConflictPromptAugmentation(mergeResult);
+                return new MergeStepOutcome(MergeStepAction.ProceedWithConflictContext, PromptAugmentation: conflictContext);
+            }
+        }
+        else
+        {
+            // Non-implementation: run merge validation/resolution agent
+            var mergeAgentResult = await RunMergeResolutionAgentAsync(
+                mergeResult, worktreePath, cardId, targetCard, cancellationToken);
+
+            if (mergeAgentResult.Outcome == AgentOutcome.COMPLETE)
+            {
+                // Agent validated/resolved — commit the merge
+                await gitWorkspaceManager.CommitMergeAsync(worktreePath, defaultBranch, branchName, cancellationToken);
+
+                // Push if the state's gitBehavior supports it
+                var mergeGitBehavior = state.GitBehavior ?? "discard";
+                if (mergeGitBehavior is "commit_and_push")
+                {
+                    await gitWorkspaceManager.PushAsync(worktreePath, branchName, cancellationToken);
+                }
+
+                logger.LogInformation("Merge validated and committed for {Branch}", branchName);
+                return new MergeStepOutcome(MergeStepAction.Proceed);
+            }
+            else
+            {
+                // Agent couldn't resolve — abort and kick back
+                try
+                {
+                    await gitWorkspaceManager.AbortMergeAsync(worktreePath, cancellationToken);
+                }
+                catch (GitOperationException abortEx)
+                {
+                    logger.LogWarning(abortEx, "merge --abort failed (no merge in progress?)");
+                }
+
+                var kickBackColumn = state.Transitions["MERGE_CONFLICT"];
+                var comment = BuildMergeKickBackComment(mergeResult, mergeAgentResult, defaultBranch, branchName);
+                return new MergeStepOutcome(MergeStepAction.KickBack, KickBackComment: comment, KickBackColumnId: kickBackColumn);
+            }
+        }
+    }
+
+    private async Task<AgentResult> RunMergeResolutionAgentAsync(
+        MergeMainResult mergeResult,
+        string worktreePath,
+        string cardId,
+        BoardCard targetCard,
+        CancellationToken cancellationToken)
+    {
+        var mergeResolution = workflowConfig.MergeResolution;
+        if (mergeResolution is null)
+        {
+            logger.LogWarning("No mergeResolution config — cannot run merge agent");
+            return new AgentResult(AgentOutcome.ERROR, "No merge resolution agent configured");
+        }
+
+        if (!workflowConfig.Roles.TryGetValue(mergeResolution.Role, out var mergeRole))
+        {
+            logger.LogError("Merge resolution role {Role} not found in workflow config", mergeResolution.Role);
+            return new AgentResult(AgentOutcome.ERROR, $"Merge resolution role '{mergeResolution.Role}' not found");
+        }
+
+        var systemPromptPath = await ResolveSystemPromptFileAsync(
+            mergeRole, mergeResolution.Role, worktreePath, cancellationToken);
+
+        var taskPrompt = BuildMergeAgentTaskPrompt(mergeResult);
+
+        var context = new AgentExecutionContext(
+            TargetCardId: cardId,
+            TargetCardTitle: targetCard.Title,
+            WorkspacePath: worktreePath,
+            TaskPrompt: taskPrompt,
+            SystemPromptFilePath: systemPromptPath,
+            Model: mergeRole.Model,
+            ProviderParams: mergeResolution.ProviderParams,
+            CommentsFilePath: null);
+
+        logger.LogInformation("Running merge resolution agent for card {CardId}", cardId);
+        return await agentExecutor.ExecuteAsync(context, cancellationToken);
+    }
+
+    private static string BuildMergeAgentTaskPrompt(MergeMainResult mergeResult)
+    {
+        var sb = new StringBuilder();
+
+        if (mergeResult.Status == MergeMainStatus.Merged)
+        {
+            sb.AppendLine($"The default branch (origin/{mergeResult.DefaultBranch}) has been merged into the work branch.");
+            sb.AppendLine($"{mergeResult.CommitCount} new commit(s) were merged.");
+            sb.AppendLine();
+            sb.AppendLine("Changed files:");
+            foreach (var f in mergeResult.ChangedFiles)
+                sb.AppendLine($"- {f}");
+            sb.AppendLine();
+            sb.AppendLine("Verify the build passes and the merged changes do not introduce regressions or conflicts with the existing work on this branch.");
+        }
+        else
+        {
+            sb.AppendLine($"A merge of origin/{mergeResult.DefaultBranch} into the work branch resulted in conflicts.");
+            sb.AppendLine();
+            sb.AppendLine("Conflicted files:");
+            foreach (var f in mergeResult.ConflictFiles)
+                sb.AppendLine($"- {f}");
+            if (mergeResult.ChangedFiles.Count > mergeResult.ConflictFiles.Count)
+            {
+                sb.AppendLine();
+                sb.AppendLine("Auto-merged files (no conflicts):");
+                foreach (var f in mergeResult.ChangedFiles.Except(mergeResult.ConflictFiles))
+                    sb.AppendLine($"- {f}");
+            }
+            sb.AppendLine();
+            sb.AppendLine("Resolve all conflict markers (<<<<<<< / ======= / >>>>>>>), verify the build passes, and confirm the merged result is correct.");
+        }
+
+        return sb.ToString();
+    }
+
+    private static string BuildConflictPromptAugmentation(MergeMainResult mergeResult)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("IMPORTANT: A merge of the main branch into your work branch has resulted in conflicts.");
+        sb.AppendLine("The following files have merge conflict markers that you MUST resolve before proceeding:");
+        foreach (var f in mergeResult.ConflictFiles)
+            sb.AppendLine($"- {f}");
+        sb.AppendLine();
+        sb.AppendLine("Resolve all conflict markers (<<<<<<< / ======= / >>>>>>>), verify the build passes, then proceed with your assigned task.");
+        return sb.ToString();
+    }
+
+    private static string BuildMergeKickBackComment(
+        MergeMainResult mergeResult, AgentResult agentResult,
+        string defaultBranch, string branchName)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Merge Conflict: upstream changes could not be resolved");
+        sb.AppendLine();
+        sb.AppendLine($"Merging `origin/{defaultBranch}` into `{branchName}` resulted in issues that the merge resolution agent could not automatically resolve.");
+        sb.AppendLine();
+
+        if (mergeResult.ConflictFiles.Count > 0)
+        {
+            sb.AppendLine("**Conflicted files:**");
+            foreach (var f in mergeResult.ConflictFiles)
+                sb.AppendLine($"- `{f}`");
+            sb.AppendLine();
+        }
+
+        if (agentResult.Detail is not null)
+        {
+            sb.AppendLine("**Agent assessment:**");
+            sb.AppendLine(agentResult.Detail);
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("The implementation needs to be reworked to incorporate the upstream changes. Re-trigger this card once the conflicts are addressed.");
+        return sb.ToString();
     }
 
     private async Task PostProcessAsync(
