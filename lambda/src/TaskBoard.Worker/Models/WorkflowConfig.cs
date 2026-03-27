@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace TaskBoard.Worker.Models;
 
 public sealed record WorkflowConfig(
@@ -6,6 +8,13 @@ public sealed record WorkflowConfig(
     PollingConfig? Polling = null,
     MergeResolutionConfig? MergeResolution = null)
 {
+    /// <summary>
+    /// The directory containing the workflow config file. Set after deserialization.
+    /// Used to resolve prompt file paths relative to the config, not the worktree.
+    /// </summary>
+    [JsonIgnore]
+    public string? ConfigDirectory { get; set; }
+
     /// <summary>
     /// Returns a new config with all states normalised (legacy single-step → steps array).
     /// </summary>

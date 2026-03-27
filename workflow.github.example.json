@@ -1,0 +1,240 @@
+{
+  "states": {
+    "Backlog": {
+      "name": "Backlog",
+      "role": null,
+      "gateType": "manual_entry",
+      "taskPrompt": null,
+      "includeInAgentContext": false,
+      "transitions": {}
+    },
+    "Ready for Design": {
+      "name": "Ready for Design",
+      "gateType": "agent_run",
+      "pipelineOrder": 1,
+      "gitBehavior": "discard",
+      "includeInAgentContext": false,
+      "providerParams": {
+        "effort": "max"
+      },
+      "steps": [
+        {
+          "name": "review_related_tickets",
+          "role": "senior_engineer",
+          "taskPromptFile": "prompts/states/steps/review_related_tickets.md"
+        },
+        {
+          "name": "create_design",
+          "role": "senior_engineer",
+          "taskPromptFile": "prompts/states/ready_for_design.md"
+        },
+        {
+          "name": "review_design_conflicts",
+          "role": "senior_engineer",
+          "taskPromptFile": "prompts/states/steps/review_design_conflicts.md"
+        }
+      ],
+      "gateCheck": {
+        "role": "gate_checker",
+        "taskPromptFile": "prompts/gates/post_design.md"
+      },
+      "transitions": {
+        "IN_PROGRESS": "Designing",
+        "COMPLETE": "Designed",
+        "NEEDS_INFO": "Design Questions",
+        "ERROR": "Error",
+        "GATE_FAIL": "Ready for Design",
+        "MERGE_CONFLICT": "Ready for Implementation"
+      }
+    },
+    "Designing": {
+      "name": "Designing",
+      "role": null,
+      "gateType": "in_progress",
+      "taskPrompt": null,
+      "includeInAgentContext": false,
+      "transitions": {}
+    },
+    "Design Questions": {
+      "name": "Design Questions",
+      "role": null,
+      "gateType": "holding",
+      "taskPrompt": null,
+      "includeInAgentContext": false,
+      "transitions": {}
+    },
+    "Designed": {
+      "name": "Designed",
+      "role": null,
+      "gateType": "manual_gate",
+      "taskPrompt": null,
+      "includeInAgentContext": true,
+      "transitions": {}
+    },
+    "Ready for Implementation": {
+      "name": "Ready for Implementation",
+      "gateType": "agent_run",
+      "pipelineOrder": 2,
+      "gitBehavior": "commit_and_push",
+      "includeInAgentContext": true,
+      "providerParams": {
+        "effort": "medium"
+      },
+      "steps": [
+        {
+          "name": "implement",
+          "role": "implementer",
+          "taskPromptFile": "prompts/states/ready_for_implementation.md"
+        },
+        {
+          "name": "code_review",
+          "role": "code_reviewer",
+          "taskPromptFile": "prompts/states/steps/code_review.md"
+        }
+      ],
+      "gateCheck": {
+        "role": "gate_checker",
+        "taskPromptFile": "prompts/gates/post_implementation.md"
+      },
+      "transitions": {
+        "IN_PROGRESS": "Implementing",
+        "COMPLETE": "Ready for Test",
+        "NEEDS_INFO": "Implementation Questions",
+        "ERROR": "Error",
+        "GATE_FAIL": "Ready for Implementation"
+      }
+    },
+    "Implementing": {
+      "name": "Implementing",
+      "role": null,
+      "gateType": "in_progress",
+      "taskPrompt": null,
+      "includeInAgentContext": true,
+      "transitions": {}
+    },
+    "Implementation Questions": {
+      "name": "Implementation Questions",
+      "role": null,
+      "gateType": "holding",
+      "taskPrompt": null,
+      "includeInAgentContext": true,
+      "transitions": {}
+    },
+    "Ready for Test": {
+      "name": "Ready for Test",
+      "role": "qa",
+      "gateType": "agent_run",
+      "pipelineOrder": 3,
+      "gitBehavior": "discard",
+      "taskPromptFile": "prompts/states/ready_for_test.md",
+      "includeInAgentContext": true,
+      "providerParams": {
+        "effort": "medium"
+      },
+      "transitions": {
+        "IN_PROGRESS": "Testing",
+        "COMPLETE": "Tested",
+        "NEEDS_INFO": "Implementation Questions",
+        "ERROR": "Error",
+        "MERGE_CONFLICT": "Ready for Implementation"
+      }
+    },
+    "Testing": {
+      "name": "Testing",
+      "role": null,
+      "gateType": "in_progress",
+      "taskPrompt": null,
+      "includeInAgentContext": true,
+      "transitions": {}
+    },
+    "Tested": {
+      "name": "Tested",
+      "role": null,
+      "gateType": "manual_gate",
+      "taskPrompt": null,
+      "includeInAgentContext": true,
+      "transitions": {}
+    },
+    "Approved": {
+      "name": "Approved",
+      "gateType": "system_merge",
+      "pipelineOrder": 4,
+      "includeInAgentContext": false,
+      "providerParams": {
+        "maxRetries": "3"
+      },
+      "transitions": {
+        "IN_PROGRESS": "Merging",
+        "COMPLETE": "Done",
+        "ERROR": "Error",
+        "MERGE_CONFLICT": "Ready for Implementation"
+      }
+    },
+    "Merging": {
+      "name": "Merging",
+      "role": null,
+      "gateType": "in_progress",
+      "taskPrompt": null,
+      "includeInAgentContext": false,
+      "transitions": {}
+    },
+    "Done": {
+      "name": "Done",
+      "role": null,
+      "gateType": "terminal",
+      "taskPrompt": null,
+      "includeInAgentContext": false,
+      "transitions": {}
+    },
+    "Error": {
+      "name": "Error",
+      "role": null,
+      "gateType": "holding",
+      "taskPrompt": null,
+      "includeInAgentContext": false,
+      "transitions": {}
+    }
+  },
+  "roles": {
+    "senior_engineer": {
+      "model": "claude-opus-4-6",
+      "systemPromptFile": "prompts/senior_engineer.md",
+      "sections": ["Design Review Summary", "Technical Design", "Decisions", "Implementation"]
+    },
+    "qa": {
+      "model": "claude-opus-4-6",
+      "systemPromptFile": "prompts/qa.md",
+      "sections": ["Test Plan", "Test Results"]
+    },
+    "implementer": {
+      "model": "claude-sonnet-4-6",
+      "systemPromptFile": "prompts/senior_engineer.md",
+      "sections": ["Technical Design", "Decisions", "Implementation"]
+    },
+    "code_reviewer": {
+      "model": "claude-opus-4-6",
+      "systemPromptFile": "prompts/code_reviewer.md",
+      "sections": []
+    },
+    "merge_resolver": {
+      "model": "claude-sonnet-4-6",
+      "systemPromptFile": "prompts/merge_resolver.md",
+      "sections": []
+    },
+    "gate_checker": {
+      "model": "claude-haiku-4-5-20251001",
+      "systemPromptFile": "prompts/gate_checker.md",
+      "sections": []
+    }
+  },
+  "mergeResolution": {
+    "role": "merge_resolver",
+    "providerParams": {
+      "effort": "medium"
+    }
+  },
+  "polling": {
+    "priorityFieldName": "priority",
+    "priorityOrder": ["P0", "P1", "P2"]
+  }
+}
