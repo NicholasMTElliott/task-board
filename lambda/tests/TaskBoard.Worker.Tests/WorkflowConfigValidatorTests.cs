@@ -1,3 +1,4 @@
+using System.Text.Json;
 using TaskBoard.Worker.Models;
 
 namespace TaskBoard.Worker.Tests;
@@ -357,6 +358,29 @@ public class WorkflowConfigValidatorTests
     }
 
     [Fact]
+    public void ProductionConfig_IsValid()
+    {
+        var repoRoot = FindRepoRoot();
+        var configPath = Path.Combine(repoRoot, "workflow.github.json");
+        var json = File.ReadAllText(configPath);
+        var config = JsonSerializer.Deserialize<WorkflowConfig>(json, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+        })!;
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        // Filter out known pre-existing issue: merge_resolver has empty sections
+        // because it doesn't write card description sections (it resolves merge conflicts)
+        var unexpectedErrors = errors
+            .Where(e => !e.Contains("merge_resolver") || !e.Contains("empty Sections"))
+            .ToList();
+
+        Assert.True(unexpectedErrors.Count == 0,
+            $"Production workflow.github.json has validation errors:\n{string.Join("\n", unexpectedErrors)}");
+    }
+
+    [Fact]
     public void RoleWithEmptySections_ReportsError()
     {
         var config = new WorkflowConfig(
@@ -374,5 +398,19 @@ public class WorkflowConfigValidatorTests
         var errors = WorkflowConfigValidator.Validate(config);
 
         Assert.Contains(errors, e => e.Contains("empty Sections"));
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = AppContext.BaseDirectory;
+        while (dir is not null)
+        {
+            if (Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git")))
+                return dir;
+            dir = Directory.GetParent(dir)?.FullName;
+        }
+
+        throw new InvalidOperationException(
+            $"Could not find repo root (no .git directory) starting from {AppContext.BaseDirectory}");
     }
 }
