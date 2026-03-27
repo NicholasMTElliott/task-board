@@ -3,7 +3,8 @@ namespace TaskBoard.Worker.Models;
 public sealed record WorkflowConfig(
     Dictionary<string, WorkflowState> States,
     Dictionary<string, WorkflowRole> Roles,
-    PollingConfig? Polling = null)
+    PollingConfig? Polling = null,
+    MergeResolutionConfig? MergeResolution = null)
 {
     /// <summary>
     /// Returns a new config with all states normalised (legacy single-step → steps array).
@@ -69,3 +70,7 @@ public sealed record WorkflowRole(
 public sealed record PollingConfig(
     string? PriorityFieldName = null,
     List<string>? PriorityOrder = null);
+
+public sealed record MergeResolutionConfig(
+    string Role,
+    Dictionary<string, string>? ProviderParams = null);
