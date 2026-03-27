@@ -152,18 +152,32 @@ public sealed class ClaudeAgentExecutor(
         // IMPORTANT: Flag-style args MUST come before content args (-p).
         // On Windows, claude.cmd runs through cmd.exe which misparses double quotes —
         // if a content arg with quotes appears early, all subsequent flags are corrupted.
+        // Budget: use providerParams override if present, else global default
+        var budget = context.ProviderParams?.TryGetValue("maxBudget", out var mb) == true
+            && decimal.TryParse(mb, System.Globalization.CultureInfo.InvariantCulture, out var parsedBudget)
+            ? parsedBudget
+            : _options.MaxBudgetUsd;
+
         var args = new List<string>
         {
             "--model", context.Model,
             "--verbose",
             "--output-format", "stream-json",
-            "--max-budget-usd", _options.MaxBudgetUsd.ToString("F2"),
-            "--permission-mode", "bypassPermissions",
-            "--allowedTools", "*",
+            "--max-budget-usd", budget.ToString("F2"),
+        };
+
+        // Permission/tools: omit for print-mode invocations (e.g., gate checks)
+        if (context.ProviderParams?.TryGetValue("permissionMode", out var pm) != true
+            || !string.Equals(pm, "none", StringComparison.OrdinalIgnoreCase))
+        {
+            args.AddRange(["--permission-mode", "bypassPermissions", "--allowedTools", "*"]);
+        }
+
+        args.AddRange([
             "--no-session-persistence",
             "--json-schema", MinifyJson(OutcomeSchema),
             "--append-system-prompt-file", context.SystemPromptFilePath,
-        };
+        ]);
 
         // Provider-specific parameters from workflow config
         if (context.ProviderParams is not null)

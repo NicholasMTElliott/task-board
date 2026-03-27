@@ -251,6 +251,22 @@ public sealed partial class AgentRunner(
             }
 
             // All steps complete
+            // 7. Run gate check if configured
+            var gateResult = await RunGateCheckAsync(
+                state, lastResult!, worktreePath, targetCard, cardId, cancellationToken);
+
+            if (gateResult is not null)
+            {
+                // Gate blocked progression — handle git and return
+                await HandleGitBehaviorAsync(
+                    gitBehavior, worktreePath, branchName, targetCard, state, lastResult!, cancellationToken);
+
+                if (gitBehavior == "discard")
+                    await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
+
+                return gateResult;
+            }
+
             // 8. Handle git operations based on stage-specific behavior
             var gitNote = await HandleGitBehaviorAsync(
                 gitBehavior, worktreePath, branchName, targetCard, state, lastResult!, cancellationToken);
@@ -440,6 +456,210 @@ public sealed partial class AgentRunner(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to clean up worktree for branch {Branch}", branchName);
+        }
+    }
+
+    // ── Gate check logic ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Runs an optional gate check after all agent steps complete successfully.
+    /// Returns null if no gate check is configured or if the gate passes.
+    /// Returns an AgentRunResult if the gate blocks progression.
+    /// </summary>
+    private async Task<AgentRunResult?> RunGateCheckAsync(
+        WorkflowState state,
+        AgentResult lastStepResult,
+        string worktreePath,
+        BoardCard targetCard,
+        string cardId,
+        CancellationToken cancellationToken)
+    {
+        if (state.GateCheck is null)
+            return null;
+
+        var gateCheck = state.GateCheck;
+
+        // Resolve gate role
+        if (!workflowConfig.Roles.TryGetValue(gateCheck.Role, out var gateRole))
+        {
+            logger.LogError("Gate check role '{Role}' not found in workflow config — skipping gate", gateCheck.Role);
+            return null;
+        }
+
+        // Capture diff based on git behavior
+        var gitBehavior = state.GitBehavior ?? "discard";
+        string changes;
+
+        if (gitBehavior is "commit_and_push" or "commit_only")
+        {
+            changes = await gitWorkspaceManager.GetDiffSummaryAsync(
+                worktreePath, gateCheck.MaxDiffChars, cancellationToken);
+        }
+        else
+        {
+            // For discard stages, the agent output is the task file content
+            var taskFilePath = TaskFileManager.GetTaskFilePath(
+                worktreePath, targetCard.Id, targetCard.Title);
+            changes = File.Exists(taskFilePath)
+                ? await File.ReadAllTextAsync(taskFilePath, cancellationToken)
+                : "";
+        }
+
+        // Skip gate check if no changes
+        if (string.IsNullOrWhiteSpace(changes))
+        {
+            logger.LogWarning("Gate check skipped: no changes detected for card {CardId}", cardId);
+            return null;
+        }
+
+        // Build gate prompt
+        string gatePromptTemplate;
+        if (gateCheck.TaskPromptFile is not null)
+        {
+            var path = Path.GetFullPath(Path.Combine(worktreePath, gateCheck.TaskPromptFile));
+            if (!File.Exists(path))
+            {
+                logger.LogError("Gate check prompt file not found: {Path} — skipping gate", path);
+                return null;
+            }
+            gatePromptTemplate = await File.ReadAllTextAsync(path, cancellationToken);
+        }
+        else
+        {
+            gatePromptTemplate = gateCheck.TaskPrompt ?? "";
+        }
+
+        var agentReport = lastStepResult.Detail ?? "(no self-report provided)";
+        var gatePrompt = ResolvePromptPlaceholders(gatePromptTemplate, targetCard);
+        gatePrompt = gatePrompt
+            .Replace("{TaskBody}", targetCard.Body ?? "")
+            .Replace("{Diff}", changes)
+            .Replace("{AgentReport}", agentReport);
+
+        // Resolve system prompt
+        string gateSystemPromptPath;
+        try
+        {
+            gateSystemPromptPath = await ResolveSystemPromptFileAsync(
+                gateRole, gateCheck.Role, worktreePath, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to resolve gate check system prompt — skipping gate");
+            return null;
+        }
+
+        // Execute gate check
+        AgentResult gateResult;
+        try
+        {
+            var gateContext = new AgentExecutionContext(
+                TargetCardId: targetCard.Id,
+                TargetCardTitle: targetCard.Title,
+                WorkspacePath: worktreePath,
+                TaskPrompt: gatePrompt,
+                SystemPromptFilePath: gateSystemPromptPath,
+                Model: gateRole.Model,
+                ProviderParams: new Dictionary<string, string>
+                {
+                    ["permissionMode"] = "none",
+                    ["effort"] = "min",
+                    ["maxBudget"] = "0.10"
+                });
+
+            logger.LogInformation("Running gate check for card {CardId} in state {State}", cardId, state.Name);
+            gateResult = await agentExecutor.ExecuteAsync(gateContext, cancellationToken);
+            logger.LogInformation("Gate check result for card {CardId}: {Outcome}", cardId, gateResult.Outcome);
+        }
+        catch (Exception ex)
+        {
+            // Gate check infrastructure failure is non-blocking
+            logger.LogError(ex, "Gate check failed to execute for card {CardId} — proceeding without verification", cardId);
+            var warningComment = $"<!-- gate-check:{state.Name} -->\n\n" +
+                $"## Gate Check Warning\n\nGate check failed to execute: {ex.Message}\nProceeding without verification.";
+            await boardClient.UpsertAgentCommentAsync(cardId, warningComment,
+                $"<!-- gate-check:{state.Name} -->", cancellationToken);
+            return null;
+        }
+
+        // Interpret result
+        switch (gateResult.Outcome)
+        {
+            case AgentOutcome.COMPLETE:
+                // PASS — proceed with normal flow
+                logger.LogInformation("Gate check PASSED for card {CardId}", cardId);
+                return null;
+
+            case AgentOutcome.NEEDS_INFO:
+            {
+                // CONCERNS — route to questions column
+                var comment = $"<!-- gate-check:{state.Name} -->\n\n" +
+                    $"## Gate Check: Concerns\n\n{gateResult.Detail ?? "The gate check raised concerns."}";
+                await boardClient.UpsertAgentCommentAsync(cardId, comment,
+                    $"<!-- gate-check:{state.Name} -->", cancellationToken);
+
+                if (state.Transitions.TryGetValue("NEEDS_INFO", out var questionsColumn))
+                    await boardClient.MoveCardToColumnAsync(cardId, questionsColumn, cancellationToken);
+
+                return new AgentRunResult(AgentOutcome.NEEDS_INFO, gateResult.Detail, gateResult.Questions);
+            }
+
+            case AgentOutcome.ERROR:
+            default:
+            {
+                // FAIL — check retry count for infinite loop guard
+                var previousFailures = await CountGateCheckFailuresAsync(
+                    cardId, state.Name, cancellationToken);
+
+                if (previousFailures >= gateCheck.MaxRetries)
+                {
+                    // Escalate to NEEDS_INFO for human intervention
+                    logger.LogWarning("Gate check for card {CardId} has failed {Count} times — escalating to NEEDS_INFO",
+                        cardId, previousFailures + 1);
+                    var escalateComment = $"<!-- gate-check:{state.Name} result:ERROR attempt:{previousFailures + 1} -->\n\n" +
+                        $"## Gate Check: Escalated to Human Review\n\n" +
+                        $"The gate check has failed {previousFailures + 1} consecutive times. Escalating for human review.\n\n" +
+                        $"**Latest failure reason:**\n{gateResult.Detail ?? "No detail provided."}";
+                    await boardClient.UpsertAgentCommentAsync(cardId, escalateComment,
+                        $"<!-- gate-check:{state.Name} -->", cancellationToken);
+
+                    if (state.Transitions.TryGetValue("NEEDS_INFO", out var questionsCol))
+                        await boardClient.MoveCardToColumnAsync(cardId, questionsCol, cancellationToken);
+
+                    return new AgentRunResult(AgentOutcome.NEEDS_INFO, gateResult.Detail, gateResult.Questions);
+                }
+
+                // Route via GATE_FAIL (re-trigger) or fall back to ERROR
+                var failComment = $"<!-- gate-check:{state.Name} result:ERROR attempt:{previousFailures + 1} -->\n\n" +
+                    $"## Gate Check: Failed\n\n{gateResult.Detail ?? "The gate check detected issues with the agent's output."}";
+                await boardClient.UpsertAgentCommentAsync(cardId, failComment,
+                    $"<!-- gate-check:{state.Name} -->", cancellationToken);
+
+                var transitionKey = state.Transitions.ContainsKey("GATE_FAIL") ? "GATE_FAIL" : "ERROR";
+                if (state.Transitions.TryGetValue(transitionKey, out var targetColumn))
+                    await boardClient.MoveCardToColumnAsync(cardId, targetColumn, cancellationToken);
+
+                return new AgentRunResult(AgentOutcome.ERROR, gateResult.Detail);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Counts previous consecutive gate check failures for a card by inspecting comments.
+    /// </summary>
+    private async Task<int> CountGateCheckFailuresAsync(
+        string cardId, string stateName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var comments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
+            var marker = $"gate-check:{stateName} result:ERROR";
+            return comments.Count(c => c.Body.Contains(marker, StringComparison.Ordinal));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to count gate check failures for card {CardId}", cardId);
+            return 0;
         }
     }
 

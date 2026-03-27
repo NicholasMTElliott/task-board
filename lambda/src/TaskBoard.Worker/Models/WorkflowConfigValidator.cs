@@ -66,6 +66,16 @@ public static class WorkflowConfigValidator
                 }
             }
 
+            // Gate check validation
+            if (state.GateCheck is not null)
+            {
+                if (!config.Roles.ContainsKey(state.GateCheck.Role))
+                    errors.Add($"State '{stateId}' ({state.Name}) gateCheck references role '{state.GateCheck.Role}' which does not exist in Roles.");
+
+                if (string.IsNullOrWhiteSpace(state.GateCheck.TaskPromptFile) && string.IsNullOrWhiteSpace(state.GateCheck.TaskPrompt))
+                    errors.Add($"State '{stateId}' ({state.Name}) gateCheck has no taskPromptFile or taskPrompt.");
+            }
+
             foreach (var (outcome, targetStateId) in state.Transitions)
             {
                 if (!config.States.ContainsKey(targetStateId))

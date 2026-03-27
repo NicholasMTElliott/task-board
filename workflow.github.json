@@ -19,11 +19,16 @@
       "providerParams": {
         "effort": "max"
       },
+      "gateCheck": {
+        "role": "gate_checker",
+        "taskPromptFile": "prompts/gates/post_design.md"
+      },
       "transitions": {
         "IN_PROGRESS": "Designing",
         "COMPLETE": "Designed",
         "NEEDS_INFO": "Design Questions",
         "ERROR": "Error",
+        "GATE_FAIL": "Ready for Design",
         "MERGE_CONFLICT": "Ready for Implementation"
       }
     },
@@ -62,11 +67,16 @@
       "providerParams": {
         "effort": "medium"
       },
+      "gateCheck": {
+        "role": "gate_checker",
+        "taskPromptFile": "prompts/gates/post_implementation.md"
+      },
       "transitions": {
         "IN_PROGRESS": "Implementing",
         "COMPLETE": "Ready for Test",
         "NEEDS_INFO": "Implementation Questions",
-        "ERROR": "Error"
+        "ERROR": "Error",
+        "GATE_FAIL": "Ready for Implementation"
       }
     },
     "Implementing": {
@@ -173,6 +183,11 @@
     "merge_resolver": {
       "model": "claude-sonnet-4-6",
       "systemPromptFile": "prompts/merge_resolver.md",
+      "sections": []
+    },
+    "gate_checker": {
+      "model": "claude-haiku-4-5-20251001",
+      "systemPromptFile": "prompts/gate_checker.md",
       "sections": []
     }
   },
