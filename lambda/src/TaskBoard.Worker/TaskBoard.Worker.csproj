@@ -17,6 +17,14 @@
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />
   </ItemGroup>
 
+  <!-- Restore implicit usings that were provided by Microsoft.NET.Sdk.Web -->
+  <ItemGroup>
+    <Using Include="Microsoft.Extensions.Configuration" />
+    <Using Include="Microsoft.Extensions.DependencyInjection" />
+    <Using Include="Microsoft.Extensions.Hosting" />
+    <Using Include="Microsoft.Extensions.Logging" />
+  </ItemGroup>
+
   <ItemGroup>
     <Content Include="..\..\..\workflow.v1.json" CopyToOutputDirectory="PreserveNewest" Link="workflow.v1.json" />
     <Content Include="..\..\..\workflow.github.example.json" CopyToOutputDirectory="PreserveNewest" Link="workflow.github.example.json" />

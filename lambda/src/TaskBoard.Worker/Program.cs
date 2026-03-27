@@ -102,7 +102,7 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
 
 // Runtime prerequisite validation — verify tools, auth, and files before any work
 {
-    var config = app.Services.GetRequiredService<WorkflowConfig>();
+    var config = host.Services.GetRequiredService<WorkflowConfig>();
 
     // Determine prompt base directory from workflow config path
     var configPath = Environment.GetEnvironmentVariable("WORKFLOW_CONFIG_PATH")
@@ -111,10 +111,10 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
 
     // Resolve provider-specific options
     GitHubProjectsOptions? ghOpts = boardProvider == "github"
-        ? app.Services.GetRequiredService<IOptions<GitHubProjectsOptions>>().Value
+        ? host.Services.GetRequiredService<IOptions<GitHubProjectsOptions>>().Value
         : null;
     TrelloClientOptions? trelloOpts = boardProvider is "trello" or "live"
-        ? app.Services.GetRequiredService<IOptions<TrelloClientOptions>>().Value
+        ? host.Services.GetRequiredService<IOptions<TrelloClientOptions>>().Value
         : null;
 
     var prereqErrors = await PrerequisiteValidator.ValidateAsync(
@@ -123,13 +123,13 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
 
     if (prereqErrors.Count > 0)
     {
-        app.Logger.LogError(
+        logger.LogError(
             "Prerequisite validation failed:\n{Errors}",
             string.Join("\n", prereqErrors));
         return;
     }
 
-    app.Logger.LogInformation("All prerequisites validated successfully");
+    logger.LogInformation("All prerequisites validated successfully");
 }
 
 if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
