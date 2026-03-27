@@ -1,9 +1,11 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using System.Text.Json;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
 {
@@ -33,6 +35,9 @@ builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
 
     // Normalise legacy single-step states into canonical steps-based model
     config = config.Normalised();
+
+    // Set the config directory so prompt paths resolve relative to the config file, not the worktree
+    config.ConfigDirectory = Path.GetDirectoryName(Path.GetFullPath(workflowPath));
 
     return config;
 });
@@ -91,14 +96,15 @@ builder.Services.AddSingleton<AgentRunner>();
 builder.Services.AddSingleton<MergeRunner>();
 builder.Services.AddSingleton<PollingRunner>();
 
-var app = builder.Build();
+using var host = builder.Build();
+var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Program");
 
 if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
 {
     var cardId = GetArgument(args, "--card-id");
     if (string.IsNullOrWhiteSpace(cardId))
     {
-        app.Logger.LogError("--card-id is required for agent mode");
+        logger.LogError("--card-id is required for agent mode");
         return;
     }
 
@@ -107,7 +113,7 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
         ?? Environment.GetEnvironmentVariable("TRELLO_BOARD_ID");
     if (string.IsNullOrWhiteSpace(boardId))
     {
-        app.Logger.LogError("--board-id or BOARD_ID is required for agent mode");
+        logger.LogError("--board-id or BOARD_ID is required for agent mode");
         return;
     }
 
@@ -115,13 +121,13 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
         ?? Environment.GetEnvironmentVariable("AGENT_WORKSPACE_PATH");
     if (string.IsNullOrWhiteSpace(workspacePath))
     {
-        app.Logger.LogError("--workspace or AGENT_WORKSPACE_PATH is required for agent mode");
+        logger.LogError("--workspace or AGENT_WORKSPACE_PATH is required for agent mode");
         return;
     }
 
-    using var scope = app.Services.CreateScope();
+    using var scope = host.Services.CreateScope();
 
-    app.Logger.LogInformation("Agent mode: card={CardId} board={BoardId} workspace={Workspace}",
+    logger.LogInformation("Agent mode: card={CardId} board={BoardId} workspace={Workspace}",
         cardId, boardId, workspacePath);
 
     // Determine dispatch: fetch card to check if it's in a system_merge state
@@ -144,7 +150,7 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
         result = await agentRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
     }
 
-    app.Logger.LogInformation("Agent run complete: outcome={Outcome}, error={ErrorDetail}",
+    logger.LogInformation("Agent run complete: outcome={Outcome}, error={ErrorDetail}",
         result.Outcome, result.ErrorDetail ?? "(none)");
     return;
 }
@@ -156,7 +162,7 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "polling")
         ?? Environment.GetEnvironmentVariable("TRELLO_BOARD_ID");
     if (string.IsNullOrWhiteSpace(boardId))
     {
-        app.Logger.LogError("--board-id or BOARD_ID is required for polling mode");
+        logger.LogError("--board-id or BOARD_ID is required for polling mode");
         return;
     }
 
@@ -164,7 +170,7 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "polling")
         ?? Environment.GetEnvironmentVariable("AGENT_WORKSPACE_PATH");
     if (string.IsNullOrWhiteSpace(workspacePath))
     {
-        app.Logger.LogError("--workspace or AGENT_WORKSPACE_PATH is required for polling mode");
+        logger.LogError("--workspace or AGENT_WORKSPACE_PATH is required for polling mode");
         return;
     }
 
@@ -175,10 +181,10 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "polling")
 
     // Validate polling-specific config requirements
     var pollingErrors = WorkflowConfigValidator.Validate(
-        app.Services.GetRequiredService<WorkflowConfig>(), validatePolling: true);
+        host.Services.GetRequiredService<WorkflowConfig>(), validatePolling: true);
     if (pollingErrors.Count > 0)
     {
-        app.Logger.LogError("Workflow config polling validation failed:\n{Errors}",
+        logger.LogError("Workflow config polling validation failed:\n{Errors}",
             string.Join("\n", pollingErrors));
         return;
     }
@@ -190,19 +196,16 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "polling")
         cts.Cancel();
     };
 
-    using var scope = app.Services.CreateScope();
+    using var scope = host.Services.CreateScope();
     var pollingRunner = scope.ServiceProvider.GetRequiredService<PollingRunner>();
 
-    app.Logger.LogInformation(
+    logger.LogInformation(
         "Polling mode: board={BoardId} workspace={Workspace} interval={Interval}s",
         boardId, workspacePath, pollInterval.TotalSeconds);
 
     await pollingRunner.RunAsync(boardId, workspacePath, pollInterval, cts.Token);
     return;
 }
-
-app.MapGet("/health", () => Results.Ok(new { ok = true, service = "task-board-lambda-worker" }));
-app.Run();
 
 static string? GetArgument(string[] args, string key)
 {
