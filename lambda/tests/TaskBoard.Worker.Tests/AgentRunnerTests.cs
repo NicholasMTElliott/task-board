@@ -16,6 +16,7 @@ public class AgentRunnerTests : IDisposable
     private readonly GitWorkspaceManager _gitWorkspaceManager;
     private readonly WorkflowConfig _workflowConfig;
     private readonly AgentRunner _runner;
+    private readonly string _defaultBranch;
 
     private const string DesignListId = "list-design";
     private const string ImplListId = "list-impl";
@@ -29,6 +30,7 @@ public class AgentRunnerTests : IDisposable
         _worktreeBase = _tempDir + "-worktrees";
         Directory.CreateDirectory(_tempDir);
         InitGitRepo(_tempDir);
+        _defaultBranch = GetCurrentBranch(_tempDir);
 
         _trelloClient = Substitute.For<ITaskBoardClient>();
         _agentExecutor = new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance);
@@ -81,8 +83,7 @@ public class AgentRunnerTests : IDisposable
 
         // Main repo should be untouched (still on original branch)
         var mainBranch = await _gitWorkspaceManager.GetCurrentBranchAsync(_tempDir, CancellationToken.None);
-        Assert.True(mainBranch == "main" || mainBranch == "master",
-            $"Main repo should still be on main/master, got '{mainBranch}'");
+        Assert.Equal(_defaultBranch, mainBranch);
 
         // Agent branch should exist (with slug)
         var existingBranch = await _gitWorkspaceManager.FindBranchByPrefixAsync(
@@ -707,6 +708,26 @@ public class AgentRunnerTests : IDisposable
                 ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
                     new List<string> { "Technical Design", "Decisions" }),
             });
+    }
+
+    private static string GetCurrentBranch(string workingDirectory)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("branch");
+        psi.ArgumentList.Add("--show-current");
+
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        var output = process.StandardOutput.ReadToEnd().Trim();
+        process.WaitForExit();
+        return output;
     }
 
     private static void RunGitSync(string workingDirectory, params string[] args)
