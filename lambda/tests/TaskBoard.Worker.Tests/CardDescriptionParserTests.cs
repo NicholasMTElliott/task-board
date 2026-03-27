@@ -95,4 +95,70 @@ public class CardDescriptionParserTests
         Assert.Contains("# Requirements\nExisting requirements", result);
         Assert.Contains("# Design\nNew design content", result);
     }
+
+    [Fact]
+    public void ParseSections_WithDetailsBlocks_IncludesDetailsInSectionBody()
+    {
+        var description =
+            "# Technical Design\n" +
+            "<details><summary>Click to expand full technical design</summary>\n\n" +
+            "The detailed design content here.\n\n" +
+            "</details>";
+
+        var sections = CardDescriptionParser.ParseSections(description);
+
+        Assert.Single(sections);
+        Assert.True(sections.ContainsKey("Technical Design"));
+        Assert.Contains("<details>", sections["Technical Design"]);
+        Assert.Contains("The detailed design content here.", sections["Technical Design"]);
+        Assert.Contains("</details>", sections["Technical Design"]);
+    }
+
+    [Fact]
+    public void ParseSections_DesignReviewSummarySection_ParsedCorrectly()
+    {
+        var description =
+            "# Design Review Summary\n" +
+            "## Approach\n" +
+            "Some approach description.\n\n" +
+            "# Technical Design\n" +
+            "Technical details here.";
+
+        var sections = CardDescriptionParser.ParseSections(description);
+
+        Assert.Equal(2, sections.Count);
+        Assert.True(sections.ContainsKey("Design Review Summary"));
+        Assert.Contains("## Approach", sections["Design Review Summary"]);
+        Assert.Contains("Some approach description.", sections["Design Review Summary"]);
+        Assert.True(sections.ContainsKey("Technical Design"));
+        Assert.Contains("Technical details here.", sections["Technical Design"]);
+    }
+
+    [Fact]
+    public void ParseSections_MixedCollapsedAndOpenSections_AllParsed()
+    {
+        var description =
+            "# Design Review Summary\n" +
+            "## Approach\nHigh-level approach.\n\n" +
+            "---\n\n" +
+            "# Technical Design\n" +
+            "<details><summary>Click to expand full technical design</summary>\n\n" +
+            "Full technical design content.\n\n" +
+            "</details>\n\n" +
+            "# Decisions\n" +
+            "<details><summary>Click to expand decision log</summary>\n\n" +
+            "Decision log content.\n\n" +
+            "</details>";
+
+        var sections = CardDescriptionParser.ParseSections(description);
+
+        Assert.Equal(3, sections.Count);
+        Assert.True(sections.ContainsKey("Design Review Summary"));
+        Assert.True(sections.ContainsKey("Technical Design"));
+        Assert.True(sections.ContainsKey("Decisions"));
+        Assert.Contains("High-level approach.", sections["Design Review Summary"]);
+        Assert.Contains("<details>", sections["Technical Design"]);
+        Assert.Contains("Full technical design content.", sections["Technical Design"]);
+        Assert.Contains("Decision log content.", sections["Decisions"]);
+    }
 }

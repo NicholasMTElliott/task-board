@@ -176,6 +176,99 @@ public class TaskFileManagerTests : IDisposable
         Assert.Contains("tasks", path);
     }
 
+    [Fact]
+    public void ExtractBodyFromTaskFile_WithDetailsBlocks_PreservesDetails()
+    {
+        var taskFile =
+            "---\n" +
+            "id: card1\n" +
+            "title: Test Task\n" +
+            "list: Design\n" +
+            "list_id: list-design\n" +
+            "---\n\n" +
+            "# Technical Design\n" +
+            "<details><summary>Click to expand full technical design</summary>\n\n" +
+            "The detailed content here.\n\n" +
+            "</details>";
+
+        var body = TaskFileManager.ExtractBodyFromTaskFile(taskFile);
+
+        Assert.Contains("<details>", body);
+        Assert.Contains("<summary>Click to expand full technical design</summary>", body);
+        Assert.Contains("The detailed content here.", body);
+        Assert.Contains("</details>", body);
+        Assert.DoesNotContain("---\nid:", body);
+    }
+
+    [Fact]
+    public void StripAnnotations_WithDetailsBlocks_PreservesDetails()
+    {
+        var body =
+            "# Design Review Summary\n" +
+            "See also #5 ( see .aiboard/tasks/5-some-ticket.md )\n\n" +
+            "# Technical Design\n" +
+            "<details><summary>Click to expand full technical design</summary>\n\n" +
+            "References ticket #5 ( see .aiboard/tasks/5-some-ticket.md ) for context.\n\n" +
+            "</details>";
+
+        var result = TaskFileManager.StripAnnotations(body);
+
+        Assert.Contains("<details>", result);
+        Assert.Contains("</details>", result);
+        Assert.DoesNotContain("( see .aiboard/tasks/5-some-ticket.md )", result);
+    }
+
+    [Fact]
+    public void FullDesignOutput_RoundTrips_ThroughTaskFileAndParsing()
+    {
+        // Construct task file in the new format: summary + collapsed reference sections
+        var card = new BoardCard(
+            "card42",
+            "Sample Feature",
+            "# Design Review Summary\n" +
+            "## Approach\nPrompt-only change to the design step.\n\n" +
+            "## Key Decisions\n1. Inline summary vs separate step — chose inline.\n\n" +
+            "## Assumptions\n- The agent can follow output-format instructions.\n\n" +
+            "## Scope\n- **In scope:** Modify design prompt.\n- **Out of scope:** Orchestrator changes.\n\n" +
+            "## Risk\n- Low: Agent may deviate from format; gate check still validates requirements.\n\n" +
+            "## Questions for Reviewer\nNone.\n\n" +
+            "---\n\n" +
+            "# Technical Design\n" +
+            "<details><summary>Click to expand full technical design</summary>\n\n" +
+            "Detailed technical content.\n\n" +
+            "</details>\n\n" +
+            "# Decisions\n" +
+            "<details><summary>Click to expand decision log</summary>\n\n" +
+            "Decision log content.\n\n" +
+            "</details>\n\n" +
+            "# Implementation\n" +
+            "<details><summary>Click to expand implementation breakdown</summary>\n\n" +
+            "Step-by-step implementation.\n\n" +
+            "</details>",
+            "list-design");
+
+        // Build task file → extract body → strip annotations → parse sections
+        var taskFileContent = TaskFileManager.BuildTaskFileContent(card, "Design");
+        var body = TaskFileManager.ExtractBodyFromTaskFile(taskFileContent);
+        var stripped = TaskFileManager.StripAnnotations(body);
+        var sections = CardDescriptionParser.ParseSections(stripped);
+
+        // All sections present
+        Assert.True(sections.ContainsKey("Design Review Summary"), "Missing Design Review Summary section");
+        Assert.True(sections.ContainsKey("Technical Design"), "Missing Technical Design section");
+        Assert.True(sections.ContainsKey("Decisions"), "Missing Decisions section");
+        Assert.True(sections.ContainsKey("Implementation"), "Missing Implementation section");
+
+        // Summary section is readable (no <details> wrapping)
+        Assert.Contains("## Approach", sections["Design Review Summary"]);
+        Assert.DoesNotContain("<details>", sections["Design Review Summary"]);
+
+        // Reference sections contain <details> content intact
+        Assert.Contains("Detailed technical content.", sections["Technical Design"]);
+        Assert.Contains("Decision log content.", sections["Decisions"]);
+        Assert.Contains("Step-by-step implementation.", sections["Implementation"]);
+    }
+
     private static WorkflowConfig BuildWorkflowConfig()
     {
         return new WorkflowConfig(

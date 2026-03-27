@@ -199,7 +199,7 @@
     "senior_engineer": {
       "model": "claude-opus-4-6",
       "systemPromptFile": "prompts/senior_engineer.md",
-      "sections": ["Technical Design", "Decisions", "Implementation"]
+      "sections": ["Design Review Summary", "Technical Design", "Decisions", "Implementation"]
     },
     "qa": {
       "model": "claude-opus-4-6",
