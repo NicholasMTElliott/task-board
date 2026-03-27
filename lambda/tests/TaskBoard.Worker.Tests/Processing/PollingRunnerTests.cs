@@ -75,12 +75,14 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new StubCrossReferenceResolver(),
+            new AgentIdentity("Test", "Agent", "TestMachine"),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
             boardClient,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
+            new AgentIdentity("Test", "Agent", "TestMachine"),
             NullLogger<MergeRunner>.Instance);
 
         var pollingRunner = new PollingRunner(
@@ -118,12 +120,14 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new StubCrossReferenceResolver(),
+            new AgentIdentity("Test", "Agent", "TestMachine"),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
             boardClient,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
+            new AgentIdentity("Test", "Agent", "TestMachine"),
             NullLogger<MergeRunner>.Instance);
 
         var pollingRunner = new PollingRunner(
@@ -167,12 +171,14 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new StubCrossReferenceResolver(),
+            new AgentIdentity("Test", "Agent", "TestMachine"),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
             boardClient,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
+            new AgentIdentity("Test", "Agent", "TestMachine"),
             NullLogger<MergeRunner>.Instance);
 
         var pollingRunner = new PollingRunner(

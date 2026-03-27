@@ -45,6 +45,7 @@ public class AgentRunnerTests : IDisposable
             _gitWorkspaceManager,
             _workflowConfig,
             new StubCrossReferenceResolver(),
+            new AgentIdentity("Test", "Agent", "TestMachine"),
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -190,7 +191,7 @@ public class AgentRunnerTests : IDisposable
 
         var runner = new AgentRunner(
             _trelloClient, throwingExecutor, _taskFileManager, _gitWorkspaceManager,
-            BuildWorkflowConfig().Normalised(), new StubCrossReferenceResolver(), NullLogger<AgentRunner>.Instance);
+            BuildWorkflowConfig().Normalised(), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<AgentRunner>.Instance);
 
         SetupBoardCards();
 
@@ -511,7 +512,7 @@ public class AgentRunnerTests : IDisposable
     {
         return new AgentRunner(
             _trelloClient, _agentExecutor, _taskFileManager, _gitWorkspaceManager,
-            config, new StubCrossReferenceResolver(), NullLogger<AgentRunner>.Instance);
+            config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<AgentRunner>.Instance);
     }
 
     private static WorkflowConfig BuildWorkflowConfig()
@@ -617,7 +618,7 @@ public class AgentRunnerTests : IDisposable
         var config = BuildMultiStepWorkflowConfig().Normalised();
         var runner = new AgentRunner(
             _trelloClient, sequencedExecutor, _taskFileManager, _gitWorkspaceManager,
-            config, new StubCrossReferenceResolver(), NullLogger<AgentRunner>.Instance);
+            config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
@@ -645,7 +646,7 @@ public class AgentRunnerTests : IDisposable
         var config = BuildMultiStepWorkflowConfig().Normalised();
         var runner = new AgentRunner(
             _trelloClient, errorExecutor, _taskFileManager, _gitWorkspaceManager,
-            config, new StubCrossReferenceResolver(), NullLogger<AgentRunner>.Instance);
+            config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);

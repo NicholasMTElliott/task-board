@@ -279,6 +279,7 @@ public class AgentRunnerMergeStepTests : IDisposable
             _gitManager,
             config,
             new StubCrossReferenceResolver(),
+            new AgentIdentity("Test", "Agent", "TestMachine"),
             NullLogger<AgentRunner>.Instance);
     }
 

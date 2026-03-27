@@ -89,6 +89,10 @@ else
     builder.Services.AddSingleton<IAgentExecutor, StubAgentExecutor>();
 }
 
+// Generate agent identity for this process instance
+var agentIdentity = AgentIdentity.Generate();
+builder.Services.AddSingleton(agentIdentity);
+
 // Agent mode services
 builder.Services.AddSingleton<TaskFileManager>();
 
@@ -139,6 +143,8 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
 
     logger.LogInformation("All prerequisites validated successfully");
 }
+
+app.Logger.LogInformation("Agent identity: {AgentName}", agentIdentity.DisplayName);
 
 if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
 {

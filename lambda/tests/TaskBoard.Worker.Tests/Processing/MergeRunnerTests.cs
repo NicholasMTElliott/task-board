@@ -211,7 +211,7 @@ public class MergeRunnerTests : IDisposable
                 ["se"] = new("model", "prompt", new List<string>()),
             });
 
-        var runner = new MergeRunner(_boardClient, _gitManager, config, NullLogger<MergeRunner>.Instance);
+        var runner = new MergeRunner(_boardClient, _gitManager, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<MergeRunner>.Instance);
         var result = await runner.ExecuteAsync(CardId, BoardId, "C:/fake/path", CancellationToken.None);
 
         Assert.Equal(AgentOutcome.ERROR, result.Outcome);
@@ -247,7 +247,7 @@ public class MergeRunnerTests : IDisposable
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private MergeRunner CreateRunner() =>
-        new(_boardClient, _gitManager, _config, NullLogger<MergeRunner>.Instance);
+        new(_boardClient, _gitManager, _config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<MergeRunner>.Instance);
 
     private void SetupBoardCards(string column)
     {

@@ -211,7 +211,7 @@ public class AgentRunnerIntegrationTests : IDisposable
     {
         return new AgentRunner(
             _trelloClient, executor, _taskFileManager, _gitWorkspaceManager,
-            _workflowConfig, new StubCrossReferenceResolver(), new XUnitLogger<AgentRunner>(_output));
+            _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), new XUnitLogger<AgentRunner>(_output));
     }
 
     private void SetupBoardCards(string targetDescription, string targetTitle = "User Registration Endpoint")
