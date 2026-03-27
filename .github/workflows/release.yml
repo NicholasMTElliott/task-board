@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet restore task-board.sln
+      - run: dotnet test task-board.sln --configuration Release --no-restore --verbosity normal
+
+  publish:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            ext: zip
+          - rid: linux-x64
+            ext: tar.gz
+          - rid: osx-x64
+            ext: tar.gz
+          - rid: osx-arm64
+            ext: tar.gz
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish
+        run: |
+          dotnet publish lambda/src/TaskBoard.Worker/TaskBoard.Worker.csproj \
+            --configuration Release \
+            --runtime ${{ matrix.rid }} \
+            --self-contained \
+            -p:PublishSingleFile=true \
+            -p:Version=${GITHUB_REF_NAME#v} \
+            --output dist/${{ matrix.rid }}
+      - name: Package
+        shell: bash
+        run: |
+          if [ "${{ matrix.ext }}" = "zip" ]; then
+            cd dist/${{ matrix.rid }} && zip -r ../../aiboard-${{ matrix.rid }}.zip .
+          else
+            cd dist/${{ matrix.rid }} && tar czf ../../aiboard-${{ matrix.rid }}.tar.gz .
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aiboard-${{ matrix.rid }}
+          path: aiboard-${{ matrix.rid }}.${{ matrix.ext }}
+
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/aiboard-*.zip
+            artifacts/aiboard-*.tar.gz
+          generate_release_notes: true

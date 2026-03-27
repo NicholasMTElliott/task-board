@@ -186,11 +186,11 @@ public sealed partial class AgentRunner(
 
                 // 6a. Resolve system prompt file path for this step's role
                 var systemPromptFilePath = await ResolveSystemPromptFileAsync(
-                    stepRole, step.Role, worktreePath, cancellationToken);
+                    stepRole, step.Role, worktreePath, workflowConfig.ConfigDirectory, cancellationToken);
 
                 // 6b. Resolve task prompt for this step
                 var resolvedPrompt = await ResolveStepTaskPromptAsync(
-                    step, worktreePath, targetCard, cancellationToken);
+                    step, worktreePath, targetCard, workflowConfig.ConfigDirectory, cancellationToken);
 
                 if (isExistingBranch && stepIndex == 0)
                 {
@@ -526,7 +526,8 @@ public sealed partial class AgentRunner(
         string gatePromptTemplate;
         if (gateCheck.TaskPromptFile is not null)
         {
-            var path = Path.GetFullPath(Path.Combine(worktreePath, gateCheck.TaskPromptFile));
+            var basePath = workflowConfig.ConfigDirectory ?? worktreePath;
+            var path = Path.GetFullPath(Path.Combine(basePath, gateCheck.TaskPromptFile));
             if (!File.Exists(path))
             {
                 logger.LogError("Gate check prompt file not found: {Path} — skipping gate", path);
@@ -551,7 +552,7 @@ public sealed partial class AgentRunner(
         try
         {
             gateSystemPromptPath = await ResolveSystemPromptFileAsync(
-                gateRole, gateCheck.Role, worktreePath, cancellationToken);
+                gateRole, gateCheck.Role, worktreePath, workflowConfig.ConfigDirectory, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -810,7 +811,7 @@ public sealed partial class AgentRunner(
         }
 
         var systemPromptPath = await ResolveSystemPromptFileAsync(
-            mergeRole, mergeResolution.Role, worktreePath, cancellationToken);
+            mergeRole, mergeResolution.Role, worktreePath, workflowConfig.ConfigDirectory, cancellationToken);
 
         var taskPrompt = BuildMergeAgentTaskPrompt(mergeResult);
 
@@ -1043,13 +1044,14 @@ public sealed partial class AgentRunner(
     }
 
     internal static async Task<string> ResolveStepTaskPromptAsync(
-        WorkflowStep step, string worktreePath, BoardCard card, CancellationToken cancellationToken)
+        WorkflowStep step, string worktreePath, BoardCard card, string? configDirectory, CancellationToken cancellationToken)
     {
         string template;
 
         if (step.TaskPromptFile is not null)
         {
-            var path = Path.GetFullPath(Path.Combine(worktreePath, step.TaskPromptFile));
+            var basePath = configDirectory ?? worktreePath;
+            var path = Path.GetFullPath(Path.Combine(basePath, step.TaskPromptFile));
             if (!File.Exists(path))
                 throw new FileNotFoundException(
                     $"Task prompt file not found: {path} (configured as '{step.TaskPromptFile}' for step '{step.Name}')",
@@ -1126,11 +1128,12 @@ public sealed partial class AgentRunner(
     }
 
     internal static async Task<string> ResolveSystemPromptFileAsync(
-        WorkflowRole role, string roleName, string worktreePath, CancellationToken cancellationToken)
+        WorkflowRole role, string roleName, string worktreePath, string? configDirectory, CancellationToken cancellationToken)
     {
         if (role.SystemPromptFile is not null)
         {
-            var path = Path.GetFullPath(Path.Combine(worktreePath, role.SystemPromptFile));
+            var basePath = configDirectory ?? worktreePath;
+            var path = Path.GetFullPath(Path.Combine(basePath, role.SystemPromptFile));
             if (!File.Exists(path))
                 throw new FileNotFoundException(
                     $"System prompt file not found: {path} (configured as '{role.SystemPromptFile}' for role '{roleName}')",
@@ -1149,13 +1152,14 @@ public sealed partial class AgentRunner(
     }
 
     internal static async Task<string> ResolveTaskPromptAsync(
-        WorkflowState state, string worktreePath, BoardCard card, CancellationToken cancellationToken)
+        WorkflowState state, string worktreePath, BoardCard card, string? configDirectory, CancellationToken cancellationToken)
     {
         string template;
 
         if (state.TaskPromptFile is not null)
         {
-            var path = Path.GetFullPath(Path.Combine(worktreePath, state.TaskPromptFile));
+            var basePath = configDirectory ?? worktreePath;
+            var path = Path.GetFullPath(Path.Combine(basePath, state.TaskPromptFile));
             if (!File.Exists(path))
                 throw new FileNotFoundException(
                     $"Task prompt file not found: {path} (configured as '{state.TaskPromptFile}' for state '{state.Name}')",

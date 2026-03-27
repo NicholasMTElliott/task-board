@@ -280,7 +280,7 @@ public class AgentRunnerTests : IDisposable
         Directory.CreateDirectory(tempDir);
         try
         {
-            var path = await AgentRunner.ResolveSystemPromptFileAsync(role, "senior_engineer", tempDir, CancellationToken.None);
+            var path = await AgentRunner.ResolveSystemPromptFileAsync(role, "senior_engineer", tempDir, null, CancellationToken.None);
 
             Assert.True(File.Exists(path));
             Assert.Equal("You are a Senior Engineer.", (await File.ReadAllTextAsync(path)).Trim());
@@ -305,7 +305,7 @@ public class AgentRunnerTests : IDisposable
             await File.WriteAllTextAsync(promptFullPath, "You are an engineer.");
 
             var role = new WorkflowRole("model", "", new List<string>(), SystemPromptFile: promptRelPath);
-            var path = await AgentRunner.ResolveSystemPromptFileAsync(role, "engineer", tempDir, CancellationToken.None);
+            var path = await AgentRunner.ResolveSystemPromptFileAsync(role, "engineer", tempDir, null, CancellationToken.None);
 
             Assert.Equal(Path.GetFullPath(promptFullPath), path);
         }
@@ -324,7 +324,7 @@ public class AgentRunnerTests : IDisposable
         {
             var role = new WorkflowRole("model", "", new List<string>(), SystemPromptFile: "prompts/missing.md");
             await Assert.ThrowsAsync<FileNotFoundException>(
-                () => AgentRunner.ResolveSystemPromptFileAsync(role, "engineer", tempDir, CancellationToken.None));
+                () => AgentRunner.ResolveSystemPromptFileAsync(role, "engineer", tempDir, null, CancellationToken.None));
         }
         finally
         {
@@ -340,7 +340,7 @@ public class AgentRunnerTests : IDisposable
             new Dictionary<string, string>());
         var card = new BoardCard("card-1", "Auth Feature", "desc", "list-design");
 
-        var prompt = await AgentRunner.ResolveTaskPromptAsync(state, "/irrelevant", card, CancellationToken.None);
+        var prompt = await AgentRunner.ResolveTaskPromptAsync(state, "/irrelevant", card, null, CancellationToken.None);
 
         Assert.Equal("Work on Auth Feature (card-1)", prompt);
     }
@@ -361,7 +361,7 @@ public class AgentRunnerTests : IDisposable
                 new Dictionary<string, string>(), TaskPromptFile: promptRelPath);
             var card = new BoardCard("42", "Login Flow", "desc", "list-design");
 
-            var prompt = await AgentRunner.ResolveTaskPromptAsync(state, tempDir, card, CancellationToken.None);
+            var prompt = await AgentRunner.ResolveTaskPromptAsync(state, tempDir, card, null, CancellationToken.None);
 
             Assert.Equal("Implement Login Flow (id=42).", prompt);
         }
@@ -383,7 +383,7 @@ public class AgentRunnerTests : IDisposable
             var card = new BoardCard("1", "Card", "desc", "list");
 
             await Assert.ThrowsAsync<FileNotFoundException>(
-                () => AgentRunner.ResolveTaskPromptAsync(state, tempDir, card, CancellationToken.None));
+                () => AgentRunner.ResolveTaskPromptAsync(state, tempDir, card, null, CancellationToken.None));
         }
         finally
         {
@@ -400,7 +400,7 @@ public class AgentRunnerTests : IDisposable
         try
         {
             await Assert.ThrowsAsync<InvalidOperationException>(
-                () => AgentRunner.ResolveSystemPromptFileAsync(role, "engineer", tempDir, CancellationToken.None));
+                () => AgentRunner.ResolveSystemPromptFileAsync(role, "engineer", tempDir, null, CancellationToken.None));
         }
         finally
         {
@@ -461,7 +461,7 @@ public class AgentRunnerTests : IDisposable
             TaskPromptFile: "prompts/states/ready_for_implementation.md");
         var card = new BoardCard("card-1", "Auth Feature", "desc", "list-impl");
 
-        var prompt = await AgentRunner.ResolveTaskPromptAsync(state, repoRoot, card, CancellationToken.None);
+        var prompt = await AgentRunner.ResolveTaskPromptAsync(state, repoRoot, card, null, CancellationToken.None);
 
         Assert.Contains("Testing Requirements", prompt);
         Assert.Contains("contract", prompt, StringComparison.OrdinalIgnoreCase);
@@ -475,7 +475,7 @@ public class AgentRunnerTests : IDisposable
         var role = new WorkflowRole("claude-opus-4-6", "", new List<string> { "Technical Design" },
             SystemPromptFile: "prompts/senior_engineer.md");
 
-        var path = await AgentRunner.ResolveSystemPromptFileAsync(role, "senior_engineer", repoRoot, CancellationToken.None);
+        var path = await AgentRunner.ResolveSystemPromptFileAsync(role, "senior_engineer", repoRoot, null, CancellationToken.None);
 
         var content = await File.ReadAllTextAsync(path);
         Assert.Contains("Testing Philosophy", content);
