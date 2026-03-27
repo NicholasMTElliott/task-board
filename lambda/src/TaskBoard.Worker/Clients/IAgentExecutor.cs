@@ -19,7 +19,8 @@ public sealed record AgentResult(
     AgentOutcome Outcome,
     string? Detail = null,
     IReadOnlyList<AgentQuestion>? Questions = null,
-    string? ConversationLog = null);
+    string? ConversationLog = null,
+    IReadOnlyList<string>? RequestedSteps = null);
 
 public sealed record AgentQuestion(
     string Question,

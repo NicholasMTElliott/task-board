@@ -27,6 +27,15 @@ public sealed record WorkflowConfig(
     }
 }
 
+public sealed record OptionalStepDefinition(
+    string Name,
+    string Role,
+    string? TaskPrompt = null,
+    string? TaskPromptFile = null,
+    string Description = "",
+    string Triggers = "",
+    Dictionary<string, string>? ProviderParams = null);
+
 public sealed record WorkflowState(
     string Name,
     string? Role,
@@ -39,7 +48,8 @@ public sealed record WorkflowState(
     bool IncludeInAgentContext = false,
     int PipelineOrder = 0,
     List<WorkflowStep>? Steps = null,
-    GateCheckConfig? GateCheck = null)
+    GateCheckConfig? GateCheck = null,
+    List<OptionalStepDefinition>? OptionalSteps = null)
 {
     /// <summary>
     /// Normalises a legacy single-step state (top-level Role + TaskPrompt) into

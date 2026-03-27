@@ -271,10 +271,10 @@ public sealed partial class AgentRunner(
 
             // All steps complete
             // 7. Run gate check if configured
-            var gateResult = await RunGateCheckAsync(
+            var gateCheckResult = await RunGateCheckAsync(
                 state, lastResult!, worktreePath, targetCard, cardId, cancellationToken);
 
-            if (gateResult is not null)
+            if (gateCheckResult.BlockingResult is not null)
             {
                 // Gate blocked progression — handle git and return
                 await HandleGitBehaviorAsync(
@@ -283,7 +283,29 @@ public sealed partial class AgentRunner(
                 if (gitBehavior == "discard")
                     await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
 
-                return gateResult;
+                return gateCheckResult.BlockingResult;
+            }
+
+            // 7a. Execute optional steps if gate requested them
+            if (gateCheckResult.RequestedSteps is { Count: > 0 } && state.OptionalSteps is { Count: > 0 })
+            {
+                var optionalResult = await ExecuteOptionalStepsAsync(
+                    gateCheckResult.RequestedSteps, state, worktreePath, targetCard, cardId,
+                    commentPrefix, commentsFilePath, cancellationToken);
+
+                if (optionalResult is not null)
+                {
+                    // An optional step halted progression
+                    await HandleGitBehaviorAsync(
+                        gitBehavior, worktreePath, branchName, targetCard, state,
+                        new AgentResult(optionalResult.Outcome, optionalResult.ErrorDetail),
+                        cancellationToken);
+
+                    if (gitBehavior == "discard")
+                        await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
+
+                    return optionalResult;
+                }
             }
 
             // 8. Handle git operations based on stage-specific behavior
@@ -482,11 +504,19 @@ public sealed partial class AgentRunner(
     // ── Gate check logic ─────────────────────────────────────────────
 
     /// <summary>
-    /// Runs an optional gate check after all agent steps complete successfully.
-    /// Returns null if no gate check is configured or if the gate passes.
-    /// Returns an AgentRunResult if the gate blocks progression.
+    /// Returned by RunGateCheckAsync. BlockingResult is non-null when the gate blocked
+    /// progression; RequestedSteps carries optional steps requested when the gate passed.
     /// </summary>
-    private async Task<AgentRunResult?> RunGateCheckAsync(
+    private sealed record GateCheckResult(
+        AgentRunResult? BlockingResult,
+        IReadOnlyList<string>? RequestedSteps);
+
+    /// <summary>
+    /// Runs an optional gate check after all agent steps complete successfully.
+    /// Returns a GateCheckResult with null BlockingResult if the gate passes (or no gate configured).
+    /// Returns a GateCheckResult with non-null BlockingResult if the gate blocks progression.
+    /// </summary>
+    private async Task<GateCheckResult> RunGateCheckAsync(
         WorkflowState state,
         AgentResult lastStepResult,
         string worktreePath,
@@ -495,7 +525,7 @@ public sealed partial class AgentRunner(
         CancellationToken cancellationToken)
     {
         if (state.GateCheck is null)
-            return null;
+            return new GateCheckResult(null, null);
 
         var gateCheck = state.GateCheck;
 
@@ -503,7 +533,7 @@ public sealed partial class AgentRunner(
         if (!workflowConfig.Roles.TryGetValue(gateCheck.Role, out var gateRole))
         {
             logger.LogError("Gate check role '{Role}' not found in workflow config — skipping gate", gateCheck.Role);
-            return null;
+            return new GateCheckResult(null, null);
         }
 
         // Capture diff based on git behavior
@@ -529,7 +559,7 @@ public sealed partial class AgentRunner(
         if (string.IsNullOrWhiteSpace(changes))
         {
             logger.LogWarning("Gate check skipped: no changes detected for card {CardId}", cardId);
-            return null;
+            return new GateCheckResult(null, null);
         }
 
         // Build gate prompt
@@ -541,7 +571,7 @@ public sealed partial class AgentRunner(
             if (!File.Exists(path))
             {
                 logger.LogError("Gate check prompt file not found: {Path} — skipping gate", path);
-                return null;
+                return new GateCheckResult(null, null);
             }
             gatePromptTemplate = await File.ReadAllTextAsync(path, cancellationToken);
         }
@@ -557,6 +587,24 @@ public sealed partial class AgentRunner(
             .Replace("{Diff}", changes)
             .Replace("{AgentReport}", agentReport);
 
+        // Append optional step catalog if configured
+        if (state.OptionalSteps is { Count: > 0 })
+        {
+            gatePrompt += "\n\n## Available Optional Review Steps\n\n"
+                + "The following specialist review steps are available. Request any that are clearly "
+                + "warranted by the changes above. Only request steps whose trigger criteria match.\n\n"
+                + "| Step Name | Description | When to Request |\n"
+                + "|-----------|-------------|----------------|\n";
+
+            foreach (var opt in state.OptionalSteps)
+            {
+                gatePrompt += $"| `{opt.Name}` | {opt.Description} | {opt.Triggers} |\n";
+            }
+
+            gatePrompt += "\nTo request optional steps, include a `requestedSteps` array in your output "
+                + "with the step names. You may request steps alongside a COMPLETE verdict.\n";
+        }
+
         // Resolve system prompt
         string gateSystemPromptPath;
         try
@@ -567,7 +615,7 @@ public sealed partial class AgentRunner(
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to resolve gate check system prompt — skipping gate");
-            return null;
+            return new GateCheckResult(null, null);
         }
 
         // Execute gate check
@@ -585,7 +633,6 @@ public sealed partial class AgentRunner(
                 {
                     ["permissionMode"] = "none",
                     ["effort"] = "min",
-                    ["maxBudget"] = "0.10"
                 });
 
             logger.LogInformation("Running gate check for card {CardId} in state {State}", cardId, state.Name);
@@ -601,16 +648,16 @@ public sealed partial class AgentRunner(
                 $"## Gate Check Warning {gateIdentity}\n\nGate check failed to execute: {ex.Message}\nProceeding without verification.";
             await boardClient.UpsertAgentCommentAsync(cardId, warningComment,
                 $"<!-- gate-check:{state.Name} -->", cancellationToken);
-            return null;
+            return new GateCheckResult(null, null);
         }
 
         // Interpret result
         switch (gateResult.Outcome)
         {
             case AgentOutcome.COMPLETE:
-                // PASS — proceed with normal flow
+                // PASS — proceed with normal flow (possibly with optional step requests)
                 logger.LogInformation("Gate check PASSED for card {CardId}", cardId);
-                return null;
+                return new GateCheckResult(null, gateResult.RequestedSteps);
 
             case AgentOutcome.NEEDS_INFO:
             {
@@ -624,7 +671,9 @@ public sealed partial class AgentRunner(
                 if (state.Transitions.TryGetValue("NEEDS_INFO", out var questionsColumn))
                     await boardClient.MoveCardToColumnAsync(cardId, questionsColumn, cancellationToken);
 
-                return new AgentRunResult(AgentOutcome.NEEDS_INFO, gateResult.Detail, gateResult.Questions);
+                return new GateCheckResult(
+                    new AgentRunResult(AgentOutcome.NEEDS_INFO, gateResult.Detail, gateResult.Questions),
+                    null);
             }
 
             case AgentOutcome.ERROR:
@@ -650,7 +699,9 @@ public sealed partial class AgentRunner(
                     if (state.Transitions.TryGetValue("NEEDS_INFO", out var questionsCol))
                         await boardClient.MoveCardToColumnAsync(cardId, questionsCol, cancellationToken);
 
-                    return new AgentRunResult(AgentOutcome.NEEDS_INFO, gateResult.Detail, gateResult.Questions);
+                    return new GateCheckResult(
+                        new AgentRunResult(AgentOutcome.NEEDS_INFO, gateResult.Detail, gateResult.Questions),
+                        null);
                 }
 
                 // Route via GATE_FAIL (re-trigger) or fall back to ERROR
@@ -664,9 +715,176 @@ public sealed partial class AgentRunner(
                 if (state.Transitions.TryGetValue(transitionKey, out var targetColumn))
                     await boardClient.MoveCardToColumnAsync(cardId, targetColumn, cancellationToken);
 
-                return new AgentRunResult(AgentOutcome.ERROR, gateResult.Detail);
+                return new GateCheckResult(new AgentRunResult(AgentOutcome.ERROR, gateResult.Detail), null);
             }
         }
+    }
+
+    /// <summary>
+    /// Validates and executes optional steps requested by the gate check.
+    /// Returns null if all optional steps completed successfully.
+    /// Returns an AgentRunResult if any step halted progression.
+    /// </summary>
+    private async Task<AgentRunResult?> ExecuteOptionalStepsAsync(
+        IReadOnlyList<string> requestedStepNames,
+        WorkflowState state,
+        string worktreePath,
+        BoardCard targetCard,
+        string cardId,
+        string commentPrefix,
+        string? commentsFilePath,
+        CancellationToken cancellationToken)
+    {
+        // Build lookup of available optional steps
+        var catalog = state.OptionalSteps!
+            .ToDictionary(s => s.Name, StringComparer.OrdinalIgnoreCase);
+
+        // Validate requested step names against catalog; skip unknowns
+        var stepsToExecute = new List<OptionalStepDefinition>();
+        foreach (var name in requestedStepNames)
+        {
+            if (catalog.TryGetValue(name, out var stepDef))
+            {
+                stepsToExecute.Add(stepDef);
+            }
+            else
+            {
+                logger.LogWarning(
+                    "Gate check requested optional step '{StepName}' for card {CardId} " +
+                    "but it is not in the state's optional step catalog. Skipping.",
+                    name, cardId);
+            }
+        }
+
+        if (stepsToExecute.Count == 0)
+        {
+            logger.LogInformation("No valid optional steps to execute for card {CardId}", cardId);
+            return null;
+        }
+
+        logger.LogInformation(
+            "Executing {Count} optional step(s) for card {CardId}: {StepNames}",
+            stepsToExecute.Count, cardId, string.Join(", ", stepsToExecute.Select(s => s.Name)));
+
+        for (var i = 0; i < stepsToExecute.Count; i++)
+        {
+            var step = stepsToExecute[i];
+
+            if (!workflowConfig.Roles.TryGetValue(step.Role, out var stepRole))
+            {
+                logger.LogWarning(
+                    "Optional step '{StepName}' references missing role '{Role}' for card {CardId}. Skipping.",
+                    step.Name, step.Role, cardId);
+                continue;
+            }
+
+            logger.LogInformation(
+                "Executing optional step {Index}/{Count} '{StepName}' (role={Role}) for card {CardId}",
+                i + 1, stepsToExecute.Count, step.Name, step.Role, cardId);
+
+            var systemPromptFilePath = await ResolveSystemPromptFileAsync(
+                stepRole, step.Role, worktreePath, workflowConfig.ConfigDirectory, cancellationToken);
+
+            var resolvedPrompt = await ResolveTaskPromptFromFileOrInlineAsync(
+                step.TaskPromptFile, step.TaskPrompt, step.Name, worktreePath, targetCard, cancellationToken);
+
+            var effectiveParams = MergeProviderParams(state.ProviderParams, step.ProviderParams);
+
+            var context = new AgentExecutionContext(
+                TargetCardId: cardId,
+                TargetCardTitle: targetCard.Title,
+                WorkspacePath: worktreePath,
+                TaskPrompt: resolvedPrompt,
+                SystemPromptFilePath: systemPromptFilePath,
+                Model: stepRole.Model,
+                ProviderParams: effectiveParams,
+                CommentsFilePath: commentsFilePath);
+
+            var result = await agentExecutor.ExecuteAsync(context, cancellationToken);
+
+            // Update card body
+            await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken);
+
+            // Post step-specific comment with optional: prefix to avoid marker collision
+            var stepMarker = $"<!-- agent-step:optional:{step.Name} -->";
+            var stepComment = $"{commentPrefix}\n\n**Optional Step: {step.Name}**\n\n{FormatComment(result)}";
+            await boardClient.UpsertAgentCommentAsync(cardId, stepComment, stepMarker, cancellationToken);
+
+            // Refresh comments file for the next step
+            var comments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
+            if (comments.Count > 0)
+            {
+                await taskFileManager.WriteCommentsFileAsync(
+                    worktreePath, targetCard.Id, targetCard.Title, comments, cancellationToken);
+                commentsFilePath ??= TaskFileManager.GetCommentsFilePath(
+                    worktreePath, targetCard.Id, targetCard.Title);
+            }
+
+            if (result.Outcome != AgentOutcome.COMPLETE)
+            {
+                logger.LogWarning(
+                    "Optional step '{StepName}' returned {Outcome} for card {CardId}. Halting.",
+                    step.Name, result.Outcome, cardId);
+
+                var outcomeKey = result.Outcome.ToString();
+                if (state.Transitions.TryGetValue(outcomeKey, out var targetColumnId))
+                    await boardClient.MoveCardToColumnAsync(cardId, targetColumnId, cancellationToken);
+
+                return new AgentRunResult(result.Outcome, result.Detail, result.Questions);
+            }
+        }
+
+        logger.LogInformation("All optional steps completed for card {CardId}", cardId);
+        return null;
+    }
+
+    /// <summary>
+    /// Merges step-level providerParams over state-level defaults.
+    /// Step values override state values for matching keys; state values fill gaps.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string>? MergeProviderParams(
+        Dictionary<string, string>? stateParams,
+        Dictionary<string, string>? stepParams)
+    {
+        if (stepParams is null or { Count: 0 }) return stateParams;
+        if (stateParams is null or { Count: 0 }) return stepParams;
+
+        var merged = new Dictionary<string, string>(stateParams);
+        foreach (var (key, value) in stepParams)
+            merged[key] = value; // step overrides state
+
+        return merged;
+    }
+
+    /// <summary>
+    /// Resolves a task prompt from a file path or inline text, then applies card placeholders.
+    /// Shared by mandatory step resolution and optional step resolution.
+    /// </summary>
+    private async Task<string> ResolveTaskPromptFromFileOrInlineAsync(
+        string? taskPromptFile, string? taskPrompt, string stepName,
+        string worktreePath, BoardCard card, CancellationToken cancellationToken)
+    {
+        string template;
+        if (taskPromptFile is not null)
+        {
+            var basePath = workflowConfig.ConfigDirectory ?? worktreePath;
+            var path = Path.GetFullPath(Path.Combine(basePath, taskPromptFile));
+            if (!File.Exists(path))
+                throw new FileNotFoundException(
+                    $"Optional step '{stepName}' task prompt file not found: {path}", path);
+            template = await File.ReadAllTextAsync(path, cancellationToken);
+        }
+        else if (taskPrompt is not null)
+        {
+            template = taskPrompt;
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"Optional step '{stepName}' has neither taskPrompt nor taskPromptFile.");
+        }
+
+        return ResolvePromptPlaceholders(template, card);
     }
 
     /// <summary>

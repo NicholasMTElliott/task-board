@@ -76,6 +76,37 @@ public static class WorkflowConfigValidator
                     errors.Add($"State '{stateId}' ({state.Name}) gateCheck has no taskPromptFile or taskPrompt.");
             }
 
+            // Optional steps validation
+            if (state.OptionalSteps is { Count: > 0 })
+            {
+                if (state.GateCheck is null)
+                    errors.Add($"State '{stateId}' ({state.Name}) has optionalSteps but no gateCheck. Optional steps can only be requested by a gate check.");
+
+                var optionalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var optStep in state.OptionalSteps)
+                {
+                    if (string.IsNullOrWhiteSpace(optStep.Name))
+                    {
+                        errors.Add($"State '{stateId}' ({state.Name}) has an optional step with an empty name.");
+                        continue;
+                    }
+
+                    if (!optionalNames.Add(optStep.Name))
+                        errors.Add($"State '{stateId}' ({state.Name}) has duplicate optional step name '{optStep.Name}'.");
+
+                    if (string.IsNullOrWhiteSpace(optStep.Role))
+                        errors.Add($"State '{stateId}' ({state.Name}) optional step '{optStep.Name}' has no role.");
+                    else if (!config.Roles.ContainsKey(optStep.Role))
+                        errors.Add($"State '{stateId}' ({state.Name}) optional step '{optStep.Name}' references role '{optStep.Role}' which does not exist in Roles.");
+
+                    if (string.IsNullOrWhiteSpace(optStep.TaskPrompt) && string.IsNullOrWhiteSpace(optStep.TaskPromptFile))
+                        errors.Add($"State '{stateId}' ({state.Name}) optional step '{optStep.Name}' has neither taskPrompt nor taskPromptFile.");
+
+                    if (state.Steps?.Any(s => string.Equals(s.Name, optStep.Name, StringComparison.OrdinalIgnoreCase)) == true)
+                        errors.Add($"State '{stateId}' ({state.Name}) optional step '{optStep.Name}' collides with a mandatory step name.");
+                }
+            }
+
             foreach (var (outcome, targetStateId) in state.Transitions)
             {
                 if (!config.States.ContainsKey(targetStateId))
