@@ -227,6 +227,78 @@ public class GitWorkspaceManagerTests : IDisposable
         Assert.NotEqual(0, ex.ExitCode);
     }
 
+    // ── GetDiffSummaryAsync tests ────────────────────────────────────
+
+    [Fact]
+    public async Task GetDiffSummaryAsync_ModifiedTrackedFile_IncludesDiff()
+    {
+        var worktreePath = await _manager.CreateWorktreeAsync(_tempDir, "aiboard/diff-modified", CancellationToken.None);
+
+        // Modify an existing tracked file
+        await File.WriteAllTextAsync(Path.Combine(worktreePath, ".gitkeep"), "modified content");
+
+        var diff = await _manager.GetDiffSummaryAsync(worktreePath, cancellationToken: CancellationToken.None);
+
+        Assert.Contains(".gitkeep", diff);
+        Assert.Contains("modified content", diff);
+    }
+
+    [Fact]
+    public async Task GetDiffSummaryAsync_NewUntrackedFile_IncludesFileContent()
+    {
+        var worktreePath = await _manager.CreateWorktreeAsync(_tempDir, "aiboard/diff-untracked", CancellationToken.None);
+
+        // Create a new untracked file
+        await File.WriteAllTextAsync(Path.Combine(worktreePath, "new-feature.cs"),
+            "public class NewFeature { }");
+
+        var diff = await _manager.GetDiffSummaryAsync(worktreePath, cancellationToken: CancellationToken.None);
+
+        Assert.Contains("new-feature.cs", diff);
+        Assert.Contains("NewFeature", diff);
+    }
+
+    [Fact]
+    public async Task GetDiffSummaryAsync_NoChanges_ReturnsEmpty()
+    {
+        var worktreePath = await _manager.CreateWorktreeAsync(_tempDir, "aiboard/diff-empty", CancellationToken.None);
+
+        var diff = await _manager.GetDiffSummaryAsync(worktreePath, cancellationToken: CancellationToken.None);
+
+        Assert.True(string.IsNullOrWhiteSpace(diff));
+    }
+
+    [Fact]
+    public async Task GetDiffSummaryAsync_ExceedsMaxChars_Truncates()
+    {
+        var worktreePath = await _manager.CreateWorktreeAsync(_tempDir, "aiboard/diff-truncate", CancellationToken.None);
+
+        // Create a file that will produce a diff larger than our small limit
+        var largeContent = new string('x', 500);
+        await File.WriteAllTextAsync(Path.Combine(worktreePath, "large.txt"), largeContent);
+
+        var diff = await _manager.GetDiffSummaryAsync(worktreePath, maxChars: 100, cancellationToken: CancellationToken.None);
+
+        Assert.Contains("diff truncated", diff);
+    }
+
+    [Fact]
+    public async Task GetDiffSummaryAsync_BothModifiedAndUntracked_IncludesBoth()
+    {
+        var worktreePath = await _manager.CreateWorktreeAsync(_tempDir, "aiboard/diff-both", CancellationToken.None);
+
+        // Modify tracked file
+        await File.WriteAllTextAsync(Path.Combine(worktreePath, ".gitkeep"), "changed");
+        // Add new untracked file
+        await File.WriteAllTextAsync(Path.Combine(worktreePath, "added.txt"), "new file");
+
+        var diff = await _manager.GetDiffSummaryAsync(worktreePath, cancellationToken: CancellationToken.None);
+
+        Assert.Contains(".gitkeep", diff);
+        Assert.Contains("added.txt", diff);
+        Assert.Contains("new file", diff);
+    }
+
     // ── Test infrastructure ───────────────────────────────────────────
 
     private static void InitGitRepo(string path)

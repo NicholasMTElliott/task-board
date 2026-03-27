@@ -404,6 +404,87 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
         }
     }
 
+    // ── Diff summary ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Captures a diff summary of all changes in the worktree relative to HEAD.
+    /// Includes both tracked file modifications and new untracked files.
+    /// </summary>
+    public async Task<string> GetDiffSummaryAsync(
+        string repoPath, int maxChars = 50_000, CancellationToken cancellationToken = default)
+    {
+        var sb = new StringBuilder();
+
+        // 1. Tracked changes (modifications and deletions) relative to HEAD
+        try
+        {
+            var (_, diffOutput, _) = await RunGitAsync(repoPath, ["diff", "HEAD"], cancellationToken);
+            if (!string.IsNullOrWhiteSpace(diffOutput))
+                sb.Append(diffOutput);
+        }
+        catch (GitOperationException ex)
+        {
+            logger.LogWarning(ex, "git diff HEAD failed in {Repo}", repoPath);
+        }
+
+        // 2. New untracked files (not captured by git diff HEAD)
+        try
+        {
+            var (_, lsOutput, _) = await RunGitAsync(repoPath,
+                ["ls-files", "--others", "--exclude-standard"], cancellationToken);
+
+            var untrackedFiles = lsOutput
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(f => f.Trim())
+                .Where(f => !string.IsNullOrWhiteSpace(f))
+                .ToList();
+
+            foreach (var file in untrackedFiles)
+            {
+                if (sb.Length >= maxChars)
+                    break;
+
+                sb.AppendLine();
+                sb.AppendLine($"--- /dev/null");
+                sb.AppendLine($"+++ b/{file}");
+                sb.AppendLine("@@ -0,0 +1 @@");
+
+                var fullPath = Path.Combine(repoPath, file);
+                if (File.Exists(fullPath))
+                {
+                    const int perFileLimit = 10_000;
+                    try
+                    {
+                        var content = await File.ReadAllTextAsync(fullPath, cancellationToken);
+                        if (content.Length > perFileLimit)
+                            content = content[..perFileLimit] + "\n... (file truncated)";
+
+                        foreach (var line in content.Split('\n'))
+                            sb.AppendLine($"+{line}");
+                    }
+                    catch (Exception ex)
+                    {
+                        sb.AppendLine($"+[could not read file: {ex.Message}]");
+                    }
+                }
+            }
+        }
+        catch (GitOperationException ex)
+        {
+            logger.LogWarning(ex, "git ls-files failed in {Repo}", repoPath);
+        }
+
+        // 3. Truncation
+        var result = sb.ToString();
+        if (result.Length > maxChars)
+        {
+            result = result[..maxChars]
+                + $"\n\n... (diff truncated at {maxChars} characters, {sb.Length} total)";
+        }
+
+        return result;
+    }
+
     // ── Common git operations ────────────────────────────────────────
 
     public async Task CommitAsync(

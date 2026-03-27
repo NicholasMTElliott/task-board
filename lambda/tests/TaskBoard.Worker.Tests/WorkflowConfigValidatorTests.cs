@@ -357,6 +357,209 @@ public class WorkflowConfigValidatorTests
         Assert.Same(raw, normalised);
     }
 
+    // ── Gate check validation tests ────────────────────────────────
+
+    [Fact]
+    public void GateCheck_RoleExistsAndHasPrompt_PassesValidation()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, string>(),
+                    GateCheck: new GateCheckConfig("gate_checker", TaskPrompt: "Check it.")),
+                ["list-review"] = new WorkflowState(
+                    "Review", null, "manual_gate", null,
+                    new Dictionary<string, string>())
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" }),
+                ["gate_checker"] = new WorkflowRole("haiku", "gate prompt", new List<string>())
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("gateCheck"));
+    }
+
+    [Fact]
+    public void GateCheck_MissingRole_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, string>(),
+                    GateCheck: new GateCheckConfig("nonexistent_gate_role", TaskPrompt: "Check it."))
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("nonexistent_gate_role") && e.Contains("does not exist"));
+    }
+
+    [Fact]
+    public void GateCheck_MissingTaskPrompt_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, string>(),
+                    GateCheck: new GateCheckConfig("gate_checker"))
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" }),
+                ["gate_checker"] = new WorkflowRole("haiku", "gate prompt", new List<string>())
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("gateCheck") && e.Contains("taskPromptFile") && e.Contains("taskPrompt"));
+    }
+
+    [Fact]
+    public void GateCheck_TaskPromptFileOnly_PassesValidation()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, string>(),
+                    GateCheck: new GateCheckConfig("gate_checker", TaskPromptFile: "prompts/gates/check.md"))
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" }),
+                ["gate_checker"] = new WorkflowRole("haiku", "gate prompt", new List<string>())
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("gateCheck"));
+    }
+
+    [Fact]
+    public void GateCheck_NullGateCheck_NoErrors()
+    {
+        // State without gate check should not produce gate check errors
+        var errors = WorkflowConfigValidator.Validate(MakeValidConfig());
+
+        Assert.DoesNotContain(errors, e => e.Contains("gateCheck"));
+    }
+
+    // ── GateCheckConfig deserialization tests ────────────────────────
+
+    [Fact]
+    public void GateCheckConfig_Deserialization_FromJson()
+    {
+        var json = """
+        {
+            "states": {
+                "Ready for Design": {
+                    "name": "Ready for Design",
+                    "role": "se",
+                    "gateType": "agent_run",
+                    "taskPrompt": "Design it.",
+                    "transitions": {},
+                    "gateCheck": {
+                        "role": "gate_checker",
+                        "taskPromptFile": "prompts/gates/post_design.md",
+                        "maxDiffChars": 30000,
+                        "maxRetries": 3
+                    }
+                }
+            },
+            "roles": {
+                "se": { "model": "opus", "systemPrompt": "You are SE.", "sections": ["Design"] },
+                "gate_checker": { "model": "haiku", "systemPrompt": "You are gate.", "sections": [] }
+            }
+        }
+        """;
+
+        var config = System.Text.Json.JsonSerializer.Deserialize<WorkflowConfig>(json,
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        Assert.NotNull(config);
+        var state = config!.States["Ready for Design"];
+        Assert.NotNull(state.GateCheck);
+        Assert.Equal("gate_checker", state.GateCheck!.Role);
+        Assert.Equal("prompts/gates/post_design.md", state.GateCheck.TaskPromptFile);
+        Assert.Equal(30_000, state.GateCheck.MaxDiffChars);
+        Assert.Equal(3, state.GateCheck.MaxRetries);
+    }
+
+    [Fact]
+    public void GateCheckConfig_Deserialization_Defaults()
+    {
+        var json = """
+        {
+            "states": {
+                "s1": {
+                    "name": "S1",
+                    "role": "se",
+                    "gateType": "agent_run",
+                    "taskPrompt": "Do it.",
+                    "transitions": {},
+                    "gateCheck": {
+                        "role": "gate_checker",
+                        "taskPrompt": "Check it."
+                    }
+                }
+            },
+            "roles": {
+                "se": { "model": "opus", "systemPrompt": "SE.", "sections": ["X"] },
+                "gate_checker": { "model": "haiku", "systemPrompt": "Gate.", "sections": [] }
+            }
+        }
+        """;
+
+        var config = System.Text.Json.JsonSerializer.Deserialize<WorkflowConfig>(json,
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        var gc = config!.States["s1"].GateCheck!;
+        Assert.Equal(50_000, gc.MaxDiffChars); // default
+        Assert.Equal(2, gc.MaxRetries); // default
+        Assert.Null(gc.TaskPromptFile);
+        Assert.Equal("Check it.", gc.TaskPrompt);
+    }
+
+    [Fact]
+    public void GateCheckConfig_Deserialization_NullWhenAbsent()
+    {
+        var json = """
+        {
+            "states": {
+                "s1": {
+                    "name": "S1",
+                    "role": "se",
+                    "gateType": "agent_run",
+                    "taskPrompt": "Do it.",
+                    "transitions": {}
+                }
+            },
+            "roles": {
+                "se": { "model": "opus", "systemPrompt": "SE.", "sections": ["X"] }
+            }
+        }
+        """;
+
+        var config = System.Text.Json.JsonSerializer.Deserialize<WorkflowConfig>(json,
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        Assert.Null(config!.States["s1"].GateCheck);
+    }
+
     [Fact]
     public void ProductionConfig_IsValid()
     {

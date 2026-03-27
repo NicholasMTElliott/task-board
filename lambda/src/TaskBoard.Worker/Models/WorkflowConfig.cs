@@ -29,7 +29,8 @@ public sealed record WorkflowState(
     Dictionary<string, string>? ProviderParams = null,
     bool IncludeInAgentContext = false,
     int PipelineOrder = 0,
-    List<WorkflowStep>? Steps = null)
+    List<WorkflowStep>? Steps = null,
+    GateCheckConfig? GateCheck = null)
 {
     /// <summary>
     /// Normalises a legacy single-step state (top-level Role + TaskPrompt) into
@@ -74,3 +75,10 @@ public sealed record PollingConfig(
 public sealed record MergeResolutionConfig(
     string Role,
     Dictionary<string, string>? ProviderParams = null);
+
+public sealed record GateCheckConfig(
+    string Role,
+    string? TaskPromptFile = null,
+    string? TaskPrompt = null,
+    int MaxDiffChars = 50_000,
+    int MaxRetries = 2);
