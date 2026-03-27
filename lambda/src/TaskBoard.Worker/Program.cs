@@ -79,6 +79,10 @@ else
     builder.Services.AddSingleton<IAgentExecutor, StubAgentExecutor>();
 }
 
+// Generate agent identity for this process instance
+var agentIdentity = AgentIdentity.Generate();
+builder.Services.AddSingleton(agentIdentity);
+
 // Agent mode services
 builder.Services.AddSingleton<TaskFileManager>();
 
@@ -92,6 +96,8 @@ builder.Services.AddSingleton<MergeRunner>();
 builder.Services.AddSingleton<PollingRunner>();
 
 var app = builder.Build();
+
+app.Logger.LogInformation("Agent identity: {AgentName}", agentIdentity.DisplayName);
 
 if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
 {

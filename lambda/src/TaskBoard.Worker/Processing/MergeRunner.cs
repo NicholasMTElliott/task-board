@@ -7,6 +7,7 @@ public sealed class MergeRunner(
     ITaskBoardClient boardClient,
     GitWorkspaceManager gitWorkspaceManager,
     WorkflowConfig workflowConfig,
+    AgentIdentity agentIdentity,
     ILogger<MergeRunner> logger)
 {
     private const int DefaultMaxRetries = 3;
@@ -16,6 +17,14 @@ public sealed class MergeRunner(
     {
         var runId = $"merge-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Random.Shared.Next(0x10000):x4}";
         var runMarker = $"<!-- merge-run:{runId} -->";
+
+        using (logger.BeginScope(new Dictionary<string, object>
+        {
+            ["AgentName"] = agentIdentity.DisplayName,
+            ["RunId"] = runId
+        }))
+        {
+
         logger.LogInformation("Starting merge run {RunId} for card {CardId}", runId, cardId);
 
         // 1. Fetch card and validate state
@@ -174,6 +183,7 @@ public sealed class MergeRunner(
             await TransitionBestEffort(cardId, state, "ERROR", cancellationToken);
             return new AgentRunResult(AgentOutcome.ERROR, ex.Message);
         }
+        } // using logger scope
     }
 
     private async Task CreateMergeWorktreeAsync(
@@ -252,7 +262,7 @@ public sealed class MergeRunner(
         string cardId, string detail, BoardCard card, string runMarker,
         CancellationToken cancellationToken)
     {
-        var comment = $"{runMarker}\n\n**system in Merging:**\n\n## Merge Complete\n\n{detail}";
+        var comment = $"{runMarker}\n\n**system in Merging ({agentIdentity.DisplayName}):**\n\n## Merge Complete\n\n{detail}";
         await boardClient.UpsertAgentCommentAsync(cardId, comment, runMarker, cancellationToken);
     }
 
@@ -262,7 +272,7 @@ public sealed class MergeRunner(
     {
         try
         {
-            var comment = $"{runMarker}\n\n**system in Merging:**\n\n## Merge Result\n\n{detail}";
+            var comment = $"{runMarker}\n\n**system in Merging ({agentIdentity.DisplayName}):**\n\n## Merge Result\n\n{detail}";
             await boardClient.UpsertAgentCommentAsync(cardId, comment, runMarker, cancellationToken);
         }
         catch (Exception ex)

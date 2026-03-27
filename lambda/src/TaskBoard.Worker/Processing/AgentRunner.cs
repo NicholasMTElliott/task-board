@@ -12,6 +12,7 @@ public sealed partial class AgentRunner(
     GitWorkspaceManager gitWorkspaceManager,
     WorkflowConfig workflowConfig,
     ICrossReferenceResolver crossReferenceResolver,
+    AgentIdentity agentIdentity,
     ILogger<AgentRunner> logger)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
@@ -26,6 +27,14 @@ public sealed partial class AgentRunner(
     {
         var runId = $"run-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Random.Shared.Next(0x10000):x4}";
         var runMarker = $"<!-- agent-run:{runId} -->";
+
+        using (logger.BeginScope(new Dictionary<string, object>
+        {
+            ["AgentName"] = agentIdentity.DisplayName,
+            ["RunId"] = runId
+        }))
+        {
+
         logger.LogInformation("Starting agent run {RunId} for card {CardId} in workspace {Workspace}",
             runId, cardId, workspacePath);
 
@@ -173,7 +182,7 @@ public sealed partial class AgentRunner(
             }
 
             // 6. Execute steps sequentially
-            var commentPrefix = BuildCommentPrefix(state, workflowConfig);
+            var commentPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity);
             AgentResult? lastResult = null;
 
             for (var stepIndex = 0; stepIndex < state.Steps.Count; stepIndex++)
@@ -338,7 +347,7 @@ public sealed partial class AgentRunner(
             try
             {
                 var errorResult = new AgentResult(AgentOutcome.ERROR, ex.Message);
-                var errorPrefix = BuildCommentPrefix(state, workflowConfig);
+                var errorPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity);
                 var comment = $"{errorPrefix}\n\n{FormatComment(errorResult)}";
                 await boardClient.UpsertAgentCommentAsync(cardId, comment, runMarker, cancellationToken);
 
@@ -354,6 +363,7 @@ public sealed partial class AgentRunner(
 
             return new AgentRunResult(AgentOutcome.ERROR, ex.Message);
         }
+        } // using logger scope
     }
 
     private async Task<(string BranchName, bool IsExisting)> ResolveBranchNameAsync(
@@ -585,8 +595,9 @@ public sealed partial class AgentRunner(
         {
             // Gate check infrastructure failure is non-blocking
             logger.LogError(ex, "Gate check failed to execute for card {CardId} — proceeding without verification", cardId);
+            var gateIdentity = $"(via {agentIdentity.DisplayName})";
             var warningComment = $"<!-- gate-check:{state.Name} -->\n\n" +
-                $"## Gate Check Warning\n\nGate check failed to execute: {ex.Message}\nProceeding without verification.";
+                $"## Gate Check Warning {gateIdentity}\n\nGate check failed to execute: {ex.Message}\nProceeding without verification.";
             await boardClient.UpsertAgentCommentAsync(cardId, warningComment,
                 $"<!-- gate-check:{state.Name} -->", cancellationToken);
             return null;
@@ -603,8 +614,9 @@ public sealed partial class AgentRunner(
             case AgentOutcome.NEEDS_INFO:
             {
                 // CONCERNS — route to questions column
+                var gateIdentityConcerns = $"(via {agentIdentity.DisplayName})";
                 var comment = $"<!-- gate-check:{state.Name} -->\n\n" +
-                    $"## Gate Check: Concerns\n\n{gateResult.Detail ?? "The gate check raised concerns."}";
+                    $"## Gate Check: Concerns {gateIdentityConcerns}\n\n{gateResult.Detail ?? "The gate check raised concerns."}";
                 await boardClient.UpsertAgentCommentAsync(cardId, comment,
                     $"<!-- gate-check:{state.Name} -->", cancellationToken);
 
@@ -626,8 +638,9 @@ public sealed partial class AgentRunner(
                     // Escalate to NEEDS_INFO for human intervention
                     logger.LogWarning("Gate check for card {CardId} has failed {Count} times — escalating to NEEDS_INFO",
                         cardId, previousFailures + 1);
+                    var gateIdentityEscalate = $"(via {agentIdentity.DisplayName})";
                     var escalateComment = $"<!-- gate-check:{state.Name} result:ERROR attempt:{previousFailures + 1} -->\n\n" +
-                        $"## Gate Check: Escalated to Human Review\n\n" +
+                        $"## Gate Check: Escalated to Human Review {gateIdentityEscalate}\n\n" +
                         $"The gate check has failed {previousFailures + 1} consecutive times. Escalating for human review.\n\n" +
                         $"**Latest failure reason:**\n{gateResult.Detail ?? "No detail provided."}";
                     await boardClient.UpsertAgentCommentAsync(cardId, escalateComment,
@@ -640,8 +653,9 @@ public sealed partial class AgentRunner(
                 }
 
                 // Route via GATE_FAIL (re-trigger) or fall back to ERROR
+                var gateIdentityFail = $"(via {agentIdentity.DisplayName})";
                 var failComment = $"<!-- gate-check:{state.Name} result:ERROR attempt:{previousFailures + 1} -->\n\n" +
-                    $"## Gate Check: Failed\n\n{gateResult.Detail ?? "The gate check detected issues with the agent's output."}";
+                    $"## Gate Check: Failed {gateIdentityFail}\n\n{gateResult.Detail ?? "The gate check detected issues with the agent's output."}";
                 await boardClient.UpsertAgentCommentAsync(cardId, failComment,
                     $"<!-- gate-check:{state.Name} -->", cancellationToken);
 
@@ -1064,7 +1078,7 @@ public sealed partial class AgentRunner(
         return ResolvePromptPlaceholders(template, card);
     }
 
-    private static string BuildCommentPrefix(WorkflowState state, WorkflowConfig config)
+    private static string BuildCommentPrefix(WorkflowState state, WorkflowConfig config, AgentIdentity identity)
     {
         var activeStateName = state.Transitions.TryGetValue("IN_PROGRESS", out var inProgressCol)
             && config.States.TryGetValue(inProgressCol, out var inProgressState)
@@ -1075,7 +1089,7 @@ public sealed partial class AgentRunner(
         var roleName = state.Steps is { Count: > 0 }
             ? state.Steps[0].Role
             : state.Role ?? "agent";
-        return $"**{roleName} in {activeStateName}:**";
+        return $"**{roleName} in {activeStateName} ({identity.DisplayName}):**";
     }
 
     internal static string FormatComment(AgentResult result, string? gitNote = null)
