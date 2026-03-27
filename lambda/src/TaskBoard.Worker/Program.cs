@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
@@ -92,6 +93,38 @@ builder.Services.AddSingleton<MergeRunner>();
 builder.Services.AddSingleton<PollingRunner>();
 
 var app = builder.Build();
+
+// Runtime prerequisite validation — verify tools, auth, and files before any work
+{
+    var config = app.Services.GetRequiredService<WorkflowConfig>();
+
+    // Determine prompt base directory from workflow config path
+    var configPath = Environment.GetEnvironmentVariable("WORKFLOW_CONFIG_PATH")
+        ?? Path.Combine(AppContext.BaseDirectory, "workflow.v1.json");
+    var promptBaseDir = Path.GetDirectoryName(Path.GetFullPath(configPath))!;
+
+    // Resolve provider-specific options
+    GitHubProjectsOptions? ghOpts = boardProvider == "github"
+        ? app.Services.GetRequiredService<IOptions<GitHubProjectsOptions>>().Value
+        : null;
+    TrelloClientOptions? trelloOpts = boardProvider is "trello" or "live"
+        ? app.Services.GetRequiredService<IOptions<TrelloClientOptions>>().Value
+        : null;
+
+    var prereqErrors = await PrerequisiteValidator.ValidateAsync(
+        config, boardProvider, agentExecutorMode,
+        promptBaseDir, ghOpts, trelloOpts);
+
+    if (prereqErrors.Count > 0)
+    {
+        app.Logger.LogError(
+            "Prerequisite validation failed:\n{Errors}",
+            string.Join("\n", prereqErrors));
+        return;
+    }
+
+    app.Logger.LogInformation("All prerequisites validated successfully");
+}
 
 if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
 {
