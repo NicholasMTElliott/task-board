@@ -8,6 +8,7 @@ public class GitWorkspaceManagerTests : IDisposable
     private readonly string _tempDir;
     private readonly string _worktreeBase;
     private readonly GitWorkspaceManager _manager;
+    private readonly string _defaultBranch;
 
     public GitWorkspaceManagerTests()
     {
@@ -18,6 +19,7 @@ public class GitWorkspaceManagerTests : IDisposable
 
         // Initialize a git repo in the temp dir
         InitGitRepo(_tempDir);
+        _defaultBranch = GetCurrentBranch(_tempDir);
     }
 
     public void Dispose()
@@ -45,8 +47,7 @@ public class GitWorkspaceManagerTests : IDisposable
 
         // Main repo should still be on its original branch
         var mainBranch = await _manager.GetCurrentBranchAsync(_tempDir, CancellationToken.None);
-        Assert.True(mainBranch == "main" || mainBranch == "master",
-            $"Main repo should still be on main/master, got '{mainBranch}'");
+        Assert.Equal(_defaultBranch, mainBranch);
     }
 
     [Fact]
@@ -173,8 +174,7 @@ public class GitWorkspaceManagerTests : IDisposable
     {
         var branch = await _manager.GetCurrentBranchAsync(_tempDir, CancellationToken.None);
 
-        Assert.True(branch == "main" || branch == "master",
-            $"Expected 'main' or 'master', got '{branch}'");
+        Assert.Equal(_defaultBranch, branch);
     }
 
     [Fact]
@@ -311,6 +311,26 @@ public class GitWorkspaceManagerTests : IDisposable
         File.WriteAllText(Path.Combine(path, ".gitkeep"), "");
         RunGitSync(path, "add", ".");
         RunGitSync(path, "commit", "-m", "initial");
+    }
+
+    private static string GetCurrentBranch(string workingDirectory)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("branch");
+        psi.ArgumentList.Add("--show-current");
+
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        var output = process.StandardOutput.ReadToEnd().Trim();
+        process.WaitForExit();
+        return output;
     }
 
     private static void RunGitSync(string workingDirectory, params string[] args)

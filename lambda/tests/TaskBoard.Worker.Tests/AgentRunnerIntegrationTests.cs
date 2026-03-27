@@ -256,7 +256,8 @@ public class AgentRunnerIntegrationTests : IDisposable
         var dir = AppContext.BaseDirectory;
         while (dir is not null)
         {
-            if (Directory.Exists(Path.Combine(dir, ".git")))
+            var gitPath = Path.Combine(dir, ".git");
+            if (Directory.Exists(gitPath) || File.Exists(gitPath))
                 return dir;
             dir = Directory.GetParent(dir)?.FullName;
         }
