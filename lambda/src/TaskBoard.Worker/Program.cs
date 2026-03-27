@@ -122,7 +122,7 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
         : null;
 
     string? claudeExePath = agentExecutorMode == "claude-cli"
-        ? app.Services.GetRequiredService<IOptions<ClaudeCliLlmOptions>>().Value.ExecutablePath
+        ? host.Services.GetRequiredService<IOptions<ClaudeCliLlmOptions>>().Value.ExecutablePath
         : null;
 
     var prereqErrors = await PrerequisiteValidator.ValidateAsync(

@@ -458,6 +458,258 @@ public class WorkflowConfigValidatorTests
         Assert.DoesNotContain(errors, e => e.Contains("gateCheck"));
     }
 
+    // ── Optional steps validation tests ──────────────────────────────
+
+    [Fact]
+    public void OptionalSteps_Valid_PassesValidation()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, string>(),
+                    GateCheck: new GateCheckConfig("gate_checker", TaskPrompt: "Check it."),
+                    OptionalSteps:
+                    [
+                        new OptionalStepDefinition("security_audit", "specialist_reviewer",
+                            TaskPrompt: "Perform security audit.")
+                    ]),
+                ["list-done"] = new WorkflowState("Done", null, "terminal", null,
+                    new Dictionary<string, string>())
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("model", "prompt", new List<string> { "Section" }),
+                ["gate_checker"] = new WorkflowRole("haiku", "gate prompt", new List<string>()),
+                ["specialist_reviewer"] = new WorkflowRole("sonnet", "specialist prompt", new List<string>())
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("optional"));
+    }
+
+    [Fact]
+    public void OptionalSteps_MissingRole_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, string>(),
+                    GateCheck: new GateCheckConfig("gate_checker", TaskPrompt: "Check it."),
+                    OptionalSteps:
+                    [
+                        new OptionalStepDefinition("security_audit", "nonexistent_role",
+                            TaskPrompt: "Check security.")
+                    ])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("model", "prompt", new List<string> { "Section" }),
+                ["gate_checker"] = new WorkflowRole("haiku", "gate prompt", new List<string>())
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("nonexistent_role") && e.Contains("does not exist"));
+    }
+
+    [Fact]
+    public void OptionalSteps_MissingPrompt_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, string>(),
+                    GateCheck: new GateCheckConfig("gate_checker", TaskPrompt: "Check it."),
+                    OptionalSteps:
+                    [
+                        new OptionalStepDefinition("security_audit", "specialist_reviewer")
+                        // No TaskPrompt or TaskPromptFile
+                    ])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("model", "prompt", new List<string> { "Section" }),
+                ["gate_checker"] = new WorkflowRole("haiku", "gate prompt", new List<string>()),
+                ["specialist_reviewer"] = new WorkflowRole("sonnet", "specialist prompt", new List<string>())
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("security_audit") && e.Contains("taskPrompt"));
+    }
+
+    [Fact]
+    public void OptionalSteps_DuplicateName_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, string>(),
+                    GateCheck: new GateCheckConfig("gate_checker", TaskPrompt: "Check it."),
+                    OptionalSteps:
+                    [
+                        new OptionalStepDefinition("security_audit", "specialist_reviewer",
+                            TaskPrompt: "First."),
+                        new OptionalStepDefinition("security_audit", "specialist_reviewer",
+                            TaskPrompt: "Duplicate.")
+                    ])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("model", "prompt", new List<string> { "Section" }),
+                ["gate_checker"] = new WorkflowRole("haiku", "gate prompt", new List<string>()),
+                ["specialist_reviewer"] = new WorkflowRole("sonnet", "specialist prompt", new List<string>())
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("duplicate") && e.Contains("security_audit"));
+    }
+
+    [Fact]
+    public void OptionalSteps_NameCollidesWithMandatoryStep_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    null, new Dictionary<string, string>(),
+                    Steps:
+                    [
+                        new WorkflowStep("implement", "ba", TaskPrompt: "Do work.")
+                    ],
+                    GateCheck: new GateCheckConfig("gate_checker", TaskPrompt: "Check it."),
+                    OptionalSteps:
+                    [
+                        new OptionalStepDefinition("implement", "specialist_reviewer",
+                            TaskPrompt: "Same name as mandatory step.")
+                    ])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("model", "prompt", new List<string> { "Section" }),
+                ["gate_checker"] = new WorkflowRole("haiku", "gate prompt", new List<string>()),
+                ["specialist_reviewer"] = new WorkflowRole("sonnet", "specialist prompt", new List<string>())
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("implement") && e.Contains("collides"));
+    }
+
+    [Fact]
+    public void OptionalSteps_NoGateCheck_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, string>(),
+                    // No GateCheck
+                    OptionalSteps:
+                    [
+                        new OptionalStepDefinition("security_audit", "specialist_reviewer",
+                            TaskPrompt: "Check security.")
+                    ])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("model", "prompt", new List<string> { "Section" }),
+                ["specialist_reviewer"] = new WorkflowRole("sonnet", "specialist prompt", new List<string>())
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("optionalSteps") && e.Contains("gateCheck"));
+    }
+
+    [Fact]
+    public void OptionalSteps_Deserialization_FromJson()
+    {
+        var json = """
+        {
+            "states": {
+                "s1": {
+                    "name": "S1",
+                    "role": "se",
+                    "gateType": "agent_run",
+                    "taskPrompt": "Do it.",
+                    "transitions": {},
+                    "gateCheck": { "role": "gate_checker", "taskPrompt": "Check." },
+                    "optionalSteps": [
+                        {
+                            "name": "security_audit",
+                            "role": "specialist_reviewer",
+                            "taskPromptFile": "prompts/optional-steps/impl/security_audit.md",
+                            "description": "Security review.",
+                            "triggers": "Auth changes.",
+                            "providerParams": { "effort": "medium" }
+                        }
+                    ]
+                }
+            },
+            "roles": {
+                "se": { "model": "opus", "systemPrompt": "SE.", "sections": ["X"] },
+                "gate_checker": { "model": "haiku", "systemPrompt": "Gate.", "sections": [] },
+                "specialist_reviewer": { "model": "sonnet", "systemPrompt": "Specialist.", "sections": [] }
+            }
+        }
+        """;
+
+        var config = System.Text.Json.JsonSerializer.Deserialize<WorkflowConfig>(json,
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        Assert.NotNull(config);
+        var state = config!.States["s1"];
+        Assert.NotNull(state.OptionalSteps);
+        Assert.Single(state.OptionalSteps!);
+        var step = state.OptionalSteps[0];
+        Assert.Equal("security_audit", step.Name);
+        Assert.Equal("specialist_reviewer", step.Role);
+        Assert.Equal("prompts/optional-steps/impl/security_audit.md", step.TaskPromptFile);
+        Assert.Equal("Security review.", step.Description);
+        Assert.Equal("Auth changes.", step.Triggers);
+        Assert.NotNull(step.ProviderParams);
+        Assert.Equal("medium", step.ProviderParams!["effort"]);
+    }
+
+    [Fact]
+    public void OptionalSteps_Deserialization_AbsentKeyIsNull()
+    {
+        var json = """
+        {
+            "states": {
+                "s1": {
+                    "name": "S1",
+                    "role": "se",
+                    "gateType": "agent_run",
+                    "taskPrompt": "Do it.",
+                    "transitions": {}
+                }
+            },
+            "roles": {
+                "se": { "model": "opus", "systemPrompt": "SE.", "sections": ["X"] }
+            }
+        }
+        """;
+
+        var config = System.Text.Json.JsonSerializer.Deserialize<WorkflowConfig>(json,
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        Assert.Null(config!.States["s1"].OptionalSteps);
+    }
+
     // ── GateCheckConfig deserialization tests ────────────────────────
 
     [Fact]

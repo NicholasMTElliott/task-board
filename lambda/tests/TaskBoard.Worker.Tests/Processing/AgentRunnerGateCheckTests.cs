@@ -356,7 +356,8 @@ public class AgentRunnerGateCheckTests : IDisposable
         Assert.NotNull(capturedGateContext);
         Assert.Equal("none", capturedGateContext!.ProviderParams!["permissionMode"]);
         Assert.Equal("min", capturedGateContext.ProviderParams["effort"]);
-        Assert.Equal("0.10", capturedGateContext.ProviderParams["maxBudget"]);
+        Assert.False(capturedGateContext.ProviderParams.ContainsKey("maxBudget"),
+            "Gate check should not set a budget cap — budget was removed per design decision.");
         Assert.Equal("claude-haiku-4-5-20251001", capturedGateContext.Model);
     }
 

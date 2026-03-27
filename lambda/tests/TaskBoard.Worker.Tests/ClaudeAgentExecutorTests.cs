@@ -453,6 +453,85 @@ public class ClaudeAgentExecutorTests
         Assert.Contains("claude-haiku-4-5-20251001", args);
     }
 
+    // ── requestedSteps parsing tests ─────────────────────────────────
+
+    [Fact]
+    public void ParseResult_WithRequestedSteps_ParsedCorrectly()
+    {
+        var stdout = """
+            {
+              "structured_output": {
+                "outcome": "COMPLETE",
+                "detail": "All checks passed.",
+                "requestedSteps": ["security_audit", "performance_review"]
+              }
+            }
+            """;
+
+        var result = ClaudeAgentExecutor.ParseResult(stdout);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+        Assert.NotNull(result.RequestedSteps);
+        Assert.Equal(2, result.RequestedSteps!.Count);
+        Assert.Equal("security_audit", result.RequestedSteps[0]);
+        Assert.Equal("performance_review", result.RequestedSteps[1]);
+    }
+
+    [Fact]
+    public void ParseResult_WithEmptyRequestedSteps_ReturnsNull()
+    {
+        var stdout = """
+            {
+              "structured_output": {
+                "outcome": "COMPLETE",
+                "requestedSteps": []
+              }
+            }
+            """;
+
+        var result = ClaudeAgentExecutor.ParseResult(stdout);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+        Assert.Null(result.RequestedSteps);
+    }
+
+    [Fact]
+    public void ParseResult_WithoutRequestedSteps_ReturnsNull()
+    {
+        var stdout = """
+            {
+              "structured_output": {
+                "outcome": "COMPLETE",
+                "detail": "Done."
+              }
+            }
+            """;
+
+        var result = ClaudeAgentExecutor.ParseResult(stdout);
+
+        Assert.Null(result.RequestedSteps);
+    }
+
+    [Fact]
+    public void ParseResult_WithNonStringRequestedSteps_FiltersNonStrings()
+    {
+        var stdout = """
+            {
+              "structured_output": {
+                "outcome": "COMPLETE",
+                "requestedSteps": ["security_audit", 42, null, "performance_review"]
+              }
+            }
+            """;
+
+        var result = ClaudeAgentExecutor.ParseResult(stdout);
+
+        Assert.NotNull(result.RequestedSteps);
+        Assert.Equal(2, result.RequestedSteps!.Count);
+        Assert.Equal("security_audit", result.RequestedSteps[0]);
+        Assert.Equal("performance_review", result.RequestedSteps[1]);
+    }
+
     [Fact]
     public void ParseStreamOutput_SingleResultWithStructuredOutput_ReturnsIt()
     {

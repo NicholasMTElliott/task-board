@@ -35,6 +35,10 @@ public sealed class ClaudeAgentExecutor(
                 },
                 "required": ["question"]
               }
+            },
+            "requestedSteps": {
+              "type": "array",
+              "items": { "type": "string" }
             }
           },
           "required": ["outcome"]
@@ -209,7 +213,8 @@ public sealed class ClaudeAgentExecutor(
                 var outcome = ParseOutcomeString(structuredOutcome.GetString());
                 var detail = structured.TryGetProperty("detail", out var d) ? d.GetString() : null;
                 var questions = ParseQuestions(structured);
-                return new AgentResult(outcome, detail, questions);
+                var requestedSteps = ParseRequestedSteps(structured);
+                return new AgentResult(outcome, detail, questions, null, requestedSteps);
             }
 
             // Try result field
@@ -377,6 +382,20 @@ public sealed class ClaudeAgentExecutor(
         }
 
         return questions.Count > 0 ? questions : null;
+    }
+
+    private static IReadOnlyList<string>? ParseRequestedSteps(JsonElement structured)
+    {
+        if (!structured.TryGetProperty("requestedSteps", out var stepsEl)
+            || stepsEl.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var steps = stepsEl.EnumerateArray()
+            .Where(e => e.ValueKind == JsonValueKind.String)
+            .Select(e => e.GetString()!)
+            .ToList();
+
+        return steps.Count > 0 ? steps : null;
     }
 
     private static AgentOutcome ParseOutcomeString(string? outcome)

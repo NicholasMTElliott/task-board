@@ -29,3 +29,25 @@ Use the structured output schema. Map your verdict as follows:
   implementing agent can fix it on re-run.
 
 Keep your explanation to 2-3 sentences. Be specific, not vague.
+
+## Optional Step Recommendations
+
+When a list of available optional review steps appears after the verification
+checklist, you may recommend that specific steps be executed. This is separate
+from your pass/fail verdict — you can pass the mandatory work while still
+recommending specialist reviews.
+
+To recommend optional steps, include a `requestedSteps` array in your structured
+output with the exact step names from the catalog:
+- **COMPLETE + requestedSteps**: Mandatory work passes, but specialist review is
+  warranted. Example: auth code changes → request security_audit.
+- **COMPLETE + no requestedSteps**: Mandatory work passes, no specialist review needed.
+  Omit the field entirely.
+
+Guidelines:
+- Only recommend steps whose trigger criteria clearly match the changes.
+- You are categorizing what the changes touch (pattern-matching), not evaluating quality.
+- Do not recommend steps for trivial changes (docs, comments, formatting, config-only).
+- When in doubt, do not recommend — the human reviewer can always request reviews
+  manually by moving the card back.
+- Use the exact step name from the catalog. Do not invent step names.
