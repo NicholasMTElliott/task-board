@@ -83,6 +83,41 @@ public class PromptContentTests
     }
 
     [Fact]
+    public void DesignPrompt_ContainsOutputFormatSection()
+    {
+        var content = File.ReadAllText(Path.Combine(RepoRoot, "prompts", "states", "ready_for_design.md"));
+
+        Assert.Contains("Output Format", content);
+        Assert.Contains("Design Review Summary", content);
+        Assert.Contains("<details>", content);
+    }
+
+    [Fact]
+    public void DesignPrompt_ContainsSummaryPolicy()
+    {
+        var content = File.ReadAllText(Path.Combine(RepoRoot, "prompts", "states", "ready_for_design.md"));
+
+        Assert.Contains("Key Decisions", content);
+        Assert.Contains("Assumptions", content);
+        Assert.Contains("Scope", content);
+        Assert.Contains("Risk", content);
+    }
+
+    [Fact]
+    public void SeniorEngineerRole_IncludesDesignReviewSummarySection()
+    {
+        var configPath = Path.Combine(RepoRoot, "workflow.github.json");
+        var json = File.ReadAllText(configPath);
+        var config = JsonSerializer.Deserialize<WorkflowConfig>(json, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+        })!;
+
+        var sections = config.Roles["senior_engineer"].Sections;
+        Assert.Contains("Design Review Summary", sections);
+    }
+
+    [Fact]
     public void AllWorkflowPromptFiles_Exist()
     {
         var configPath = Path.Combine(RepoRoot, "workflow.github.json");
