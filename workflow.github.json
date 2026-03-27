@@ -118,8 +118,8 @@
       "includeInAgentContext": true,
       "transitions": {}
     },
-    "Accepted": {
-      "name": "Accepted",
+    "Approved": {
+      "name": "Approved",
       "gateType": "system_merge",
       "pipelineOrder": 4,
       "includeInAgentContext": false,
