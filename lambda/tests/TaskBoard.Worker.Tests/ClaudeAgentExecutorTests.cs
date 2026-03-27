@@ -356,6 +356,103 @@ public class ClaudeAgentExecutorTests
         Assert.Contains("COMPLETE", resultJson);
     }
 
+    // ── Gate check argument list tests ─────────────────────────────
+
+    [Fact]
+    public void BuildArgumentList_PermissionModeNone_OmitsPermissionFlags()
+    {
+        var executor = CreateExecutor();
+        var context = CreateContext(providerParams: new Dictionary<string, string>
+        {
+            ["permissionMode"] = "none"
+        });
+        var args = executor.BuildArgumentList(context, "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
+
+        Assert.DoesNotContain("--permission-mode", args);
+        Assert.DoesNotContain("bypassPermissions", args);
+        Assert.DoesNotContain("--allowedTools", args);
+
+        // Other required flags still present
+        Assert.Contains("--model", args);
+        Assert.Contains("--output-format", args);
+        Assert.Contains("--json-schema", args);
+        Assert.Contains("--no-session-persistence", args);
+    }
+
+    [Fact]
+    public void BuildArgumentList_WithoutPermissionModeNone_IncludesPermissionFlags()
+    {
+        var executor = CreateExecutor();
+        var context = CreateContext(providerParams: new Dictionary<string, string>
+        {
+            ["effort"] = "max"
+        });
+        var args = executor.BuildArgumentList(context, "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
+
+        Assert.Contains("--permission-mode", args);
+        Assert.Contains("bypassPermissions", args);
+        Assert.Contains("--allowedTools", args);
+    }
+
+    [Fact]
+    public void BuildArgumentList_MaxBudgetOverride_UsesProviderParamValue()
+    {
+        var executor = CreateExecutor(maxBudgetUsd: 5.00m);
+        var context = CreateContext(providerParams: new Dictionary<string, string>
+        {
+            ["maxBudget"] = "0.10"
+        });
+        var args = executor.BuildArgumentList(context, "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
+
+        var budgetIndex = Array.IndexOf(args, "--max-budget-usd");
+        Assert.True(budgetIndex >= 0, "Expected --max-budget-usd flag");
+        Assert.Equal("0.10", args[budgetIndex + 1]);
+    }
+
+    [Fact]
+    public void BuildArgumentList_NoMaxBudgetOverride_UsesGlobalDefault()
+    {
+        var executor = CreateExecutor(maxBudgetUsd: 3.50m);
+        var context = CreateContext();
+        var args = executor.BuildArgumentList(context, "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
+
+        var budgetIndex = Array.IndexOf(args, "--max-budget-usd");
+        Assert.True(budgetIndex >= 0, "Expected --max-budget-usd flag");
+        Assert.Equal("3.50", args[budgetIndex + 1]);
+    }
+
+    [Fact]
+    public void BuildArgumentList_GateCheckCombined_CorrectFlags()
+    {
+        // Simulates a gate check invocation: permissionMode=none, effort=min, maxBudget=0.10
+        var executor = CreateExecutor(maxBudgetUsd: 5.00m);
+        var context = CreateContext(
+            model: "claude-haiku-4-5-20251001",
+            providerParams: new Dictionary<string, string>
+            {
+                ["permissionMode"] = "none",
+                ["effort"] = "min",
+                ["maxBudget"] = "0.10"
+            });
+        var args = executor.BuildArgumentList(context, "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
+
+        // Permission flags omitted
+        Assert.DoesNotContain("--permission-mode", args);
+        Assert.DoesNotContain("bypassPermissions", args);
+
+        // Budget overridden
+        var budgetIndex = Array.IndexOf(args, "--max-budget-usd");
+        Assert.Equal("0.10", args[budgetIndex + 1]);
+
+        // Effort flag present
+        var effortIndex = Array.IndexOf(args, "--effort");
+        Assert.True(effortIndex >= 0, "Expected --effort flag");
+        Assert.Equal("min", args[effortIndex + 1]);
+
+        // Model correct
+        Assert.Contains("claude-haiku-4-5-20251001", args);
+    }
+
     [Fact]
     public void ParseStreamOutput_SingleResultWithStructuredOutput_ReturnsIt()
     {
