@@ -450,6 +450,51 @@ public class AgentRunnerTests : IDisposable
         Assert.DoesNotContain("---", comment);
     }
 
+    [Fact]
+    public async Task ResolveTaskPromptAsync_RealImplementationPromptFile_ContainsTestingGuidelines()
+    {
+        var repoRoot = FindRepoRoot();
+        var state = new WorkflowState("Ready for Implementation", "senior_engineer", "agent_run",
+            null,
+            new Dictionary<string, string>(),
+            TaskPromptFile: "prompts/states/ready_for_implementation.md");
+        var card = new BoardCard("card-1", "Auth Feature", "desc", "list-impl");
+
+        var prompt = await AgentRunner.ResolveTaskPromptAsync(state, repoRoot, card, CancellationToken.None);
+
+        Assert.Contains("Testing Requirements", prompt);
+        Assert.Contains("contract", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Pre-Completion Checklist", prompt);
+    }
+
+    [Fact]
+    public async Task ResolveSystemPromptFileAsync_RealSeniorEngineerFile_ContainsTestingPhilosophy()
+    {
+        var repoRoot = FindRepoRoot();
+        var role = new WorkflowRole("claude-opus-4-6", "", new List<string> { "Technical Design" },
+            SystemPromptFile: "prompts/senior_engineer.md");
+
+        var path = await AgentRunner.ResolveSystemPromptFileAsync(role, "senior_engineer", repoRoot, CancellationToken.None);
+
+        var content = await File.ReadAllTextAsync(path);
+        Assert.Contains("Testing Philosophy", content);
+        Assert.Contains("contract", content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = AppContext.BaseDirectory;
+        while (dir is not null)
+        {
+            if (Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git")))
+                return dir;
+            dir = Directory.GetParent(dir)?.FullName;
+        }
+
+        throw new InvalidOperationException(
+            $"Could not find repo root (no .git directory) starting from {AppContext.BaseDirectory}");
+    }
+
     private void SetupBoardCards(string? listId = null)
     {
         var targetList = listId ?? DesignListId;

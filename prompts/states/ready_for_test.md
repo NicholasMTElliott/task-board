@@ -8,12 +8,21 @@ If a conversation history file exists for this task, read it first. It may conta
 
 2. **Run the full test suite.** Report exact results: how many ran, passed, failed, skipped. If ANY test fails, this is a blocking failure. Include the test name and failure reason.
 
-3. **Verify test coverage for new functionality.** New features MUST have tests that prove the requirements work. Check:
-   - Were tests added for the new features?
-   - Do they cover both success and failure cases?
-   - Do they actually verify the behavior described in the requirements, or are they superficial?
-   - Flag any untested code paths or requirements without corresponding test coverage.
-   - Missing or insufficient test coverage is a blocking failure.
+3. **Verify test coverage for new functionality.** New features MUST have tests that prove the requirements work.
+
+   **Check for blocking issues (fail the ticket):**
+   - Were tests added for all new features? Every requirement from the ticket must map to at least one test.
+   - Do tests cover both success and failure cases for each requirement?
+   - Do tests verify observable behavior (return values, state changes, side effects) rather than implementation details (internal fields, call order)? Fragile implementation-detail tests are a blocking issue.
+   - Are any tests superficial — calling methods without meaningful assertions?
+   - Are any critical error paths untested?
+
+   **Check for enhancement opportunities (recommend, do not block):**
+   - Additional edge cases beyond the ticket's scope that would strengthen confidence.
+   - Pre-existing untested code not changed by this ticket.
+   - Trivial code paths where behavior is obvious.
+
+   Missing or insufficient test coverage for ticket requirements is a blocking failure. Enhancement-level suggestions should be noted in the detail field and included as recommendations but should NOT prevent COMPLETE if all ticket requirements are tested.
 
 4. **Verify every requirement is met.** Read the ticket description carefully. For EACH requirement:
    - Is it implemented? Provide evidence (file path, line number).
