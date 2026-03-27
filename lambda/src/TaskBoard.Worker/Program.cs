@@ -73,6 +73,10 @@ var agentExecutorMode = Environment.GetEnvironmentVariable("AGENT_EXECUTOR")?.To
 if (agentExecutorMode == "claude-cli")
 {
     builder.Services.Configure<ClaudeCliLlmOptions>(builder.Configuration.GetSection(ClaudeCliLlmOptions.SectionName));
+    builder.Services.PostConfigure<ClaudeCliLlmOptions>(opts =>
+    {
+        opts.ExecutablePath = ClaudeCliResolver.Resolve(opts.ExecutablePath);
+    });
     builder.Services.AddSingleton<IAgentExecutor, ClaudeAgentExecutor>();
 }
 else
@@ -111,9 +115,13 @@ var app = builder.Build();
         ? app.Services.GetRequiredService<IOptions<TrelloClientOptions>>().Value
         : null;
 
+    string? claudeExePath = agentExecutorMode == "claude-cli"
+        ? app.Services.GetRequiredService<IOptions<ClaudeCliLlmOptions>>().Value.ExecutablePath
+        : null;
+
     var prereqErrors = await PrerequisiteValidator.ValidateAsync(
         config, boardProvider, agentExecutorMode,
-        promptBaseDir, ghOpts, trelloOpts);
+        promptBaseDir, claudeExePath, ghOpts, trelloOpts);
 
     if (prereqErrors.Count > 0)
     {

@@ -14,6 +14,7 @@ public static class PrerequisiteValidator
         string boardProvider,
         string agentExecutor,
         string promptBaseDirectory,
+        string? claudeExecutablePath = null,
         GitHubProjectsOptions? githubOptions = null,
         TrelloClientOptions? trelloOptions = null,
         CancellationToken cancellationToken = default)
@@ -43,7 +44,7 @@ public static class PrerequisiteValidator
         // Agent-executor-specific checks
         if (string.Equals(agentExecutor, "claude-cli", StringComparison.OrdinalIgnoreCase))
         {
-            var claudeExe = OperatingSystem.IsWindows() ? "claude.cmd" : "claude";
+            var claudeExe = claudeExecutablePath ?? (OperatingSystem.IsWindows() ? "claude.cmd" : "claude");
             await ValidateCliToolAsync(errors, claudeExe, ["--version"],
                 "Claude CLI is required for claude-cli agent executor", cancellationToken);
         }

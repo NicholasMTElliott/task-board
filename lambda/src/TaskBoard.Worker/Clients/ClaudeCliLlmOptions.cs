@@ -4,7 +4,7 @@ public sealed class ClaudeCliLlmOptions
 {
     public const string SectionName = "ClaudeCli";
 
-    public string ExecutablePath { get; init; } = "claude";
+    public string ExecutablePath { get; set; } = "claude";
 
     public int MaxTurns { get; init; } = 5;
 

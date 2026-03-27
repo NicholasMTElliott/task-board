@@ -54,8 +54,7 @@ public sealed class ClaudeAgentExecutor(
         var args = BuildArgumentList(context, taskFilePath);
 
         logger.LogDebug("Claude CLI command: {FileName} {Args}",
-            OperatingSystem.IsWindows() ? "claude.cmd" : _options.ExecutablePath,
-            FormatArgsForLogging(args));
+            _options.ExecutablePath, FormatArgsForLogging(args));
 
         var (exitCode, stdout, stderr) = await RunProcessAsync(
             _options.ExecutablePath, args, context.WorkspacePath,
@@ -469,18 +468,9 @@ private static string MinifyJson(string json)
             CreateNoWindow = true,
         };
 
-        if (OperatingSystem.IsWindows())
-        {
-            startInfo.FileName = "claude.cmd";
-            foreach (var arg in argumentList)
-                startInfo.ArgumentList.Add(arg);
-        }
-        else
-        {
-            startInfo.FileName = executable;
-            foreach (var arg in argumentList)
-                startInfo.ArgumentList.Add(arg);
-        }
+        startInfo.FileName = executable;
+        foreach (var arg in argumentList)
+            startInfo.ArgumentList.Add(arg);
 
         // Clear env vars that prevent Claude CLI from running as a subprocess
         startInfo.Environment.Remove("CLAUDECODE");

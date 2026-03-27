@@ -102,7 +102,9 @@ Task files can reference other cards (e.g., `#5`, `#12`). The `CrossReferenceRes
 The .NET worker invokes the Claude CLI (`claude`) as a subprocess via `ClaudeAgentExecutor`.
 
 **Windows invocation:**
-- Set `startInfo.FileName = "claude.cmd"` directly with `ArgumentList`
+- `ClaudeCliResolver.Resolve()` auto-detects the executable at startup by probing PATH for `claude.cmd` (Node.js/nvm4w) then `claude.exe` (native install)
+- Resolved value is stored in `ClaudeCliLlmOptions.ExecutablePath` via `PostConfigure` — all consumers use the same resolved path
+- Explicit `ExecutablePath` config overrides auto-detection
 - Do NOT use `cmd.exe /c claude` (mangles quoted arguments) or PowerShell wrappers
 - Remove `CLAUDECODE` env var from subprocess environment or the CLI refuses to run as a subprocess
 - Flag-style args must come BEFORE content args (Windows `cmd.exe` quote-state mangling)
