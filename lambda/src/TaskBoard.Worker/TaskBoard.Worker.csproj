@@ -26,9 +26,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="appsettings.*.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\..\workflow.v1.json" CopyToOutputDirectory="PreserveNewest" Link="workflow.v1.json" />
     <Content Include="..\..\..\workflow.github.example.json" CopyToOutputDirectory="PreserveNewest" Link="workflow.github.example.json" />
     <Content Include="..\..\..\prompts\**\*" CopyToOutputDirectory="PreserveNewest" LinkBase="prompts" />
+    <Content Include="..\..\..\QUICKSTART.md" CopyToOutputDirectory="PreserveNewest" Link="QUICKSTART.md" />
+    <Content Include="..\..\..\appsettings.user.example.json" CopyToOutputDirectory="PreserveNewest" Link="appsettings.user.example.json" />
     <Content Include="..\..\..\.env.example" CopyToOutputDirectory="PreserveNewest" Link=".env.example" />
   </ItemGroup>
 

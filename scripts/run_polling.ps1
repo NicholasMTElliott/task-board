@@ -5,9 +5,9 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Board provider
-$env:BOARD_PROVIDER = "github"
-$env:AGENT_EXECUTOR = "claude-cli"
-$env:WORKFLOW_CONFIG_PATH = "$PSScriptRoot\..\workflow.github.json"
+$env:BoardProvider = "github"
+$env:AgentExecutor = "claude-cli"
+$env:WorkflowConfigPath = "$PSScriptRoot\..\workflow.github.json"
 
 # GitHub Projects config
 $env:GitHubProjects__Owner = "NicholasMTElliott"

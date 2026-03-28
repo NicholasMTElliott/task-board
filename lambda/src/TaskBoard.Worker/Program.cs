@@ -8,16 +8,22 @@ using TaskBoard.Worker.Processing;
 
 var builder = Host.CreateApplicationBuilder(args);
 
+// Layer in user-specific config (gitignored — replaces .env.local for deployed exe)
+builder.Configuration.AddJsonFile("appsettings.user.json", optional: true, reloadOnChange: false);
+
+// Resolve workflow config path once — used by both DI registration and prerequisite validation
+var workflowPath = builder.Configuration["WorkflowConfigPath"];
+if (string.IsNullOrEmpty(workflowPath))
+    workflowPath = Path.Combine(AppContext.BaseDirectory, "workflow.v1.json");
+
 builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
 {
     var logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("WorkflowConfig");
-    var workflowPath = Environment.GetEnvironmentVariable("WORKFLOW_CONFIG_PATH")
-        ?? Path.Combine(AppContext.BaseDirectory, "workflow.v1.json");
 
     if (!File.Exists(workflowPath))
     {
         throw new InvalidOperationException(
-            $"Workflow config not found at '{workflowPath}'. Set WORKFLOW_CONFIG_PATH or ensure workflow.v1.json is in the output directory.");
+            $"Workflow config not found at '{workflowPath}'. Set WorkflowConfigPath in appsettings.json or ensure workflow.v1.json is in the output directory.");
     }
 
     logger.LogInformation("Loading workflow config from {WorkflowPath}", workflowPath);
@@ -44,7 +50,7 @@ builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
 });
 
 // Board provider selection
-var boardProvider = Environment.GetEnvironmentVariable("BOARD_PROVIDER")?.ToLowerInvariant() ?? "stub";
+var boardProvider = builder.Configuration["BoardProvider"]?.ToLowerInvariant() ?? "stub";
 
 switch (boardProvider)
 {
@@ -74,7 +80,7 @@ switch (boardProvider)
 }
 
 // Agent executor selection
-var agentExecutorMode = Environment.GetEnvironmentVariable("AGENT_EXECUTOR")?.ToLowerInvariant() ?? "stub";
+var agentExecutorMode = builder.Configuration["AgentExecutor"]?.ToLowerInvariant() ?? "stub";
 if (agentExecutorMode == "claude-cli")
 {
     builder.Services.Configure<ClaudeCliLlmOptions>(builder.Configuration.GetSection(ClaudeCliLlmOptions.SectionName));
@@ -97,7 +103,7 @@ builder.Services.AddSingleton(agentIdentity);
 builder.Services.AddSingleton<TaskFileManager>();
 
 var worktreeBasePath = GetArgument(args, "--worktree-base")
-    ?? Environment.GetEnvironmentVariable("WORKTREE_BASE_PATH");
+    ?? builder.Configuration["WorktreeBasePath"];
 builder.Services.AddSingleton(sp =>
     new GitWorkspaceManager(sp.GetRequiredService<ILogger<GitWorkspaceManager>>(), worktreeBasePath));
 
@@ -112,10 +118,8 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
 {
     var config = host.Services.GetRequiredService<WorkflowConfig>();
 
-    // Determine prompt base directory from workflow config path
-    var configPath = Environment.GetEnvironmentVariable("WORKFLOW_CONFIG_PATH")
-        ?? Path.Combine(AppContext.BaseDirectory, "workflow.v1.json");
-    var promptBaseDir = Path.GetDirectoryName(Path.GetFullPath(configPath))!;
+    // Determine prompt base directory from workflow config path (resolved once above)
+    var promptBaseDir = Path.GetDirectoryName(Path.GetFullPath(workflowPath))!;
 
     // Resolve provider-specific options
     GitHubProjectsOptions? ghOpts = boardProvider == "github"
@@ -156,19 +160,18 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
     }
 
     var boardId = GetArgument(args, "--board-id")
-        ?? Environment.GetEnvironmentVariable("BOARD_ID")
-        ?? Environment.GetEnvironmentVariable("TRELLO_BOARD_ID");
+        ?? builder.Configuration["BoardId"];
     if (string.IsNullOrWhiteSpace(boardId))
     {
-        logger.LogError("--board-id or BOARD_ID is required for agent mode");
+        logger.LogError("--board-id or BoardId config is required for agent mode");
         return;
     }
 
     var workspacePath = GetArgument(args, "--workspace")
-        ?? Environment.GetEnvironmentVariable("AGENT_WORKSPACE_PATH");
+        ?? builder.Configuration["AgentWorkspacePath"];
     if (string.IsNullOrWhiteSpace(workspacePath))
     {
-        logger.LogError("--workspace or AGENT_WORKSPACE_PATH is required for agent mode");
+        logger.LogError("--workspace or AgentWorkspacePath config is required for agent mode");
         return;
     }
 
@@ -205,24 +208,23 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
 if (GetArgument(args, "--mode")?.ToLowerInvariant() == "polling")
 {
     var boardId = GetArgument(args, "--board-id")
-        ?? Environment.GetEnvironmentVariable("BOARD_ID")
-        ?? Environment.GetEnvironmentVariable("TRELLO_BOARD_ID");
+        ?? builder.Configuration["BoardId"];
     if (string.IsNullOrWhiteSpace(boardId))
     {
-        logger.LogError("--board-id or BOARD_ID is required for polling mode");
+        logger.LogError("--board-id or BoardId config is required for polling mode");
         return;
     }
 
     var workspacePath = GetArgument(args, "--workspace")
-        ?? Environment.GetEnvironmentVariable("AGENT_WORKSPACE_PATH");
+        ?? builder.Configuration["AgentWorkspacePath"];
     if (string.IsNullOrWhiteSpace(workspacePath))
     {
-        logger.LogError("--workspace or AGENT_WORKSPACE_PATH is required for polling mode");
+        logger.LogError("--workspace or AgentWorkspacePath config is required for polling mode");
         return;
     }
 
     var pollIntervalStr = GetArgument(args, "--poll-interval")
-        ?? Environment.GetEnvironmentVariable("POLL_INTERVAL_SECONDS");
+        ?? builder.Configuration["PollIntervalSeconds"];
     var pollInterval = TimeSpan.FromSeconds(
         int.TryParse(pollIntervalStr, out var secs) ? secs : 60);
 

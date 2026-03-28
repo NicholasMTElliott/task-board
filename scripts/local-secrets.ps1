@@ -94,15 +94,15 @@ if ($Action -eq "run-dotnet") {
             }
             $dotnetArgsToRun += @("--card-id", $CardId)
 
-            $resolvedBoardId = if (-not [string]::IsNullOrWhiteSpace($BoardId)) { $BoardId } else { $env:TRELLO_BOARD_ID }
+            $resolvedBoardId = if (-not [string]::IsNullOrWhiteSpace($BoardId)) { $BoardId } else { $env:BoardId }
             if ([string]::IsNullOrWhiteSpace($resolvedBoardId)) {
-                throw "-BoardId or TRELLO_BOARD_ID env var is required for agent mode."
+                throw "-BoardId or BoardId env var is required for agent mode."
             }
             $dotnetArgsToRun += @("--board-id", $resolvedBoardId)
 
-            $resolvedWorkspace = if (-not [string]::IsNullOrWhiteSpace($WorkspacePath)) { $WorkspacePath } else { $env:AGENT_WORKSPACE_PATH }
+            $resolvedWorkspace = if (-not [string]::IsNullOrWhiteSpace($WorkspacePath)) { $WorkspacePath } else { $env:AgentWorkspacePath }
             if ([string]::IsNullOrWhiteSpace($resolvedWorkspace)) {
-                throw "-WorkspacePath or AGENT_WORKSPACE_PATH env var is required for agent mode."
+                throw "-WorkspacePath or AgentWorkspacePath env var is required for agent mode."
             }
             $dotnetArgsToRun += @("--workspace", $resolvedWorkspace)
         }

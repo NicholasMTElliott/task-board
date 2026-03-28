@@ -7,6 +7,9 @@
 **/.env
 **/.env.*
 !**/.env.example
+
+# User-specific config (secrets — replaces .env.local for deployed exe)
+**/appsettings.user.json
 .vs/
 
 # Generated local Worker secret bindings
