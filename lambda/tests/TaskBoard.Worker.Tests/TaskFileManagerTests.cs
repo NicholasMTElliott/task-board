@@ -269,6 +269,169 @@ public class TaskFileManagerTests : IDisposable
         Assert.Contains("Step-by-step implementation.", sections["Implementation"]);
     }
 
+    // --- Comment classification and file structure tests ---
+
+    [Theory]
+    [InlineData("<!-- agent-step:create_design -->some content", true)]
+    [InlineData("<!-- agent-step:optional:security_audit -->content", true)]
+    [InlineData("<!-- agent-run:abc123 -->content", true)]
+    [InlineData("<!-- gate-check:Ready for Design -->content", true)]
+    [InlineData("<!-- merge-run:xyz789 -->content", true)]
+    [InlineData("Just a regular human comment", false)]
+    [InlineData("<!-- some-other-marker -->content", false)]
+    [InlineData("", false)]
+    public void ContainsAgentMarker_ClassifiesCorrectly(string body, bool expected)
+    {
+        Assert.Equal(expected, TaskFileManager.ContainsAgentMarker(body));
+    }
+
+    [Fact]
+    public async Task WriteCommentsFileAsync_SeparatesHumanAndAgentComments()
+    {
+        var comments = new List<CardComment>
+        {
+            new("user1", "<!-- agent-step:design -->**senior_engineer in Designing:**\n\nAgent output",
+                DateTimeOffset.Parse("2026-01-01T09:00:00Z")),
+            new("user1", "Please use the new API endpoint instead.",
+                DateTimeOffset.Parse("2026-01-01T10:00:00Z")),
+            new("user1", "<!-- agent-step:implement -->**implementer in Implementing:**\n\nCode written",
+                DateTimeOffset.Parse("2026-01-01T11:00:00Z")),
+        };
+
+        await _manager.WriteCommentsFileAsync(_tempDir, "card1", "Test", comments, CancellationToken.None);
+
+        var content = await File.ReadAllTextAsync(
+            TaskFileManager.GetCommentsFilePath(_tempDir, "card1", "Test"));
+
+        // Human section appears before agent section
+        var reviewerIndex = content.IndexOf("# Reviewer Directives", StringComparison.Ordinal);
+        var agentIndex = content.IndexOf("# Agent History", StringComparison.Ordinal);
+        Assert.True(reviewerIndex >= 0, "Missing Reviewer Directives section");
+        Assert.True(agentIndex >= 0, "Missing Agent History section");
+        Assert.True(reviewerIndex < agentIndex, "Reviewer Directives must precede Agent History");
+
+        // Human comment content is in the file
+        Assert.Contains("Please use the new API endpoint instead.", content);
+
+        // Agent markers are stripped
+        Assert.DoesNotContain("<!-- agent-step:", content);
+    }
+
+    [Fact]
+    public async Task WriteCommentsFileAsync_ReviewerDirectivesSection_IncludesAuthorityNote()
+    {
+        var comments = new List<CardComment>
+        {
+            new("user1", "Human feedback here", DateTimeOffset.Parse("2026-01-01T10:00:00Z")),
+        };
+
+        await _manager.WriteCommentsFileAsync(_tempDir, "card1", "Test", comments, CancellationToken.None);
+
+        var content = await File.ReadAllTextAsync(
+            TaskFileManager.GetCommentsFilePath(_tempDir, "card1", "Test"));
+
+        Assert.Contains("_These comments are from the human project operator and are authoritative._", content);
+    }
+
+    [Fact]
+    public async Task WriteCommentsFileAsync_OnlyHumanComments_NoAgentSection()
+    {
+        var comments = new List<CardComment>
+        {
+            new("user1", "Human feedback here", DateTimeOffset.Parse("2026-01-01T10:00:00Z")),
+        };
+
+        await _manager.WriteCommentsFileAsync(_tempDir, "card1", "Test", comments, CancellationToken.None);
+
+        var content = await File.ReadAllTextAsync(
+            TaskFileManager.GetCommentsFilePath(_tempDir, "card1", "Test"));
+
+        Assert.Contains("# Reviewer Directives", content);
+        Assert.DoesNotContain("# Agent History", content);
+    }
+
+    [Fact]
+    public async Task WriteCommentsFileAsync_OnlyAgentComments_NoReviewerSection()
+    {
+        var comments = new List<CardComment>
+        {
+            new("user1", "<!-- agent-step:design -->Agent output only",
+                DateTimeOffset.Parse("2026-01-01T09:00:00Z")),
+        };
+
+        await _manager.WriteCommentsFileAsync(_tempDir, "card1", "Test", comments, CancellationToken.None);
+
+        var content = await File.ReadAllTextAsync(
+            TaskFileManager.GetCommentsFilePath(_tempDir, "card1", "Test"));
+
+        Assert.DoesNotContain("# Reviewer Directives", content);
+        Assert.Contains("# Agent History", content);
+    }
+
+    [Fact]
+    public async Task WriteCommentsFileAsync_PreservesChronologicalOrderWithinSections()
+    {
+        var comments = new List<CardComment>
+        {
+            new("user1", "First human comment", DateTimeOffset.Parse("2026-01-01T08:00:00Z")),
+            new("user1", "<!-- agent-step:step1 -->Agent step 1", DateTimeOffset.Parse("2026-01-01T09:00:00Z")),
+            new("user1", "Second human comment", DateTimeOffset.Parse("2026-01-01T10:00:00Z")),
+            new("user1", "<!-- agent-step:step2 -->Agent step 2", DateTimeOffset.Parse("2026-01-01T11:00:00Z")),
+        };
+
+        await _manager.WriteCommentsFileAsync(_tempDir, "card1", "Test", comments, CancellationToken.None);
+
+        var content = await File.ReadAllTextAsync(
+            TaskFileManager.GetCommentsFilePath(_tempDir, "card1", "Test"));
+
+        // Within Reviewer Directives, first human before second human
+        var first = content.IndexOf("First human comment", StringComparison.Ordinal);
+        var second = content.IndexOf("Second human comment", StringComparison.Ordinal);
+        Assert.True(first < second, "Human comments should be in chronological order");
+
+        // Within Agent History, step1 before step2
+        var step1 = content.IndexOf("Agent step 1", StringComparison.Ordinal);
+        var step2 = content.IndexOf("Agent step 2", StringComparison.Ordinal);
+        Assert.True(step1 < step2, "Agent comments should be in chronological order");
+    }
+
+    [Fact]
+    public async Task WriteCommentsFileAsync_EmptyAfterFilter_NoFileWritten()
+    {
+        var comments = new List<CardComment>
+        {
+            new("user1", "<!-- agent-step:x -->", DateTimeOffset.Parse("2026-01-01T09:00:00Z")),
+        };
+
+        await _manager.WriteCommentsFileAsync(_tempDir, "card1", "Test", comments, CancellationToken.None);
+
+        Assert.False(File.Exists(TaskFileManager.GetCommentsFilePath(_tempDir, "card1", "Test")));
+    }
+
+    [Fact]
+    public async Task WriteCommentsFileAsync_AgentComment_StripsConversationLog()
+    {
+        var agentBody = "<!-- agent-step:design -->**senior_engineer in Designing:**\n\n" +
+            "## Agent Complete\n\nDesign output here.\n\n" +
+            "<details>\n<summary>Agent conversation log</summary>\n\n" +
+            "Let me read the file...\n---\nAnalyzed and wrote the design.\n\n</details>";
+
+        var comments = new List<CardComment>
+        {
+            new("user1", agentBody, DateTimeOffset.Parse("2026-01-01T09:00:00Z")),
+        };
+
+        await _manager.WriteCommentsFileAsync(_tempDir, "card1", "Test", comments, CancellationToken.None);
+
+        var content = await File.ReadAllTextAsync(
+            TaskFileManager.GetCommentsFilePath(_tempDir, "card1", "Test"));
+
+        Assert.Contains("Design output here.", content);
+        Assert.DoesNotContain("Agent conversation log", content);
+        Assert.DoesNotContain("Let me read the file...", content);
+        Assert.DoesNotContain("<details>", content);
+    }
+
     private static WorkflowConfig BuildWorkflowConfig()
     {
         return new WorkflowConfig(

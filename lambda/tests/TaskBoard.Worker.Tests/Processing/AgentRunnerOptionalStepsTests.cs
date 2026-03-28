@@ -481,6 +481,7 @@ public class AgentRunnerOptionalStepsTests : IDisposable
         return new AgentRunner(
             _boardClient, executor, _taskFileManager, _gitWorkspaceManager,
             config.Normalised(), new StubCrossReferenceResolver(),
+            new AgentIdentity("Test", "Agent", "TestMachine"),
             NullLogger<AgentRunner>.Instance);
     }
 

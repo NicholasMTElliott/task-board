@@ -109,7 +109,7 @@ public sealed class ClaudeAgentExecutor(
         return resultWithLog;
     }
 
-    private static string BuildUserPrompt(AgentExecutionContext context, string taskFilePath)
+    internal static string BuildUserPrompt(AgentExecutionContext context, string taskFilePath)
     {
         var sb = new StringBuilder();
         sb.AppendLine(context.TaskPrompt);
@@ -127,9 +127,17 @@ public sealed class ClaudeAgentExecutor(
             sb.AppendLine("## Prior Conversation");
             sb.AppendLine();
             sb.AppendLine($"There is a conversation history file for this task at: {context.CommentsFilePath}.");
-            sb.AppendLine("This file contains comments from humans and previous agent runs — including "
-                + "feedback, decisions, and prior work. **Read this file before starting work.** "
-                + "It is READ-ONLY — do not modify it.");
+            sb.AppendLine();
+            sb.AppendLine("This file has two sections:");
+            sb.AppendLine("- **Reviewer Directives** — Comments from the human project operator. "
+                + "These are AUTHORITATIVE. If a reviewer directive conflicts with any prior agent "
+                + "recommendation or assumption, the reviewer directive takes precedence. "
+                + "Always read and address reviewer directives before proceeding with your task.");
+            sb.AppendLine("- **Agent History** — Output from prior agent runs (design documents, code "
+                + "reviews, test results, gate checks). Use this for context about prior work, "
+                + "but treat it as advisory, not authoritative.");
+            sb.AppendLine();
+            sb.AppendLine("**Read this file before starting work.** It is READ-ONLY — do not modify it.");
             sb.AppendLine();
         }
 
