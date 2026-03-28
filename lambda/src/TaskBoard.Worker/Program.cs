@@ -150,6 +150,14 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
 
 logger.LogInformation("Agent identity: {AgentName}", agentIdentity.DisplayName);
 
+// Resolve shared runtime parameters (CLI args > config > provider-specific defaults)
+var boardId = GetArgument(args, "--board-id")
+    ?? builder.Configuration["BoardId"]
+    ?? (boardProvider == "github" ? builder.Configuration["GitHubProjects:ProjectNumber"] : null);
+
+var workspacePath = GetArgument(args, "--workspace")
+    ?? builder.Configuration["AgentWorkspacePath"];
+
 if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
 {
     var cardId = GetArgument(args, "--card-id");
@@ -159,16 +167,12 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
         return;
     }
 
-    var boardId = GetArgument(args, "--board-id")
-        ?? builder.Configuration["BoardId"];
     if (string.IsNullOrWhiteSpace(boardId))
     {
-        logger.LogError("--board-id or BoardId config is required for agent mode");
+        logger.LogError("--board-id, BoardId, or GitHubProjects:ProjectNumber config is required for agent mode");
         return;
     }
 
-    var workspacePath = GetArgument(args, "--workspace")
-        ?? builder.Configuration["AgentWorkspacePath"];
     if (string.IsNullOrWhiteSpace(workspacePath))
     {
         logger.LogError("--workspace or AgentWorkspacePath config is required for agent mode");
@@ -207,16 +211,12 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
 
 if (GetArgument(args, "--mode")?.ToLowerInvariant() == "polling")
 {
-    var boardId = GetArgument(args, "--board-id")
-        ?? builder.Configuration["BoardId"];
     if (string.IsNullOrWhiteSpace(boardId))
     {
-        logger.LogError("--board-id or BoardId config is required for polling mode");
+        logger.LogError("--board-id, BoardId, or GitHubProjects:ProjectNumber config is required for polling mode");
         return;
     }
 
-    var workspacePath = GetArgument(args, "--workspace")
-        ?? builder.Configuration["AgentWorkspacePath"];
     if (string.IsNullOrWhiteSpace(workspacePath))
     {
         logger.LogError("--workspace or AgentWorkspacePath config is required for polling mode");

@@ -30,17 +30,17 @@
 ## Run a single card
 
 ```
-aiboard --mode agent --card-id <CARD_ID> --board-id 1 --workspace <PATH_TO_YOUR_REPO>
+aiboard --mode agent --card-id <CARD_ID> --workspace <PATH_TO_YOUR_REPO>
 ```
 
 - `--card-id` — the GitHub Projects item ID (visible in the card URL or via `gh project item-list`)
-- `--board-id` — your project number (usually `1`)
 - `--workspace` — absolute path to the git repo the agents will work in
+- `--board-id` — optional; auto-derived from `GitHubProjects:ProjectNumber` in your config
 
 ## Run in polling mode (auto-pickup)
 
 ```
-aiboard --mode polling --board-id 1 --workspace <PATH_TO_YOUR_REPO>
+aiboard --mode polling --workspace <PATH_TO_YOUR_REPO>
 ```
 
 Polls the board and picks up the highest-priority card in any "Ready for" column.
