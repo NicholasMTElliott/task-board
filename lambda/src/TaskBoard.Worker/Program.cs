@@ -144,7 +144,7 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
     logger.LogInformation("All prerequisites validated successfully");
 }
 
-app.Logger.LogInformation("Agent identity: {AgentName}", agentIdentity.DisplayName);
+logger.LogInformation("Agent identity: {AgentName}", agentIdentity.DisplayName);
 
 if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
 {
