@@ -1,4 +1,5 @@
 using System.Text.Json;
+using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 
 namespace TaskBoard.Worker.Tests;
@@ -164,6 +165,43 @@ public class PromptContentTests
 
         Assert.True(missingFiles.Count == 0,
             $"Missing prompt files referenced in workflow.github.json:\n{string.Join("\n", missingFiles)}");
+    }
+
+    [Fact]
+    public void BuildUserPrompt_WithComments_IncludesAuthorityHierarchy()
+    {
+        var context = new AgentExecutionContext(
+            TargetCardId: "1",
+            TargetCardTitle: "Test",
+            WorkspacePath: "/tmp",
+            TaskPrompt: "Do the thing",
+            SystemPromptFilePath: "/tmp/system.md",
+            Model: "claude-sonnet-4-6",
+            CommentsFilePath: "/tmp/comments.md");
+
+        var prompt = ClaudeAgentExecutor.BuildUserPrompt(context, "/tmp/task.md");
+
+        Assert.Contains("Reviewer Directives", prompt);
+        Assert.Contains("AUTHORITATIVE", prompt);
+        Assert.Contains("Agent History", prompt);
+        Assert.Contains("advisory, not authoritative", prompt);
+    }
+
+    [Fact]
+    public void BuildUserPrompt_WithoutComments_NoAuthoritySection()
+    {
+        var context = new AgentExecutionContext(
+            TargetCardId: "1",
+            TargetCardTitle: "Test",
+            WorkspacePath: "/tmp",
+            TaskPrompt: "Do the thing",
+            SystemPromptFilePath: "/tmp/system.md",
+            Model: "claude-sonnet-4-6");
+
+        var prompt = ClaudeAgentExecutor.BuildUserPrompt(context, "/tmp/task.md");
+
+        Assert.DoesNotContain("Reviewer Directives", prompt);
+        Assert.DoesNotContain("Agent History", prompt);
     }
 
     private static string FindRepoRoot()
