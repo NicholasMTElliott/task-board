@@ -252,6 +252,7 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "polling")
         "Polling mode: board={BoardId} workspace={Workspace} interval={Interval}s",
         boardId, workspacePath, pollInterval.TotalSeconds);
 
+    await using var sleepInhibitor = await SystemSleepInhibitor.CreateAsync(logger);
     await pollingRunner.RunAsync(boardId, workspacePath, pollInterval, cts.Token);
     return;
 }
