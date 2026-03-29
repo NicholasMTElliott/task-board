@@ -53,7 +53,7 @@ public static class FilterOperators
 {
     public const string Exists     = "exists";
     public const string NotExists  = "notExists";
-    public const string Equals     = "equals";
+    public new const string Equals     = "equals";
     public const string NotEquals  = "notEquals";
     public const string IsEmpty    = "isEmpty";
     public const string IsNotEmpty = "isNotEmpty";

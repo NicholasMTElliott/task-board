@@ -386,11 +386,11 @@ public class AgentRunnerMergeStepTests : IDisposable
             {
                 [ImplColumnId] = new("Ready for Implementation", "senior_engineer", "agent_run",
                     "Implement {TaskName}",
-                    new Dictionary<string, string>
+                    new Dictionary<string, TransitionTarget>
                     {
-                        ["COMPLETE"] = CompleteCol,
-                        ["NEEDS_INFO"] = QuestionsCol,
-                        ["ERROR"] = ErrorCol,
+                        ["COMPLETE"] = TransitionTarget.ForColumn(CompleteCol),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn(QuestionsCol),
+                        ["ERROR"] = TransitionTarget.ForColumn(ErrorCol),
                     },
                     GitBehavior: "commit_and_push"),
             },
@@ -411,12 +411,12 @@ public class AgentRunnerMergeStepTests : IDisposable
             {
                 [TestColumnId] = new("Ready for Test", "qa", "agent_run",
                     "Test {TaskName}",
-                    new Dictionary<string, string>
+                    new Dictionary<string, TransitionTarget>
                     {
-                        ["COMPLETE"] = CompleteCol,
-                        ["NEEDS_INFO"] = QuestionsCol,
-                        ["ERROR"] = ErrorCol,
-                        ["MERGE_CONFLICT"] = ReadyForImplCol,
+                        ["COMPLETE"] = TransitionTarget.ForColumn(CompleteCol),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn(QuestionsCol),
+                        ["ERROR"] = TransitionTarget.ForColumn(ErrorCol),
+                        ["MERGE_CONFLICT"] = TransitionTarget.ForColumn(ReadyForImplCol),
                     },
                     GitBehavior: "discard"),
             },

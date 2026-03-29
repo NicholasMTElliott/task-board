@@ -937,8 +937,7 @@ public class WorkflowConfigValidatorTests
                     "Analyze.",
                     new Dictionary<string, TransitionTarget>
                     {
-                        ["list-done"] = new WorkflowState("Done", null, "terminal", null,
-                            new Dictionary<string, TransitionTarget>()),
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-done"),
                     }),
                 ["list-done"] = new WorkflowState("Done", null, "terminal", null,
                     new Dictionary<string, TransitionTarget>()),

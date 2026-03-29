@@ -142,7 +142,7 @@ public class AgentRunnerPathResolutionTests : IDisposable
         await File.WriteAllTextAsync(promptFullPath, "Test task {TaskName} ({TaskId}).");
 
         var state = new WorkflowState("Ready for Test", "qa", "agent_run", null,
-            new Dictionary<string, string>(), TaskPromptFile: promptRelPath);
+            new Dictionary<string, TransitionTarget>(), TaskPromptFile: promptRelPath);
         var card = new BoardCard("card-5", "Payment Flow", "desc", "list-test");
 
         // Act
@@ -163,7 +163,7 @@ public class AgentRunnerPathResolutionTests : IDisposable
         await File.WriteAllTextAsync(promptFullPath, "Test {TaskName}.");
 
         var state = new WorkflowState("Ready for Test", "qa", "agent_run", null,
-            new Dictionary<string, string>(), TaskPromptFile: promptRelPath);
+            new Dictionary<string, TransitionTarget>(), TaskPromptFile: promptRelPath);
         var card = new BoardCard("card-3", "Search Feature", "desc", "list-test");
 
         // Act

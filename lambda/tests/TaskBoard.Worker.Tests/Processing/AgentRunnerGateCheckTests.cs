@@ -415,23 +415,23 @@ public class AgentRunnerGateCheckTests : IDisposable
                     gitBehavior == "discard" ? "Design" : "Implementation",
                     "senior_engineer", "agent_run",
                     "Work on {TaskName} ({TaskId})",
-                    new Dictionary<string, string>
+                    new Dictionary<string, TransitionTarget>
                     {
-                        ["COMPLETE"] = "list-designed",
-                        ["NEEDS_INFO"] = "list-questions",
-                        ["ERROR"] = "list-error",
-                        ["GATE_FAIL"] = listId,
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
+                        ["GATE_FAIL"] = TransitionTarget.ForColumn(listId),
                     },
                     GitBehavior: gitBehavior,
                     GateCheck: new GateCheckConfig(
                         Role: "gate_checker",
                         TaskPrompt: "Gate check for '{TaskName}' ({TaskId}).\n\n## Task\n{TaskBody}\n\n## Changes\n{Diff}\n\n## Report\n{AgentReport}")),
                 ["list-designed"] = new("Designed", null, "manual_gate", null,
-                    new Dictionary<string, string>()),
+                    new Dictionary<string, TransitionTarget>()),
                 ["list-questions"] = new("Questions", null, "holding", null,
-                    new Dictionary<string, string>()),
+                    new Dictionary<string, TransitionTarget>()),
                 ["list-error"] = new("Error", null, "holding", null,
-                    new Dictionary<string, string>()),
+                    new Dictionary<string, TransitionTarget>()),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -449,11 +449,11 @@ public class AgentRunnerGateCheckTests : IDisposable
             {
                 [DesignListId] = new("Design", "senior_engineer", "agent_run",
                     "Work on {TaskName} ({TaskId})",
-                    new Dictionary<string, string>
+                    new Dictionary<string, TransitionTarget>
                     {
-                        ["COMPLETE"] = "list-designed",
-                        ["NEEDS_INFO"] = "list-questions",
-                        ["ERROR"] = "list-error",
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                         // No GATE_FAIL transition
                     },
                     GitBehavior: "discard",
@@ -461,11 +461,11 @@ public class AgentRunnerGateCheckTests : IDisposable
                         Role: "gate_checker",
                         TaskPrompt: "Gate check.\n\n## Task\n{TaskBody}\n\n## Changes\n{Diff}\n\n## Report\n{AgentReport}")),
                 ["list-designed"] = new("Designed", null, "manual_gate", null,
-                    new Dictionary<string, string>()),
+                    new Dictionary<string, TransitionTarget>()),
                 ["list-questions"] = new("Questions", null, "holding", null,
-                    new Dictionary<string, string>()),
+                    new Dictionary<string, TransitionTarget>()),
                 ["list-error"] = new("Error", null, "holding", null,
-                    new Dictionary<string, string>()),
+                    new Dictionary<string, TransitionTarget>()),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -483,19 +483,19 @@ public class AgentRunnerGateCheckTests : IDisposable
             {
                 [DesignListId] = new("Design", "senior_engineer", "agent_run",
                     "Work on {TaskName} ({TaskId})",
-                    new Dictionary<string, string>
+                    new Dictionary<string, TransitionTarget>
                     {
-                        ["COMPLETE"] = "list-designed",
-                        ["NEEDS_INFO"] = "list-questions",
-                        ["ERROR"] = "list-error",
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                     },
                     GitBehavior: "discard"),
                 ["list-designed"] = new("Designed", null, "manual_gate", null,
-                    new Dictionary<string, string>()),
+                    new Dictionary<string, TransitionTarget>()),
                 ["list-questions"] = new("Questions", null, "holding", null,
-                    new Dictionary<string, string>()),
+                    new Dictionary<string, TransitionTarget>()),
                 ["list-error"] = new("Error", null, "holding", null,
-                    new Dictionary<string, string>()),
+                    new Dictionary<string, TransitionTarget>()),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {

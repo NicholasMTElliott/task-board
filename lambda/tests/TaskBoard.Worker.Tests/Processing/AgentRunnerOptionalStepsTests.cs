@@ -522,12 +522,12 @@ public class AgentRunnerOptionalStepsTests : IDisposable
                 [TriggerListId] = new(
                     "Implementation", "senior_engineer", "agent_run",
                     "implement the feature for {TaskName} ({TaskId})",
-                    new Dictionary<string, string>
+                    new Dictionary<string, TransitionTarget>
                     {
-                        ["COMPLETE"] = "list-done",
-                        ["NEEDS_INFO"] = "list-questions",
-                        ["ERROR"] = "list-error",
-                        ["GATE_FAIL"] = TriggerListId,
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-done"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
+                        ["GATE_FAIL"] = TransitionTarget.ForColumn(TriggerListId),
                     },
                     GitBehavior: "discard",
                     ProviderParams: new Dictionary<string, string> { ["effort"] = "medium" },
@@ -535,9 +535,9 @@ public class AgentRunnerOptionalStepsTests : IDisposable
                         Role: "gate_checker",
                         TaskPrompt: "Check security_audit for '{TaskName}'.\n\n## Changes\n{Diff}\n\n## Report\n{AgentReport}"),
                     OptionalSteps: optionalSteps),
-                ["list-done"] = new("Done", null, "terminal", null, new Dictionary<string, string>()),
-                ["list-questions"] = new("Questions", null, "holding", null, new Dictionary<string, string>()),
-                ["list-error"] = new("Error", null, "holding", null, new Dictionary<string, string>()),
+                ["list-done"] = new("Done", null, "terminal", null, new Dictionary<string, TransitionTarget>()),
+                ["list-questions"] = new("Questions", null, "holding", null, new Dictionary<string, TransitionTarget>()),
+                ["list-error"] = new("Error", null, "holding", null, new Dictionary<string, TransitionTarget>()),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -558,12 +558,12 @@ public class AgentRunnerOptionalStepsTests : IDisposable
                 [TriggerListId] = new(
                     "Implementation", "senior_engineer", "agent_run",
                     "implement the feature for {TaskName} ({TaskId})",
-                    new Dictionary<string, string>
+                    new Dictionary<string, TransitionTarget>
                     {
-                        ["COMPLETE"] = "list-done",
-                        ["NEEDS_INFO"] = "list-questions",
-                        ["ERROR"] = "list-error",
-                        ["GATE_FAIL"] = TriggerListId,
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-done"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
+                        ["GATE_FAIL"] = TransitionTarget.ForColumn(TriggerListId),
                     },
                     GitBehavior: "discard",
                     GateCheck: new GateCheckConfig(
@@ -571,9 +571,9 @@ public class AgentRunnerOptionalStepsTests : IDisposable
                         TaskPrompt: "Gate check.\n\n## Changes\n{Diff}\n\n## Report\n{AgentReport}"))
                 // No OptionalSteps
                 ,
-                ["list-done"] = new("Done", null, "terminal", null, new Dictionary<string, string>()),
-                ["list-questions"] = new("Questions", null, "holding", null, new Dictionary<string, string>()),
-                ["list-error"] = new("Error", null, "holding", null, new Dictionary<string, string>()),
+                ["list-done"] = new("Done", null, "terminal", null, new Dictionary<string, TransitionTarget>()),
+                ["list-questions"] = new("Questions", null, "holding", null, new Dictionary<string, TransitionTarget>()),
+                ["list-error"] = new("Error", null, "holding", null, new Dictionary<string, TransitionTarget>()),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
