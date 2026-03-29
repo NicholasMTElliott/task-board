@@ -29,7 +29,7 @@ internal sealed class LinuxSleepInhibitor : ISystemSleepInhibitor
                 // --who/--why for identification in `systemd-inhibit --list`
                 // --mode=block is default but explicit for clarity
                 // cat with stdin redirected keeps the process alive until we kill it
-                Arguments = "--what=idle:sleep --who=aiboard --why=Polling for board cards --mode=block cat",
+                Arguments = "--what=idle:sleep --who=aiboard --why=\"Polling for board cards\" --mode=block cat",
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 CreateNoWindow = true,
