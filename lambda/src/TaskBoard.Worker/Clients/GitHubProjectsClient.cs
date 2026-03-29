@@ -23,7 +23,8 @@ public sealed class GitHubProjectsClient(
     {
         // cardId is the issue number — fetch the issue directly
         var issueJson = await RunGhAsync(
-            ["issue", "view", cardId, "--repo", _options.Repo, "--json", "number,title,body,projectItems"],
+            ["issue", "view", cardId, "--repo", _options.Repo, "--json",
+             "number,title,body,projectItems,labels,assignees"],
             cancellationToken);
 
         using var doc = JsonDocument.Parse(issueJson);
@@ -38,7 +39,23 @@ public sealed class GitHubProjectsClient(
 
         var metadata = new Dictionary<string, string> { ["issueNumber"] = id };
 
-        return new BoardCard(id, title, body, columnId, metadata);
+        var labels = root.TryGetProperty("labels", out var labelsProp)
+            ? labelsProp.EnumerateArray()
+                .Select(l => l.TryGetProperty("name", out var n) ? n.GetString() : null)
+                .Where(n => n is not null)
+                .Select(n => n!)
+                .ToList()
+            : null;
+
+        var assignees = root.TryGetProperty("assignees", out var assigneesProp)
+            ? assigneesProp.EnumerateArray()
+                .Select(a => a.TryGetProperty("login", out var l) ? l.GetString() : null)
+                .Where(l => l is not null)
+                .Select(l => l!)
+                .ToList()
+            : null;
+
+        return new BoardCard(id, title, body, columnId, metadata, labels, assignees);
     }
 
     public async Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken)
@@ -96,7 +113,36 @@ public sealed class GitHubProjectsClient(
                     metadata[prop.Name] = prop.Value.GetString() ?? "";
             }
 
-            cards.Add(new BoardCard(id, title, body, columnId, metadata));
+            // Fetch labels and assignees from the issue REST API
+            IReadOnlyList<string>? labels = null;
+            IReadOnlyList<string>? assignees = null;
+            try
+            {
+                var issueJson = await RunGhAsync(
+                    ["api", $"repos/{_options.Repo}/issues/{id}", "--jq",
+                     "{labels: [.labels[].name], assignees: [.assignees[].login]}"],
+                    cancellationToken);
+                using var issueDoc = JsonDocument.Parse(issueJson);
+                var issueRoot = issueDoc.RootElement;
+                if (issueRoot.TryGetProperty("labels", out var lp))
+                    labels = lp.EnumerateArray()
+                        .Select(l => l.GetString())
+                        .Where(l => l is not null)
+                        .Select(l => l!)
+                        .ToList();
+                if (issueRoot.TryGetProperty("assignees", out var ap))
+                    assignees = ap.EnumerateArray()
+                        .Select(a => a.GetString())
+                        .Where(a => a is not null)
+                        .Select(a => a!)
+                        .ToList();
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Could not fetch labels/assignees for issue {Id} — filter predicates will see empty lists", id);
+            }
+
+            cards.Add(new BoardCard(id, title, body, columnId, metadata, labels, assignees));
         }
 
         logger.LogInformation("Fetched {Count} cards from GitHub project {ProjectNumber}", cards.Count, boardId);
@@ -365,6 +411,122 @@ public sealed class GitHubProjectsClient(
         }
 
         return "";
+    }
+
+    public async Task AddLabelAsync(string cardId, string labelName, CancellationToken cancellationToken)
+    {
+        await RunGhAsync(
+            ["issue", "edit", cardId, "--repo", _options.Repo, "--add-label", labelName],
+            cancellationToken);
+        logger.LogInformation("Added label '{Label}' to issue {IssueNumber}", labelName, cardId);
+    }
+
+    public async Task RemoveLabelAsync(string cardId, string labelName, CancellationToken cancellationToken)
+    {
+        await RunGhAsync(
+            ["issue", "edit", cardId, "--repo", _options.Repo, "--remove-label", labelName],
+            cancellationToken);
+        logger.LogInformation("Removed label '{Label}' from issue {IssueNumber}", labelName, cardId);
+    }
+
+    public async Task AssignAsync(string cardId, string username, CancellationToken cancellationToken)
+    {
+        await RunGhAsync(
+            ["issue", "edit", cardId, "--repo", _options.Repo, "--add-assignee", username],
+            cancellationToken);
+        logger.LogInformation("Assigned '{User}' to issue {IssueNumber}", username, cardId);
+    }
+
+    public async Task UnassignAsync(string cardId, string? username, CancellationToken cancellationToken)
+    {
+        if (username is not null)
+        {
+            await RunGhAsync(
+                ["issue", "edit", cardId, "--repo", _options.Repo, "--remove-assignee", username],
+                cancellationToken);
+            logger.LogInformation("Unassigned '{User}' from issue {IssueNumber}", username, cardId);
+        }
+        else
+        {
+            // Remove all current assignees
+            var issueJson = await RunGhAsync(
+                ["issue", "view", cardId, "--repo", _options.Repo, "--json", "assignees"],
+                cancellationToken);
+            using var doc = JsonDocument.Parse(issueJson);
+            var assignees = doc.RootElement.GetProperty("assignees")
+                .EnumerateArray()
+                .Select(a => a.TryGetProperty("login", out var login) ? login.GetString() : null)
+                .Where(l => l is not null)
+                .ToList();
+
+            if (assignees.Count > 0)
+            {
+                var args = new List<string>
+                    { "issue", "edit", cardId, "--repo", _options.Repo };
+                foreach (var a in assignees)
+                {
+                    args.Add("--remove-assignee");
+                    args.Add(a!);
+                }
+                await RunGhAsync([.. args], cancellationToken);
+                logger.LogInformation("Removed all {Count} assignee(s) from issue {IssueNumber}", assignees.Count, cardId);
+            }
+        }
+    }
+
+    public async Task SetFieldAsync(string cardId, string fieldName, string value, CancellationToken cancellationToken)
+    {
+        // Resolve the project item and field option IDs, then execute GraphQL mutation
+        var (projectId, fieldId, optionId) = await ResolveStatusFieldOption(
+            _options.ProjectNumber, value, cancellationToken);
+        var itemId = await ResolveProjectItemId(cardId, projectId, cancellationToken);
+
+        var mutation = $$"""
+            mutation {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: "{{projectId}}"
+                itemId: "{{itemId}}"
+                fieldId: "{{fieldId}}"
+                value: { singleSelectOptionId: "{{optionId}}" }
+              }) {
+                projectV2Item { id }
+              }
+            }
+            """;
+
+        await RunGhAsync(["api", "graphql", "-f", $"query={mutation}"], cancellationToken);
+        logger.LogInformation("Set field '{Field}' to '{Value}' on issue {IssueNumber}", fieldName, value, cardId);
+    }
+
+    public async Task ClearFieldAsync(string cardId, string fieldName, CancellationToken cancellationToken)
+    {
+        var (projectId, fieldId, _) = await ResolveStatusFieldOption(
+            _options.ProjectNumber, fieldName, cancellationToken);
+        var itemId = await ResolveProjectItemId(cardId, projectId, cancellationToken);
+
+        var mutation = $$"""
+            mutation {
+              clearProjectV2ItemFieldValue(input: {
+                projectId: "{{projectId}}"
+                itemId: "{{itemId}}"
+                fieldId: "{{fieldId}}"
+              }) {
+                projectV2Item { id }
+              }
+            }
+            """;
+
+        await RunGhAsync(["api", "graphql", "-f", $"query={mutation}"], cancellationToken);
+        logger.LogInformation("Cleared field '{Field}' on issue {IssueNumber}", fieldName, cardId);
+    }
+
+    public async Task<string> GetCurrentUserAsync(CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(_options.AgentUsername))
+            return _options.AgentUsername;
+
+        var json = await RunGhAsync(["api", "user", "--jq", ".login"], cancellationToken);
+        return json.Trim().Trim('"');
     }
 
     internal static string? ExtractCommentIdFromUrl(string url)

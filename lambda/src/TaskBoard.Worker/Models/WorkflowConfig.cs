@@ -2,6 +2,65 @@ using System.Text.Json.Serialization;
 
 namespace TaskBoard.Worker.Models;
 
+// ── Transition action model ──────────────────────────────────────────────────
+
+public sealed record TransitionAction(
+    string Type,
+    string? Value = null,
+    string? Field = null);
+
+public static class ActionTypes
+{
+    public const string MoveToColumn = "moveToColumn";
+    public const string SetField     = "setField";
+    public const string ClearField   = "clearField";
+    public const string Assign       = "assign";
+    public const string Unassign     = "unassign";
+    public const string AddLabel     = "addLabel";
+    public const string RemoveLabel  = "removeLabel";
+}
+
+[JsonConverter(typeof(TransitionTargetConverter))]
+public sealed record TransitionTarget(List<TransitionAction> Actions)
+{
+    /// <summary>
+    /// The target column name (from the first moveToColumn action), or null if no column move.
+    /// </summary>
+    [JsonIgnore]
+    public string? Column => Actions.FirstOrDefault(a => a.Type == ActionTypes.MoveToColumn)?.Value;
+
+    /// <summary>Creates a TransitionTarget with a single moveToColumn action.</summary>
+    public static TransitionTarget ForColumn(string column) =>
+        new([new TransitionAction(ActionTypes.MoveToColumn, column)]);
+}
+
+// ── Card filter model ────────────────────────────────────────────────────────
+
+public sealed record CardFilter(
+    string Type,
+    string Operator,
+    string? Value = null,
+    string? Field = null);
+
+public static class FilterTypes
+{
+    public const string Label    = "label";
+    public const string Assignee = "assignee";
+    public const string Field    = "field";
+}
+
+public static class FilterOperators
+{
+    public const string Exists     = "exists";
+    public const string NotExists  = "notExists";
+    public const string Equals     = "equals";
+    public const string NotEquals  = "notEquals";
+    public const string IsEmpty    = "isEmpty";
+    public const string IsNotEmpty = "isNotEmpty";
+}
+
+// ── Workflow config ──────────────────────────────────────────────────────────
+
 public sealed record WorkflowConfig(
     Dictionary<string, WorkflowState> States,
     Dictionary<string, WorkflowRole> Roles,
@@ -41,7 +100,7 @@ public sealed record WorkflowState(
     string? Role,
     string GateType,
     string? TaskPrompt,
-    Dictionary<string, string> Transitions,
+    Dictionary<string, TransitionTarget> Transitions,
     string? GitBehavior = null,
     string? TaskPromptFile = null,
     Dictionary<string, string>? ProviderParams = null,
@@ -49,7 +108,8 @@ public sealed record WorkflowState(
     int PipelineOrder = 0,
     List<WorkflowStep>? Steps = null,
     GateCheckConfig? GateCheck = null,
-    List<OptionalStepDefinition>? OptionalSteps = null)
+    List<OptionalStepDefinition>? OptionalSteps = null,
+    List<CardFilter>? Filters = null)
 {
     /// <summary>
     /// Normalises a legacy single-step state (top-level Role + TaskPrompt) into

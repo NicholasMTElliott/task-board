@@ -17,19 +17,19 @@ public class PollingRunnerTests
         {
             ["Ready for Design"] = new("Ready for Design", "se", "agent_run",
                 "Design it.",
-                new Dictionary<string, string>
+                new Dictionary<string, TransitionTarget>
                 {
-                    ["IN_PROGRESS"] = "Designing",
-                    ["COMPLETE"] = "Designed",
-                    ["ERROR"] = "Error"
+                    ["IN_PROGRESS"] = TransitionTarget.ForColumn("Designing"),
+                    ["COMPLETE"]    = TransitionTarget.ForColumn("Designed"),
+                    ["ERROR"]       = TransitionTarget.ForColumn("Error"),
                 },
                 PipelineOrder: 1),
             ["Designing"] = new("Designing", null, "in_progress",
-                null, new Dictionary<string, string>()),
+                null, new Dictionary<string, TransitionTarget>()),
             ["Designed"] = new("Designed", null, "manual_gate",
-                null, new Dictionary<string, string>()),
+                null, new Dictionary<string, TransitionTarget>()),
             ["Error"] = new("Error", null, "holding",
-                null, new Dictionary<string, string>()),
+                null, new Dictionary<string, TransitionTarget>()),
         },
         Roles: new Dictionary<string, WorkflowRole>
         {
