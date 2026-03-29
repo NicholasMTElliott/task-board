@@ -12,6 +12,28 @@ public interface ITaskBoardClient
     Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken cancellationToken);
     Task UpsertAgentCommentAsync(string cardId, string commentBody, string commentMarker, CancellationToken cancellationToken);
     Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken);
+
+    // ── Label operations ─────────────────────────────────────────────────────
+    Task AddLabelAsync(string cardId, string labelName, CancellationToken cancellationToken);
+    Task RemoveLabelAsync(string cardId, string labelName, CancellationToken cancellationToken);
+
+    // ── Assignee operations ──────────────────────────────────────────────────
+    Task AssignAsync(string cardId, string username, CancellationToken cancellationToken);
+    /// <param name="username">If null, removes all assignees.</param>
+    Task UnassignAsync(string cardId, string? username, CancellationToken cancellationToken);
+
+    // ── Custom field operations ──────────────────────────────────────────────
+    Task SetFieldAsync(string cardId, string fieldName, string value, CancellationToken cancellationToken);
+    Task ClearFieldAsync(string cardId, string fieldName, CancellationToken cancellationToken);
+
+    // ── Identity ─────────────────────────────────────────────────────────────
+    /// <summary>
+    /// Returns the username of the currently authenticated agent for this board provider.
+    /// Used to resolve {{agent}} template variables in transition actions.
+    /// Returns the configured override username if one is set; otherwise resolves from the
+    /// authenticated session (e.g. gh CLI user for GitHub).
+    /// </summary>
+    Task<string> GetCurrentUserAsync(CancellationToken cancellationToken);
 }
 
 public sealed record CardComment(
@@ -24,4 +46,6 @@ public sealed record BoardCard(
     string Title,
     string Body,
     string ColumnId,
-    IReadOnlyDictionary<string, string>? Metadata = null);
+    IReadOnlyDictionary<string, string>? Metadata = null,
+    IReadOnlyList<string>? Labels = null,
+    IReadOnlyList<string>? Assignees = null);

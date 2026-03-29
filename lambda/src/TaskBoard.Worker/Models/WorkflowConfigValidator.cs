@@ -107,10 +107,67 @@ public static class WorkflowConfigValidator
                 }
             }
 
-            foreach (var (outcome, targetStateId) in state.Transitions)
+            // Validate transition targets and actions
+            foreach (var (outcome, target) in state.Transitions)
             {
-                if (!config.States.ContainsKey(targetStateId))
-                    errors.Add($"State '{stateId}' ({state.Name}) transition '{outcome}' targets '{targetStateId}' which does not exist in States.");
+                // Validate moveToColumn targets reference valid states
+                if (target.Column is string col && !config.States.ContainsKey(col))
+                    errors.Add($"State '{stateId}' ({state.Name}) transition '{outcome}' targets '{col}' which does not exist in States.");
+
+                // Validate action types and required fields
+                foreach (var action in target.Actions)
+                {
+                    if (action.Type is not (ActionTypes.MoveToColumn or ActionTypes.AddLabel or ActionTypes.RemoveLabel
+                        or ActionTypes.Assign or ActionTypes.Unassign or ActionTypes.SetField or ActionTypes.ClearField))
+                    {
+                        errors.Add($"State '{stateId}' ({state.Name}) transition '{outcome}' has unknown action type '{action.Type}'.");
+                    }
+
+                    if (action.Type is ActionTypes.MoveToColumn or ActionTypes.AddLabel or ActionTypes.RemoveLabel
+                        or ActionTypes.Assign or ActionTypes.SetField
+                        && string.IsNullOrEmpty(action.Value))
+                    {
+                        errors.Add($"State '{stateId}' ({state.Name}) transition '{outcome}' action '{action.Type}' requires a value.");
+                    }
+
+                    if (action.Type is ActionTypes.SetField or ActionTypes.ClearField
+                        && string.IsNullOrEmpty(action.Field))
+                    {
+                        errors.Add($"State '{stateId}' ({state.Name}) transition '{outcome}' action '{action.Type}' requires a field name.");
+                    }
+                }
+            }
+
+            // Validate filters
+            if (state.Filters is { Count: > 0 })
+            {
+                foreach (var filter in state.Filters)
+                {
+                    if (filter.Type is not (FilterTypes.Label or FilterTypes.Assignee or FilterTypes.Field))
+                        errors.Add($"State '{stateId}' ({state.Name}) filter has unknown type '{filter.Type}'.");
+
+                    var validOps = filter.Type switch
+                    {
+                        FilterTypes.Label    => new[] { FilterOperators.Exists, FilterOperators.NotExists },
+                        FilterTypes.Assignee => new[] { FilterOperators.IsEmpty, FilterOperators.IsNotEmpty,
+                                                        FilterOperators.Equals, FilterOperators.NotEquals },
+                        FilterTypes.Field    => new[] { FilterOperators.Equals, FilterOperators.NotEquals,
+                                                        FilterOperators.IsEmpty, FilterOperators.IsNotEmpty },
+                        _                    => Array.Empty<string>()
+                    };
+                    if (!validOps.Contains(filter.Operator))
+                        errors.Add($"State '{stateId}' ({state.Name}) filter operator '{filter.Operator}' is not valid for type '{filter.Type}'.");
+
+                    if (filter.Type == FilterTypes.Label && string.IsNullOrEmpty(filter.Value))
+                        errors.Add($"State '{stateId}' ({state.Name}) label filter requires a value.");
+
+                    if (filter.Operator is FilterOperators.Equals or FilterOperators.NotEquals
+                        && string.IsNullOrEmpty(filter.Value))
+                        errors.Add($"State '{stateId}' ({state.Name}) filter with operator '{filter.Operator}' requires a value.");
+
+                    if (filter.Type == FilterTypes.Field && string.IsNullOrEmpty(filter.Field))
+                        errors.Add($"State '{stateId}' ({state.Name}) field filter requires a 'field' property.");
+                }
             }
         }
 

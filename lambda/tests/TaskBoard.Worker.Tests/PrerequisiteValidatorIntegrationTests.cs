@@ -77,7 +77,7 @@ public class PrerequisiteValidatorIntegrationTests
                 {
                     ["s1"] = new WorkflowState(
                         "S1", null, "agent_run", null,
-                        new Dictionary<string, string>(),
+                        new Dictionary<string, TransitionTarget>(),
                         Steps:
                         [
                             new WorkflowStep("step1", "role_a", TaskPromptFile: "missing_a.md"),
@@ -85,7 +85,7 @@ public class PrerequisiteValidatorIntegrationTests
                         ]),
                     ["done"] = new WorkflowState(
                         "Done", null, "terminal", null,
-                        new Dictionary<string, string>())
+                        new Dictionary<string, TransitionTarget>())
                 },
                 Roles: new Dictionary<string, WorkflowRole>
                 {

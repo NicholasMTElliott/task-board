@@ -46,4 +46,46 @@ public sealed class StubTaskBoardClient(ILogger<StubTaskBoardClient> logger) : I
         logger.LogInformation("[Stub] GetCardComments {CardId}", cardId);
         return Task.FromResult<IReadOnlyList<CardComment>>(new List<CardComment>());
     }
+
+    public Task AddLabelAsync(string cardId, string labelName, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("[Stub] AddLabel {CardId} label={Label}", cardId, labelName);
+        return Task.CompletedTask;
+    }
+
+    public Task RemoveLabelAsync(string cardId, string labelName, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("[Stub] RemoveLabel {CardId} label={Label}", cardId, labelName);
+        return Task.CompletedTask;
+    }
+
+    public Task AssignAsync(string cardId, string username, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("[Stub] Assign {CardId} user={User}", cardId, username);
+        return Task.CompletedTask;
+    }
+
+    public Task UnassignAsync(string cardId, string? username, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("[Stub] Unassign {CardId} user={User}", cardId, username ?? "(all)");
+        return Task.CompletedTask;
+    }
+
+    public Task SetFieldAsync(string cardId, string fieldName, string value, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("[Stub] SetField {CardId} field={Field} value={Value}", cardId, fieldName, value);
+        return Task.CompletedTask;
+    }
+
+    public Task ClearFieldAsync(string cardId, string fieldName, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("[Stub] ClearField {CardId} field={Field}", cardId, fieldName);
+        return Task.CompletedTask;
+    }
+
+    public Task<string> GetCurrentUserAsync(CancellationToken cancellationToken)
+    {
+        logger.LogInformation("[Stub] GetCurrentUser");
+        return Task.FromResult("stub-agent");
+    }
 }

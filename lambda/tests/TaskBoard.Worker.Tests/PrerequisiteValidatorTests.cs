@@ -41,12 +41,12 @@ public class PrerequisiteValidatorTests
             {
                 ["s1"] = new WorkflowState(
                     "S1", null, "agent_run", null,
-                    new Dictionary<string, string>(),
+                    new Dictionary<string, TransitionTarget>(),
                     Steps: [new WorkflowStep("step1", "ba", TaskPromptFile: taskPromptFile)],
                     GateCheck: gateCheck),
                 ["done"] = new WorkflowState(
                     "Done", null, "terminal", null,
-                    new Dictionary<string, string>())
+                    new Dictionary<string, TransitionTarget>())
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -138,7 +138,7 @@ public class PrerequisiteValidatorTests
             {
                 ["s1"] = new WorkflowState(
                     "S1", null, "agent_run", null,
-                    new Dictionary<string, string>(),
+                    new Dictionary<string, TransitionTarget>(),
                     Steps: [new WorkflowStep("step1", "ba", TaskPrompt: "Do it.")])
             },
             Roles: new Dictionary<string, WorkflowRole>
@@ -161,7 +161,7 @@ public class PrerequisiteValidatorTests
             {
                 ["s1"] = new WorkflowState(
                     "S1", null, "agent_run", null,
-                    new Dictionary<string, string>(),
+                    new Dictionary<string, TransitionTarget>(),
                     Steps:
                     [
                         new WorkflowStep("step1", "ba", TaskPromptFile: "shared/missing.md"),
@@ -187,7 +187,7 @@ public class PrerequisiteValidatorTests
             {
                 ["s1"] = new WorkflowState(
                     "S1", null, "manual_gate", null,
-                    new Dictionary<string, string>(),
+                    new Dictionary<string, TransitionTarget>(),
                     TaskPromptFile: "non_existent.md")
             },
             Roles: new Dictionary<string, WorkflowRole>
@@ -212,7 +212,7 @@ public class PrerequisiteValidatorTests
                 {
                     ["s1"] = new WorkflowState(
                         "S1", null, "agent_run", null,
-                        new Dictionary<string, string>(),
+                        new Dictionary<string, TransitionTarget>(),
                         Steps: [new WorkflowStep("step1", "ba", TaskPromptFile: tempFile)])
                 },
                 Roles: new Dictionary<string, WorkflowRole>
@@ -240,7 +240,7 @@ public class PrerequisiteValidatorTests
             {
                 ["s1"] = new WorkflowState(
                     "S1", null, "agent_run", null,
-                    new Dictionary<string, string>(),
+                    new Dictionary<string, TransitionTarget>(),
                     Steps: [new WorkflowStep("step1", "ba", TaskPrompt: "Do it.")])
             },
             Roles: new Dictionary<string, WorkflowRole>
@@ -265,7 +265,7 @@ public class PrerequisiteValidatorTests
             {
                 ["s1"] = new WorkflowState(
                     "S1", null, "agent_run", null,
-                    new Dictionary<string, string>(),
+                    new Dictionary<string, TransitionTarget>(),
                     Steps: [new WorkflowStep("step1", "ba", TaskPrompt: "Do it.")])
             },
             Roles: new Dictionary<string, WorkflowRole>
@@ -449,7 +449,7 @@ public class PrerequisiteValidatorTests
             {
                 ["done"] = new WorkflowState(
                     "Done", null, "terminal", null,
-                    new Dictionary<string, string>())
+                    new Dictionary<string, TransitionTarget>())
             },
             Roles: new Dictionary<string, WorkflowRole>
             {

@@ -52,10 +52,12 @@ public sealed class MergeRunner(
         var maxRetries = ParseMaxRetries(state.ProviderParams);
 
         // 2. Move to IN_PROGRESS
-        if (state.Transitions.TryGetValue("IN_PROGRESS", out var inProgressCol))
+        if (state.Transitions.TryGetValue("IN_PROGRESS", out var inProgressTarget))
         {
-            await boardClient.MoveCardToColumnAsync(cardId, inProgressCol, cancellationToken);
-            logger.LogInformation("Moved card {CardId} to in-progress column {Column}", cardId, inProgressCol);
+            await TransitionExecutor.ExecuteAsync(
+                cardId, inProgressTarget, boardClient, logger, cancellationToken);
+            logger.LogInformation("Moved card {CardId} to in-progress via {Count} action(s)",
+                cardId, inProgressTarget.Actions.Count);
         }
 
         // 3. Find the work branch
@@ -285,7 +287,7 @@ public sealed class MergeRunner(
         string cardId, WorkflowState state, string outcome,
         CancellationToken cancellationToken)
     {
-        if (!state.Transitions.TryGetValue(outcome, out var targetColumn))
+        if (!state.Transitions.TryGetValue(outcome, out var target))
         {
             logger.LogWarning("No {Outcome} transition defined for state {State}", outcome, state.Name);
             return;
@@ -293,12 +295,12 @@ public sealed class MergeRunner(
 
         try
         {
-            await boardClient.MoveCardToColumnAsync(cardId, targetColumn, cancellationToken);
-            logger.LogInformation("Moved card {CardId} to {Column} ({Outcome})", cardId, targetColumn, outcome);
+            await TransitionExecutor.ExecuteAsync(cardId, target, boardClient, logger, cancellationToken);
+            logger.LogInformation("Executed {Outcome} transition actions for card {CardId}", outcome, cardId);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Failed to transition card {CardId} to {Column}", cardId, targetColumn);
+            logger.LogWarning(ex, "Failed to execute transition actions for card {CardId} ({Outcome})", cardId, outcome);
         }
     }
 

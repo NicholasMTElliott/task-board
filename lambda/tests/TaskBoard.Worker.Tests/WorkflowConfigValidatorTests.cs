@@ -13,17 +13,17 @@ public class WorkflowConfigValidatorTests
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
                     "Analyze the card.",
-                    new Dictionary<string, string>
+                    new Dictionary<string, TransitionTarget>
                     {
-                        ["COMPLETE"] = "list-review",
-                        ["ERROR"] = "list-error"
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-review"),
+                        ["ERROR"]    = TransitionTarget.ForColumn("list-error"),
                     }),
                 ["list-review"] = new WorkflowState(
                     "Review", null, "manual_gate", null,
-                    new Dictionary<string, string>()),
+                    new Dictionary<string, TransitionTarget>()),
                 ["list-error"] = new WorkflowState(
                     "Error", null, "holding", null,
-                    new Dictionary<string, string>())
+                    new Dictionary<string, TransitionTarget>())
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -47,7 +47,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "nonexistent_role", "agent_run",
-                    "Analyze.", new Dictionary<string, string>())
+                    "Analyze.", new Dictionary<string, TransitionTarget>())
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -67,7 +67,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    null, new Dictionary<string, string>())
+                    null, new Dictionary<string, TransitionTarget>())
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -88,7 +88,7 @@ public class WorkflowConfigValidatorTests
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
                     "Analyze.",
-                    new Dictionary<string, string> { ["COMPLETE"] = "list-does-not-exist" })
+                    new Dictionary<string, TransitionTarget> { ["COMPLETE"] = TransitionTarget.ForColumn("list-does-not-exist") })
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -123,7 +123,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    null, new Dictionary<string, string>(),
+                    null, new Dictionary<string, TransitionTarget>(),
                     TaskPromptFile: "prompts/states/requirements.md")
             },
             Roles: new Dictionary<string, WorkflowRole>
@@ -144,7 +144,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    "Inline prompt", new Dictionary<string, string>(),
+                    "Inline prompt", new Dictionary<string, TransitionTarget>(),
                     TaskPromptFile: "prompts/states/requirements.md")
             },
             Roles: new Dictionary<string, WorkflowRole>
@@ -165,7 +165,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    null, new Dictionary<string, string>())
+                    null, new Dictionary<string, TransitionTarget>())
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -185,7 +185,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    "Analyze.", new Dictionary<string, string>())
+                    "Analyze.", new Dictionary<string, TransitionTarget>())
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -206,7 +206,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    "Analyze.", new Dictionary<string, string>())
+                    "Analyze.", new Dictionary<string, TransitionTarget>())
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -226,7 +226,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", null, "agent_run",
-                    null, new Dictionary<string, string>(),
+                    null, new Dictionary<string, TransitionTarget>(),
                     Steps:
                     [
                         new WorkflowStep("design", "ba", TaskPrompt: "Design it."),
@@ -251,7 +251,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", null, "agent_run",
-                    null, new Dictionary<string, string>(),
+                    null, new Dictionary<string, TransitionTarget>(),
                     Steps:
                     [
                         new WorkflowStep("design", "ba", TaskPrompt: "Design it."),
@@ -276,7 +276,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", null, "agent_run",
-                    null, new Dictionary<string, string>(),
+                    null, new Dictionary<string, TransitionTarget>(),
                     Steps:
                     [
                         new WorkflowStep("design", "nonexistent_role", TaskPrompt: "Design it."),
@@ -300,7 +300,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", null, "agent_run",
-                    null, new Dictionary<string, string>(),
+                    null, new Dictionary<string, TransitionTarget>(),
                     Steps:
                     [
                         new WorkflowStep("design", "ba"),
@@ -320,7 +320,7 @@ public class WorkflowConfigValidatorTests
     public void Normalise_LegacyState_CreatesStepsArray()
     {
         var raw = new WorkflowState("Design", "senior_engineer", "agent_run",
-            "Design it.", new Dictionary<string, string>());
+            "Design it.", new Dictionary<string, TransitionTarget>());
 
         var normalised = WorkflowState.Normalise(raw);
 
@@ -339,7 +339,7 @@ public class WorkflowConfigValidatorTests
             new("step1", "ba", TaskPrompt: "Do it."),
         };
         var raw = new WorkflowState("Design", null, "agent_run",
-            null, new Dictionary<string, string>(), Steps: steps);
+            null, new Dictionary<string, TransitionTarget>(), Steps: steps);
 
         var normalised = WorkflowState.Normalise(raw);
 
@@ -350,7 +350,7 @@ public class WorkflowConfigValidatorTests
     public void Normalise_NonAgentState_ReturnsUnchanged()
     {
         var raw = new WorkflowState("Review", null, "manual_gate",
-            null, new Dictionary<string, string>());
+            null, new Dictionary<string, TransitionTarget>());
 
         var normalised = WorkflowState.Normalise(raw);
 
@@ -367,11 +367,11 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    "Analyze.", new Dictionary<string, string>(),
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
                     GateCheck: new GateCheckConfig("gate_checker", TaskPrompt: "Check it.")),
                 ["list-review"] = new WorkflowState(
                     "Review", null, "manual_gate", null,
-                    new Dictionary<string, string>())
+                    new Dictionary<string, TransitionTarget>())
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -392,7 +392,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    "Analyze.", new Dictionary<string, string>(),
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
                     GateCheck: new GateCheckConfig("nonexistent_gate_role", TaskPrompt: "Check it."))
             },
             Roles: new Dictionary<string, WorkflowRole>
@@ -413,7 +413,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    "Analyze.", new Dictionary<string, string>(),
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
                     GateCheck: new GateCheckConfig("gate_checker"))
             },
             Roles: new Dictionary<string, WorkflowRole>
@@ -435,7 +435,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    "Analyze.", new Dictionary<string, string>(),
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
                     GateCheck: new GateCheckConfig("gate_checker", TaskPromptFile: "prompts/gates/check.md"))
             },
             Roles: new Dictionary<string, WorkflowRole>
@@ -468,7 +468,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    "Analyze.", new Dictionary<string, string>(),
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
                     GateCheck: new GateCheckConfig("gate_checker", TaskPrompt: "Check it."),
                     OptionalSteps:
                     [
@@ -476,7 +476,7 @@ public class WorkflowConfigValidatorTests
                             TaskPrompt: "Perform security audit.")
                     ]),
                 ["list-done"] = new WorkflowState("Done", null, "terminal", null,
-                    new Dictionary<string, string>())
+                    new Dictionary<string, TransitionTarget>())
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -498,7 +498,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    "Analyze.", new Dictionary<string, string>(),
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
                     GateCheck: new GateCheckConfig("gate_checker", TaskPrompt: "Check it."),
                     OptionalSteps:
                     [
@@ -525,7 +525,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    "Analyze.", new Dictionary<string, string>(),
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
                     GateCheck: new GateCheckConfig("gate_checker", TaskPrompt: "Check it."),
                     OptionalSteps:
                     [
@@ -553,7 +553,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    "Analyze.", new Dictionary<string, string>(),
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
                     GateCheck: new GateCheckConfig("gate_checker", TaskPrompt: "Check it."),
                     OptionalSteps:
                     [
@@ -583,7 +583,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    null, new Dictionary<string, string>(),
+                    null, new Dictionary<string, TransitionTarget>(),
                     Steps:
                     [
                         new WorkflowStep("implement", "ba", TaskPrompt: "Do work.")
@@ -615,7 +615,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    "Analyze.", new Dictionary<string, string>(),
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
                     // No GateCheck
                     OptionalSteps:
                     [
@@ -837,7 +837,7 @@ public class WorkflowConfigValidatorTests
             {
                 ["list-req"] = new WorkflowState(
                     "Requirements", "ba", "agent_run",
-                    "Analyze.", new Dictionary<string, string>())
+                    "Analyze.", new Dictionary<string, TransitionTarget>())
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -847,6 +847,281 @@ public class WorkflowConfigValidatorTests
         var errors = WorkflowConfigValidator.Validate(config);
 
         Assert.DoesNotContain(errors, e => e.Contains("empty Sections"));
+    }
+
+    // ── Action validation tests ────────────────────────────────────
+
+    [Fact]
+    public void Transition_UnknownActionType_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = new TransitionTarget(
+                            [new TransitionAction("unknownActionType", "value")])
+                    })
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("unknownActionType"));
+    }
+
+    [Fact]
+    public void Transition_MoveToColumn_MissingValue_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = new TransitionTarget(
+                            [new TransitionAction(ActionTypes.MoveToColumn)])
+                    })
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains(ActionTypes.MoveToColumn) && e.Contains("requires a value"));
+    }
+
+    [Fact]
+    public void Transition_SetField_MissingFieldName_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = new TransitionTarget(
+                            [new TransitionAction(ActionTypes.SetField, "value")])
+                    })
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains(ActionTypes.SetField) && e.Contains("field name"));
+    }
+
+    [Fact]
+    public void Transition_MultipleActions_ValidConfig_PassesValidation()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-done"),
+                    }),
+                ["list-done"] = new WorkflowState("Done", null, "terminal", null,
+                    new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        // Force direct construction with valid multi-action transition
+        var validConfig = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = new TransitionTarget(
+                        [
+                            new TransitionAction(ActionTypes.MoveToColumn, "list-done"),
+                            new TransitionAction(ActionTypes.AddLabel, "done"),
+                        ])
+                    }),
+                ["list-done"] = new WorkflowState("Done", null, "terminal", null,
+                    new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(validConfig);
+
+        Assert.DoesNotContain(errors, e => e.Contains("COMPLETE"));
+    }
+
+    // ── Filter validation tests ────────────────────────────────────
+
+    [Fact]
+    public void Filter_LabelExists_ValidConfig_PassesValidation()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
+                    Filters: [new CardFilter(FilterTypes.Label, FilterOperators.Exists, "ai-ready")])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("filter"));
+    }
+
+    [Fact]
+    public void Filter_UnknownFilterType_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
+                    Filters: [new CardFilter("unknownType", FilterOperators.Exists, "value")])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("unknownType"));
+    }
+
+    [Fact]
+    public void Filter_LabelWithInvalidOperator_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
+                    Filters: [new CardFilter(FilterTypes.Label, FilterOperators.Equals, "ai-ready")])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains(FilterOperators.Equals) && e.Contains("label"));
+    }
+
+    [Fact]
+    public void Filter_LabelMissingValue_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
+                    Filters: [new CardFilter(FilterTypes.Label, FilterOperators.Exists)])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("label filter requires a value"));
+    }
+
+    [Fact]
+    public void Filter_AssigneeIsEmpty_ValidConfig_PassesValidation()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
+                    Filters: [new CardFilter(FilterTypes.Assignee, FilterOperators.IsEmpty)])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("filter"));
+    }
+
+    [Fact]
+    public void Filter_FieldTypeWithNoFieldName_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
+                    Filters: [new CardFilter(FilterTypes.Field, FilterOperators.Equals, "P0")])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("field filter requires a 'field'"));
+    }
+
+    [Fact]
+    public void Filter_EqualsOperatorMissingValue_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.", new Dictionary<string, TransitionTarget>(),
+                    Filters: [new CardFilter(FilterTypes.Assignee, FilterOperators.Equals)])
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains(FilterOperators.Equals) && e.Contains("requires a value"));
     }
 
     private static string FindRepoRoot()

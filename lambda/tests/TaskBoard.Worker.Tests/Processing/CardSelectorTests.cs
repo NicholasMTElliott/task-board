@@ -8,27 +8,29 @@ public class CardSelectorTests
 {
     private static WorkflowConfig MakeConfig(
         int designOrder = 1, int implOrder = 2, int testOrder = 3,
-        PollingConfig? polling = null)
+        PollingConfig? polling = null,
+        List<CardFilter>? designFilters = null)
     {
         return new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
                 ["Ready for Design"] = new("Ready for Design", "se", "agent_run",
-                    "Design it.", new Dictionary<string, string>(), PipelineOrder: designOrder),
+                    "Design it.", new Dictionary<string, TransitionTarget>(), PipelineOrder: designOrder,
+                    Filters: designFilters),
                 ["Ready for Implementation"] = new("Ready for Implementation", "se", "agent_run",
-                    "Implement it.", new Dictionary<string, string>(), PipelineOrder: implOrder),
+                    "Implement it.", new Dictionary<string, TransitionTarget>(), PipelineOrder: implOrder),
                 ["Ready for Test"] = new("Ready for Test", "qa", "agent_run",
-                    "Test it.", new Dictionary<string, string>(), PipelineOrder: testOrder),
+                    "Test it.", new Dictionary<string, TransitionTarget>(), PipelineOrder: testOrder),
                 ["Designing"] = new("Designing", null, "in_progress",
-                    null, new Dictionary<string, string>()),
+                    null, new Dictionary<string, TransitionTarget>()),
                 ["Designed"] = new("Designed", null, "manual_gate",
-                    null, new Dictionary<string, string>()),
+                    null, new Dictionary<string, TransitionTarget>()),
                 ["Backlog"] = new("Backlog", null, "manual_entry",
-                    null, new Dictionary<string, string>()),
+                    null, new Dictionary<string, TransitionTarget>()),
                 ["Error"] = new("Error", null, "holding",
-                    null, new Dictionary<string, string>()),
+                    null, new Dictionary<string, TransitionTarget>()),
                 ["Tested"] = new("Tested", null, "terminal",
-                    null, new Dictionary<string, string>()),
+                    null, new Dictionary<string, TransitionTarget>()),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -44,21 +46,21 @@ public class CardSelectorTests
         var states = new Dictionary<string, WorkflowState>(baseConfig.States)
         {
             ["Accepted"] = new("Accepted", null, "system_merge",
-                null, new Dictionary<string, string>
+                null, new Dictionary<string, TransitionTarget>
                 {
-                    ["IN_PROGRESS"] = "Merging",
-                    ["COMPLETE"] = "Done",
-                    ["ERROR"] = "Error",
+                    ["IN_PROGRESS"] = TransitionTarget.ForColumn("Merging"),
+                    ["COMPLETE"]    = TransitionTarget.ForColumn("Done"),
+                    ["ERROR"]       = TransitionTarget.ForColumn("Error"),
                 },
                 PipelineOrder: 4),
             ["Merging"] = new("Merging", null, "in_progress",
-                null, new Dictionary<string, string>()),
+                null, new Dictionary<string, TransitionTarget>()),
             ["Done"] = new("Done", null, "terminal",
-                null, new Dictionary<string, string>()),
+                null, new Dictionary<string, TransitionTarget>()),
         };
         // Change Tested from terminal to manual_gate
         states["Tested"] = new("Tested", null, "manual_gate",
-            null, new Dictionary<string, string>());
+            null, new Dictionary<string, TransitionTarget>());
         return new WorkflowConfig(states, baseConfig.Roles, baseConfig.Polling);
     }
 
@@ -350,6 +352,113 @@ public class CardSelectorTests
 
         Assert.NotNull(result);
         Assert.Equal("1", result.Id); // pipelineOrder 4 > 3
+    }
+
+    // --- Card filter predicates ---
+
+    [Fact]
+    public void FilteredCard_ExcludedFromSelection()
+    {
+        var filters = new List<CardFilter>
+        {
+            new(FilterTypes.Label, FilterOperators.Exists, "ai-ready")
+        };
+        var config = MakeConfig(designFilters: filters);
+
+        var cards = new List<BoardCard>
+        {
+            // Card without the required label — should be excluded
+            new("1", "Card 1", "body", "Ready for Design",
+                Labels: new List<string> { "other-label" }),
+        };
+
+        var result = CardSelector.SelectNext(cards, config);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void FilteredCard_MatchingLabel_IsIncluded()
+    {
+        var filters = new List<CardFilter>
+        {
+            new(FilterTypes.Label, FilterOperators.Exists, "ai-ready")
+        };
+        var config = MakeConfig(designFilters: filters);
+
+        var cards = new List<BoardCard>
+        {
+            new("1", "Card 1", "body", "Ready for Design",
+                Labels: new List<string> { "ai-ready", "other" }),
+        };
+
+        var result = CardSelector.SelectNext(cards, config);
+
+        Assert.NotNull(result);
+        Assert.Equal("1", result.Id);
+    }
+
+    [Fact]
+    public void UnfilteredState_AllCardsEligible()
+    {
+        // Implementation state has no filters — all cards in it are eligible
+        var config = MakeConfig();
+
+        var cards = new List<BoardCard>
+        {
+            new("1", "Card 1", "body", "Ready for Implementation"),
+        };
+
+        var result = CardSelector.SelectNext(cards, config);
+
+        Assert.NotNull(result);
+        Assert.Equal("1", result.Id);
+    }
+
+    [Fact]
+    public void MixOfFilteredAndUnfiltered_CorrectSelection()
+    {
+        var filters = new List<CardFilter>
+        {
+            new(FilterTypes.Label, FilterOperators.Exists, "ai-ready")
+        };
+        var config = MakeConfig(designFilters: filters);
+
+        var cards = new List<BoardCard>
+        {
+            // Design card lacks required label — excluded
+            new("1", "Card 1", "body", "Ready for Design"),
+            // Implementation card has no filter — eligible
+            new("2", "Card 2", "body", "Ready for Implementation"),
+        };
+
+        var result = CardSelector.SelectNext(cards, config);
+
+        Assert.NotNull(result);
+        Assert.Equal("2", result.Id);
+    }
+
+    [Fact]
+    public void AllCardsFailFilter_ReturnsNull()
+    {
+        var filters = new List<CardFilter>
+        {
+            new(FilterTypes.Assignee, FilterOperators.IsEmpty)
+        };
+        var config = MakeConfig(designFilters: filters);
+
+        var cards = new List<BoardCard>
+        {
+            // All cards are assigned — fail isEmpty filter
+            new("1", "Card 1", "body", "Ready for Design",
+                Assignees: new List<string> { "bot" }),
+            new("2", "Card 2", "body", "Ready for Design",
+                Assignees: new List<string> { "user" }),
+        };
+
+        var result = CardSelector.SelectNext(cards, config);
+
+        Assert.Null(result);
     }
 
     // --- Card in unknown column ---
