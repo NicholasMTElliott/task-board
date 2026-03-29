@@ -179,11 +179,11 @@ public class AgentRunnerDesignTests : IDisposable
             {
                 [DesignListId] = new("Design", "senior_engineer", "agent_run",
                     "You are working on the task {TaskName} ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context. Your job is to update ONLY the file for this task to add a detailed technical design approach.",
-                    new Dictionary<string, string>
+                    new Dictionary<string, TransitionTarget>
                     {
-                        ["COMPLETE"] = "list-review",
-                        ["NEEDS_INFO"] = "list-questions",
-                        ["ERROR"] = "list-error",
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-review"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                     },
                     GitBehavior: "discard"),
             },

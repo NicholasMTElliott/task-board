@@ -204,7 +204,7 @@ public class MergeRunnerTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 ["Ready for Design"] = new("Ready for Design", "se", "agent_run",
-                    "Design it.", new Dictionary<string, string>()),
+                    "Design it.", new Dictionary<string, TransitionTarget>()),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -316,20 +316,20 @@ public class MergeRunnerTests : IDisposable
             {
                 [AcceptedCol] = new("Accepted", null, "system_merge",
                     null,
-                    new Dictionary<string, string>
+                    new Dictionary<string, TransitionTarget>
                     {
-                        ["IN_PROGRESS"] = MergingCol,
-                        ["COMPLETE"] = DoneCol,
-                        ["ERROR"] = ErrorCol,
+                        ["IN_PROGRESS"] = TransitionTarget.ForColumn(MergingCol),
+                        ["COMPLETE"]    = TransitionTarget.ForColumn(DoneCol),
+                        ["ERROR"]       = TransitionTarget.ForColumn(ErrorCol),
                     },
                     ProviderParams: new Dictionary<string, string> { ["maxRetries"] = "3" },
                     PipelineOrder: 4),
                 [MergingCol] = new("Merging", null, "in_progress",
-                    null, new Dictionary<string, string>()),
+                    null, new Dictionary<string, TransitionTarget>()),
                 [DoneCol] = new("Done", null, "terminal",
-                    null, new Dictionary<string, string>()),
+                    null, new Dictionary<string, TransitionTarget>()),
                 [ErrorCol] = new("Error", null, "holding",
-                    null, new Dictionary<string, string>()),
+                    null, new Dictionary<string, TransitionTarget>()),
             },
             Roles: new Dictionary<string, WorkflowRole>());
     }

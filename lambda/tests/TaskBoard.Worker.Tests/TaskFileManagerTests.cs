@@ -438,9 +438,9 @@ public class TaskFileManagerTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 ["list-design"] = new("Design", "senior_engineer", "agent_run", "Do design work",
-                    new Dictionary<string, string> { ["COMPLETE"] = "list-review" }),
+                    new Dictionary<string, TransitionTarget> { ["COMPLETE"] = TransitionTarget.ForColumn("list-review") }),
                 ["list-review"] = new("Design Review", null, "manual_gate", null,
-                    new Dictionary<string, string>()),
+                    new Dictionary<string, TransitionTarget>()),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {

@@ -164,7 +164,7 @@ public class AgentRunnerTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 [DesignListId] = new("Design Review", null, "manual_gate", null,
-                    new Dictionary<string, string>()),
+                    new Dictionary<string, TransitionTarget>()),
             },
             Roles: new Dictionary<string, WorkflowRole>());
 
@@ -209,12 +209,12 @@ public class AgentRunnerTests : IDisposable
             {
                 [DesignListId] = new("Ready for Design", "senior_engineer", "agent_run",
                     "Design task {TaskName} ({TaskId})",
-                    new Dictionary<string, string>
+                    new Dictionary<string, TransitionTarget>
                     {
-                        ["IN_PROGRESS"] = "list-designing",
-                        ["COMPLETE"] = "list-designed",
-                        ["NEEDS_INFO"] = "list-questions",
-                        ["ERROR"] = "list-error",
+                        ["IN_PROGRESS"] = TransitionTarget.ForColumn("list-designing"),
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                     }),
             },
             Roles: new Dictionary<string, WorkflowRole>
@@ -338,7 +338,7 @@ public class AgentRunnerTests : IDisposable
     {
         var state = new WorkflowState("Design", "senior_engineer", "agent_run",
             "Work on {TaskName} ({TaskId})",
-            new Dictionary<string, string>());
+            new Dictionary<string, TransitionTarget>());
         var card = new BoardCard("card-1", "Auth Feature", "desc", "list-design");
 
         var prompt = await AgentRunner.ResolveTaskPromptAsync(state, "/irrelevant", card, null, CancellationToken.None);
@@ -359,7 +359,7 @@ public class AgentRunnerTests : IDisposable
             await File.WriteAllTextAsync(promptFullPath, "Implement {TaskName} (id={TaskId}).");
 
             var state = new WorkflowState("Design", "senior_engineer", "agent_run", null,
-                new Dictionary<string, string>(), TaskPromptFile: promptRelPath);
+                new Dictionary<string, TransitionTarget>(), TaskPromptFile: promptRelPath);
             var card = new BoardCard("42", "Login Flow", "desc", "list-design");
 
             var prompt = await AgentRunner.ResolveTaskPromptAsync(state, tempDir, card, null, CancellationToken.None);
@@ -380,7 +380,7 @@ public class AgentRunnerTests : IDisposable
         try
         {
             var state = new WorkflowState("Design", "senior_engineer", "agent_run", null,
-                new Dictionary<string, string>(), TaskPromptFile: "prompts/states/missing.md");
+                new Dictionary<string, TransitionTarget>(), TaskPromptFile: "prompts/states/missing.md");
             var card = new BoardCard("1", "Card", "desc", "list");
 
             await Assert.ThrowsAsync<FileNotFoundException>(
@@ -458,7 +458,7 @@ public class AgentRunnerTests : IDisposable
         var repoRoot = FindRepoRoot();
         var state = new WorkflowState("Ready for Implementation", "senior_engineer", "agent_run",
             null,
-            new Dictionary<string, string>(),
+            new Dictionary<string, TransitionTarget>(),
             TaskPromptFile: "prompts/states/ready_for_implementation.md");
         var card = new BoardCard("card-1", "Auth Feature", "desc", "list-impl");
 
@@ -522,11 +522,11 @@ public class AgentRunnerTests : IDisposable
             {
                 [DesignListId] = new("Design", "senior_engineer", "agent_run",
                     "Design task {TaskName} ({TaskId})",
-                    new Dictionary<string, string>
+                    new Dictionary<string, TransitionTarget>
                     {
-                        ["COMPLETE"] = "list-review",
-                        ["NEEDS_INFO"] = "list-questions",
-                        ["ERROR"] = "list-error",
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-review"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                     },
                     GitBehavior: "discard"),
             },
@@ -544,11 +544,11 @@ public class AgentRunnerTests : IDisposable
             {
                 [ImplListId] = new("Ready for Implementation", "senior_engineer", "agent_run",
                     "Implement task {TaskName} ({TaskId})",
-                    new Dictionary<string, string>
+                    new Dictionary<string, TransitionTarget>
                     {
-                        ["COMPLETE"] = "list-review",
-                        ["NEEDS_INFO"] = "list-questions",
-                        ["ERROR"] = "list-error",
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-review"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                     },
                     GitBehavior: "commit_and_push"),
             },
@@ -691,11 +691,11 @@ public class AgentRunnerTests : IDisposable
             {
                 ["list-multi"] = new("Multi-Step Design", null, "agent_run",
                     null,
-                    new Dictionary<string, string>
+                    new Dictionary<string, TransitionTarget>
                     {
-                        ["COMPLETE"] = "list-review",
-                        ["NEEDS_INFO"] = "list-questions",
-                        ["ERROR"] = "list-error",
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-review"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                     },
                     GitBehavior: "discard",
                     Steps:

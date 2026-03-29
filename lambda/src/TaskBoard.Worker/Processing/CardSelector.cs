@@ -19,6 +19,10 @@ public static class CardSelector
             if (state.GateType is not ("agent_run" or "system_merge"))
                 continue;
 
+            // Apply state-level filters (AND-combined)
+            if (!CardFilterEvaluator.PassesAll(card, state.Filters))
+                continue;
+
             eligible.Add((card, state, i));
         }
 

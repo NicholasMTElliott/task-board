@@ -18,4 +18,10 @@ public sealed class GitHubProjectsOptions
     /// Defaults to "Status" which is the standard GitHub Projects field name.
     /// </summary>
     public string StatusFieldName { get; init; } = "Status";
+
+    /// <summary>
+    /// Optional override for the agent's GitHub username used in {{agent}} template resolution.
+    /// If null or empty, the username is resolved from the authenticated gh CLI session.
+    /// </summary>
+    public string? AgentUsername { get; init; }
 }

@@ -74,11 +74,16 @@ public sealed partial class AgentRunner(
             }
         }
 
+        // Build template context once per run (resolves {{agent}}, etc.)
+        var templateContext = await BuildTemplateContextAsync(cancellationToken);
+
         // 2b. Move card to in-progress state if defined
-        if (state.Transitions.TryGetValue("IN_PROGRESS", out var inProgressColumnId))
+        if (state.Transitions.TryGetValue("IN_PROGRESS", out var inProgressTarget))
         {
-            await boardClient.MoveCardToColumnAsync(cardId, inProgressColumnId, cancellationToken);
-            logger.LogInformation("Moved card {CardId} to in-progress column {Column}", cardId, inProgressColumnId);
+            await TransitionExecutor.ExecuteAsync(
+                cardId, inProgressTarget, boardClient, logger, cancellationToken, templateContext);
+            logger.LogInformation("Moved card {CardId} to in-progress via {Count} action(s)",
+                cardId, inProgressTarget.Actions.Count);
         }
 
         // 3. Resolve branch name (slug-based with prefix reuse)
@@ -103,8 +108,12 @@ public sealed partial class AgentRunner(
                     case MergeStepAction.KickBack:
                         await boardClient.UpsertAgentCommentAsync(
                             cardId, mergeOutcome.KickBackComment!, runMarker, cancellationToken);
-                        await boardClient.MoveCardToColumnAsync(
-                            cardId, mergeOutcome.KickBackColumnId!, cancellationToken);
+                        if (mergeOutcome.KickBackTarget is not null)
+                        {
+                            await TransitionExecutor.ExecuteAsync(
+                                cardId, mergeOutcome.KickBackTarget, boardClient, logger,
+                                cancellationToken, templateContext);
+                        }
                         logger.LogInformation("Card {CardId} kicked back due to merge conflict", cardId);
                         return new AgentRunResult(AgentOutcome.ERROR,
                             "Merge conflict with upstream — card returned to implementation");
@@ -251,11 +260,12 @@ public sealed partial class AgentRunner(
                 if (lastResult.Outcome != AgentOutcome.COMPLETE)
                 {
                     var outcomeKey = lastResult.Outcome.ToString();
-                    if (state.Transitions.TryGetValue(outcomeKey, out var targetColumnId))
+                    if (state.Transitions.TryGetValue(outcomeKey, out var stepOutcomeTarget))
                     {
-                        await boardClient.MoveCardToColumnAsync(cardId, targetColumnId, cancellationToken);
-                        logger.LogInformation("Step '{StepName}' returned {Outcome}, moved card {CardId} to {Column}",
-                            step.Name, outcomeKey, cardId, targetColumnId);
+                        await TransitionExecutor.ExecuteAsync(
+                            cardId, stepOutcomeTarget, boardClient, logger, cancellationToken, templateContext);
+                        logger.LogInformation("Step '{StepName}' returned {Outcome}, executed transition for card {CardId}",
+                            step.Name, outcomeKey, cardId);
                     }
 
                     // Handle git for non-complete (still need to commit if applicable)
@@ -317,10 +327,11 @@ public sealed partial class AgentRunner(
             await boardClient.UpsertAgentCommentAsync(cardId, runComment, runMarker, cancellationToken);
 
             var completeKey = lastResult!.Outcome.ToString();
-            if (state.Transitions.TryGetValue(completeKey, out var completeColumnId))
+            if (state.Transitions.TryGetValue(completeKey, out var completeTarget))
             {
-                await boardClient.MoveCardToColumnAsync(cardId, completeColumnId, cancellationToken);
-                logger.LogInformation("Moved card {CardId} to column {ColumnId}", cardId, completeColumnId);
+                await TransitionExecutor.ExecuteAsync(
+                    cardId, completeTarget, boardClient, logger, cancellationToken, templateContext);
+                logger.LogInformation("Executed {Outcome} transition for card {CardId}", completeKey, cardId);
             }
 
             // 10. Cleanup worktree for discard stages
@@ -373,9 +384,10 @@ public sealed partial class AgentRunner(
                 var comment = $"{errorPrefix}\n\n{FormatComment(errorResult)}";
                 await boardClient.UpsertAgentCommentAsync(cardId, comment, runMarker, cancellationToken);
 
-                if (state.Transitions.TryGetValue("ERROR", out var errorColumnId))
+                if (state.Transitions.TryGetValue("ERROR", out var errorTarget))
                 {
-                    await boardClient.MoveCardToColumnAsync(cardId, errorColumnId, cancellationToken);
+                    await TransitionExecutor.ExecuteAsync(
+                        cardId, errorTarget, boardClient, logger, cancellationToken);
                 }
             }
             catch (Exception postEx)
@@ -499,6 +511,28 @@ public sealed partial class AgentRunner(
         {
             logger.LogWarning(ex, "Failed to clean up worktree for branch {Branch}", branchName);
         }
+    }
+
+    // ── Template context ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds the template variable context for transition action resolution.
+    /// Currently resolves: {{agent}} → authenticated board user (with optional config override).
+    /// </summary>
+    private async Task<Dictionary<string, string>> BuildTemplateContextAsync(CancellationToken ct)
+    {
+        var context = new Dictionary<string, string>();
+        try
+        {
+            var agentUsername = await boardClient.GetCurrentUserAsync(ct);
+            if (!string.IsNullOrEmpty(agentUsername))
+                context["agent"] = agentUsername;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not resolve {{agent}} template variable — assign actions using {{agent}} will not be resolved");
+        }
+        return context;
     }
 
     // ── Gate check logic ─────────────────────────────────────────────
@@ -668,8 +702,9 @@ public sealed partial class AgentRunner(
                 await boardClient.UpsertAgentCommentAsync(cardId, comment,
                     $"<!-- gate-check:{state.Name} -->", cancellationToken);
 
-                if (state.Transitions.TryGetValue("NEEDS_INFO", out var questionsColumn))
-                    await boardClient.MoveCardToColumnAsync(cardId, questionsColumn, cancellationToken);
+                if (state.Transitions.TryGetValue("NEEDS_INFO", out var questionsTarget))
+                    await TransitionExecutor.ExecuteAsync(
+                        cardId, questionsTarget, boardClient, logger, cancellationToken);
 
                 return new GateCheckResult(
                     new AgentRunResult(AgentOutcome.NEEDS_INFO, gateResult.Detail, gateResult.Questions),
@@ -697,7 +732,8 @@ public sealed partial class AgentRunner(
                         $"<!-- gate-check:{state.Name} -->", cancellationToken);
 
                     if (state.Transitions.TryGetValue("NEEDS_INFO", out var questionsCol))
-                        await boardClient.MoveCardToColumnAsync(cardId, questionsCol, cancellationToken);
+                        await TransitionExecutor.ExecuteAsync(
+                            cardId, questionsCol, boardClient, logger, cancellationToken);
 
                     return new GateCheckResult(
                         new AgentRunResult(AgentOutcome.NEEDS_INFO, gateResult.Detail, gateResult.Questions),
@@ -712,8 +748,9 @@ public sealed partial class AgentRunner(
                     $"<!-- gate-check:{state.Name} -->", cancellationToken);
 
                 var transitionKey = state.Transitions.ContainsKey("GATE_FAIL") ? "GATE_FAIL" : "ERROR";
-                if (state.Transitions.TryGetValue(transitionKey, out var targetColumn))
-                    await boardClient.MoveCardToColumnAsync(cardId, targetColumn, cancellationToken);
+                if (state.Transitions.TryGetValue(transitionKey, out var gateFailTarget))
+                    await TransitionExecutor.ExecuteAsync(
+                        cardId, gateFailTarget, boardClient, logger, cancellationToken);
 
                 return new GateCheckResult(new AgentRunResult(AgentOutcome.ERROR, gateResult.Detail), null);
             }
@@ -827,8 +864,9 @@ public sealed partial class AgentRunner(
                     step.Name, result.Outcome, cardId);
 
                 var outcomeKey = result.Outcome.ToString();
-                if (state.Transitions.TryGetValue(outcomeKey, out var targetColumnId))
-                    await boardClient.MoveCardToColumnAsync(cardId, targetColumnId, cancellationToken);
+                if (state.Transitions.TryGetValue(outcomeKey, out var optOutcomeTarget))
+                    await TransitionExecutor.ExecuteAsync(
+                        cardId, optOutcomeTarget, boardClient, logger, cancellationToken);
 
                 return new AgentRunResult(result.Outcome, result.Detail, result.Questions);
             }
@@ -914,7 +952,7 @@ public sealed partial class AgentRunner(
         MergeStepAction Action,
         string? PromptAugmentation = null,
         string? KickBackComment = null,
-        string? KickBackColumnId = null);
+        TransitionTarget? KickBackTarget = null);
 
     private async Task<MergeStepOutcome> HandleMergeStepAsync(
         string worktreePath,
@@ -1015,9 +1053,9 @@ public sealed partial class AgentRunner(
                     logger.LogWarning(abortEx, "merge --abort failed (no merge in progress?)");
                 }
 
-                var kickBackColumn = state.Transitions["MERGE_CONFLICT"];
+                state.Transitions.TryGetValue("MERGE_CONFLICT", out var kickBackTarget);
                 var comment = BuildMergeKickBackComment(mergeResult, mergeAgentResult, defaultBranch, branchName);
-                return new MergeStepOutcome(MergeStepAction.KickBack, KickBackComment: comment, KickBackColumnId: kickBackColumn);
+                return new MergeStepOutcome(MergeStepAction.KickBack, KickBackComment: comment, KickBackTarget: kickBackTarget);
             }
         }
     }
@@ -1169,12 +1207,13 @@ public sealed partial class AgentRunner(
         await boardClient.UpsertAgentCommentAsync(originalCard.Id, comment, runMarker, cancellationToken);
         logger.LogInformation("Posted agent comment for {CardId}", originalCard.Id);
 
-        // 9c. Move card to next state per transitions
+        // 9c. Execute transition actions for outcome
         var outcomeKey = agentResult.Outcome.ToString();
-        if (state.Transitions.TryGetValue(outcomeKey, out var targetColumnId))
+        if (state.Transitions.TryGetValue(outcomeKey, out var outcomeTarget))
         {
-            await boardClient.MoveCardToColumnAsync(originalCard.Id, targetColumnId, cancellationToken);
-            logger.LogInformation("Moved card {CardId} to column {ColumnId}", originalCard.Id, targetColumnId);
+            await TransitionExecutor.ExecuteAsync(
+                originalCard.Id, outcomeTarget, boardClient, logger, cancellationToken);
+            logger.LogInformation("Executed {Outcome} transition for card {CardId}", outcomeKey, originalCard.Id);
         }
         else
         {
@@ -1300,7 +1339,8 @@ public sealed partial class AgentRunner(
 
     private static string BuildCommentPrefix(WorkflowState state, WorkflowConfig config, AgentIdentity identity)
     {
-        var activeStateName = state.Transitions.TryGetValue("IN_PROGRESS", out var inProgressCol)
+        var activeStateName = state.Transitions.TryGetValue("IN_PROGRESS", out var inProgressTarget)
+            && inProgressTarget.Column is string inProgressCol
             && config.States.TryGetValue(inProgressCol, out var inProgressState)
             ? inProgressState.Name
             : state.Name;
