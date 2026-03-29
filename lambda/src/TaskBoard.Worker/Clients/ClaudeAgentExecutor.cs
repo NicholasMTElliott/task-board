@@ -514,15 +514,37 @@ private static string MinifyJson(string json)
 
         process.Start();
 
+        // MUST begin async output reads BEFORE writing to stdin.
+        // Otherwise, if stdinData is large enough to fill the OS pipe buffer (~4 KB),
+        // WriteAsync blocks waiting for the child to consume stdin — but the child
+        // may be blocked writing to stdout (which nobody is reading yet) → deadlock.
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
         // Pipe prompt via stdin to avoid Windows command-line length limits
         if (stdinData is not null)
         {
-            await process.StandardInput.WriteAsync(stdinData);
-            process.StandardInput.Close();
-        }
+            try
+            {
+                await process.StandardInput.WriteAsync(stdinData);
+                await process.StandardInput.FlushAsync();
+                process.StandardInput.Close();
+            }
+            catch (IOException ex)
+            {
+                // The child process exited or closed its stdin before we finished writing.
+                // Wait briefly for the process to exit so we can capture its exit code and stderr.
+                using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                try { await process.WaitForExitAsync(exitCts.Token); } catch { /* best effort */ }
 
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
+                var exitInfo = process.HasExited ? $"exit code {process.ExitCode}" : "still running";
+                var stderrSnapshot = stderrBuf.ToString();
+                throw new InvalidOperationException(
+                    $"Failed to write prompt to subprocess stdin ({exitInfo}). " +
+                    $"Stderr: {stderrSnapshot[..Math.Min(1000, stderrSnapshot.Length)]}".TrimEnd(),
+                    ex);
+            }
+        }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
