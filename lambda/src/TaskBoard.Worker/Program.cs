@@ -2,16 +2,45 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
+using TaskBoard.Worker;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
 
+// ── 0. Help check (before any host building) ────────────────────────────────
+if (CliDefinitions.ShouldShowHelp(args))
+{
+    CliDefinitions.PrintHelp();
+    return;
+}
+
+// ── 1. Pre-parse values needed before the config pipeline is built ───────────
+var configFilePath = PreParseArg(args, "--config");
+var promptRootArg = PreParseArg(args, "--prompt-root");
+
+// ── 2. Build host with layered configuration ─────────────────────────────────
+//  Built-in order from CreateApplicationBuilder:
+//    appsettings.json -> appsettings.{env}.json -> env vars -> command-line
+//  We layer on top in ascending precedence:
 var builder = Host.CreateApplicationBuilder(args);
 
-// Layer in user-specific config (gitignored — replaces .env.local for deployed exe)
+if (configFilePath is not null)
+    builder.Configuration.AddJsonFile(Path.GetFullPath(configFilePath), optional: false, reloadOnChange: false);
+
 builder.Configuration.AddJsonFile("appsettings.user.json", optional: true, reloadOnChange: false);
 
-// Resolve workflow config path once — used by both DI registration and prerequisite validation
+// Re-add env vars so they beat --config and appsettings.user.json
+builder.Configuration.AddEnvironmentVariables();
+
+// CLI args via switch mappings — highest precedence
+builder.Configuration.AddCommandLine(args, CliDefinitions.SwitchMappings);
+
+// ── 3. Resolve prompt base directory ─────────────────────────────────────────
+var promptBaseDir = promptRootArg is not null
+    ? Path.GetFullPath(promptRootArg)   // relative to CWD, or absolute as-is
+    : AppContext.BaseDirectory;          // exe location (default)
+
+// ── 4. Resolve workflow config path from merged configuration ────────────────
 var workflowPath = builder.Configuration["WorkflowConfigPath"];
 if (string.IsNullOrEmpty(workflowPath))
     workflowPath = Path.Combine(AppContext.BaseDirectory, "workflow.v1.json");
@@ -23,7 +52,7 @@ builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
     if (!File.Exists(workflowPath))
     {
         throw new InvalidOperationException(
-            $"Workflow config not found at '{workflowPath}'. Set WorkflowConfigPath in appsettings.json or ensure workflow.v1.json is in the output directory.");
+            $"Workflow config not found at '{workflowPath}'. Set WorkflowConfigPath in appsettings.json, env var, or --workflow-config.");
     }
 
     logger.LogInformation("Loading workflow config from {WorkflowPath}", workflowPath);
@@ -43,13 +72,13 @@ builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
     // Normalise legacy single-step states into canonical steps-based model
     config = config.Normalised();
 
-    // Set the config directory so prompt paths resolve relative to the config file, not the worktree
-    config.ConfigDirectory = Path.GetDirectoryName(Path.GetFullPath(workflowPath));
+    // Set prompt resolution base directory
+    config.ConfigDirectory = promptBaseDir;
 
     return config;
 });
 
-// Board provider selection
+// ── 5. Board provider selection ──────────────────────────────────────────────
 var boardProvider = builder.Configuration["BoardProvider"]?.ToLowerInvariant() ?? "stub";
 
 switch (boardProvider)
@@ -79,7 +108,7 @@ switch (boardProvider)
         break;
 }
 
-// Agent executor selection
+// ── 6. Agent executor selection ──────────────────────────────────────────────
 var agentExecutorMode = builder.Configuration["AgentExecutor"]?.ToLowerInvariant() ?? "stub";
 if (agentExecutorMode == "claude-cli")
 {
@@ -102,8 +131,7 @@ builder.Services.AddSingleton(agentIdentity);
 // Agent mode services
 builder.Services.AddSingleton<TaskFileManager>();
 
-var worktreeBasePath = GetArgument(args, "--worktree-base")
-    ?? builder.Configuration["WorktreeBasePath"];
+var worktreeBasePath = builder.Configuration["WorktreeBasePath"];
 builder.Services.AddSingleton(sp =>
     new GitWorkspaceManager(sp.GetRequiredService<ILogger<GitWorkspaceManager>>(), worktreeBasePath));
 
@@ -114,14 +142,10 @@ builder.Services.AddSingleton<PollingRunner>();
 using var host = builder.Build();
 var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Program");
 
-// Runtime prerequisite validation — verify tools, auth, and files before any work
+// ── 7. Runtime prerequisite validation ───────────────────────────────────────
 {
     var config = host.Services.GetRequiredService<WorkflowConfig>();
 
-    // Determine prompt base directory from workflow config path (resolved once above)
-    var promptBaseDir = Path.GetDirectoryName(Path.GetFullPath(workflowPath))!;
-
-    // Resolve provider-specific options
     GitHubProjectsOptions? ghOpts = boardProvider == "github"
         ? host.Services.GetRequiredService<IOptions<GitHubProjectsOptions>>().Value
         : null;
@@ -150,17 +174,18 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
 
 logger.LogInformation("Agent identity: {AgentName}", agentIdentity.DisplayName);
 
-// Resolve shared runtime parameters (CLI args > config > provider-specific defaults)
-var boardId = GetArgument(args, "--board-id")
-    ?? builder.Configuration["BoardId"]
+// ── 8. Resolve shared runtime parameters from merged configuration ───────────
+var boardId = builder.Configuration["BoardId"]
     ?? (boardProvider == "github" ? builder.Configuration["GitHubProjects:ProjectNumber"] : null);
 
-var workspacePath = GetArgument(args, "--workspace")
-    ?? builder.Configuration["AgentWorkspacePath"];
+var workspacePath = builder.Configuration["AgentWorkspacePath"];
 
-if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
+// ── 9. Mode dispatch ─────────────────────────────────────────────────────────
+var mode = builder.Configuration["Mode"]?.ToLowerInvariant();
+
+if (mode == "agent")
 {
-    var cardId = GetArgument(args, "--card-id");
+    var cardId = builder.Configuration["CardId"];
     if (string.IsNullOrWhiteSpace(cardId))
     {
         logger.LogError("--card-id is required for agent mode");
@@ -169,13 +194,13 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
 
     if (string.IsNullOrWhiteSpace(boardId))
     {
-        logger.LogError("--board-id, BoardId, or GitHubProjects:ProjectNumber config is required for agent mode");
+        logger.LogError("--board-id, BoardId, or GitHubProjects:ProjectNumber is required for agent mode");
         return;
     }
 
     if (string.IsNullOrWhiteSpace(workspacePath))
     {
-        logger.LogError("--workspace or AgentWorkspacePath config is required for agent mode");
+        logger.LogError("--workspace or AgentWorkspacePath is required for agent mode");
         return;
     }
 
@@ -209,22 +234,21 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "agent")
     return;
 }
 
-if (GetArgument(args, "--mode")?.ToLowerInvariant() == "polling")
+if (mode == "polling")
 {
     if (string.IsNullOrWhiteSpace(boardId))
     {
-        logger.LogError("--board-id, BoardId, or GitHubProjects:ProjectNumber config is required for polling mode");
+        logger.LogError("--board-id, BoardId, or GitHubProjects:ProjectNumber is required for polling mode");
         return;
     }
 
     if (string.IsNullOrWhiteSpace(workspacePath))
     {
-        logger.LogError("--workspace or AgentWorkspacePath config is required for polling mode");
+        logger.LogError("--workspace or AgentWorkspacePath is required for polling mode");
         return;
     }
 
-    var pollIntervalStr = GetArgument(args, "--poll-interval")
-        ?? builder.Configuration["PollIntervalSeconds"];
+    var pollIntervalStr = builder.Configuration["PollIntervalSeconds"];
     var pollInterval = TimeSpan.FromSeconds(
         int.TryParse(pollIntervalStr, out var secs) ? secs : 60);
 
@@ -257,13 +281,14 @@ if (GetArgument(args, "--mode")?.ToLowerInvariant() == "polling")
     return;
 }
 
-static string? GetArgument(string[] args, string key)
-{
-    var index = Array.FindIndex(args, value => string.Equals(value, key, StringComparison.OrdinalIgnoreCase));
-    if (index < 0 || index + 1 >= args.Length)
-    {
-        return null;
-    }
+// No recognized mode — show help
+logger.LogError("No valid --mode specified. Use --mode agent or --mode polling.");
+CliDefinitions.PrintHelp();
 
-    return args[index + 1];
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+static string? PreParseArg(string[] args, string key)
+{
+    var i = Array.FindIndex(args, a => string.Equals(a, key, StringComparison.OrdinalIgnoreCase));
+    return (i >= 0 && i + 1 < args.Length) ? args[i + 1] : null;
 }

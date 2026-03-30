@@ -33,7 +33,6 @@
     <Content Include="..\..\..\prompts\**\*" CopyToOutputDirectory="PreserveNewest" LinkBase="prompts" />
     <Content Include="..\..\..\QUICKSTART.md" CopyToOutputDirectory="PreserveNewest" Link="QUICKSTART.md" />
     <Content Include="..\..\..\appsettings.user.example.json" CopyToOutputDirectory="PreserveNewest" Link="appsettings.user.example.json" />
-    <Content Include="..\..\..\.env.example" CopyToOutputDirectory="PreserveNewest" Link=".env.example" />
   </ItemGroup>
 
 </Project>
