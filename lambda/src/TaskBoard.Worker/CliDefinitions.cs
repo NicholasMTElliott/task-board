@@ -46,6 +46,23 @@ internal static class CliDefinitions
         ["--trello-agent-username"] = "Trello:AgentUsername",
     };
 
+    /// <summary>
+    /// Resolves a path value using the standard convention:
+    ///   - Starts with '.' → relative to current working directory
+    ///   - Absolute path   → used as-is (normalized)
+    ///   - Otherwise       → relative to the executable directory
+    /// </summary>
+    public static string ResolvePath(string path)
+    {
+        if (path.StartsWith('.'))
+            return Path.GetFullPath(path);
+
+        if (Path.IsPathRooted(path))
+            return Path.GetFullPath(path);
+
+        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, path));
+    }
+
     public static bool ShouldShowHelp(string[] args) =>
         args.Length == 0 || Array.Exists(args, a => a is "--help" or "-h" or "-?");
 
@@ -63,6 +80,12 @@ internal static class CliDefinitions
         Console.WriteLine("All options can also be set via appsettings.json, appsettings.user.json,");
         Console.WriteLine("a --config file, or environment variables (e.g. GitHubProjects__Repo).");
         Console.WriteLine("Precedence: appsettings < --config < appsettings.user < env vars < CLI args.");
+        Console.WriteLine();
+        Console.WriteLine("Path resolution for --config, --prompt-root, --workflow-config,");
+        Console.WriteLine("--workspace, --worktree-base:");
+        Console.WriteLine("  ./relative or ../up    relative to current working directory");
+        Console.WriteLine("  C:\\absolute or /abs    used as-is");
+        Console.WriteLine("  bare/path              relative to the aiboard executable directory");
         Console.WriteLine();
 
         WriteSection("General", [

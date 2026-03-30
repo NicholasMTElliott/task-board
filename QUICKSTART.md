@@ -206,15 +206,26 @@ aiboard --mode polling --workspace C:/repos/repo-b ^
         --github-project 2
 ```
 
-### Prompt resolution rules
+### Path resolution rules
 
-The `--prompt-root` option controls where prompt file paths (from the workflow JSON) are resolved:
+All path options (`--config`, `--prompt-root`, `--workflow-config`, `--workspace`,
+`--worktree-base`) follow the same resolution rules, regardless of whether the value
+comes from the command line, an environment variable, or a config file:
 
-- **Not provided:** prompts resolve relative to the `aiboard.exe` directory (where
-  the default prompts are installed)
-- **Relative path** (e.g. `--prompt-root .` or `--prompt-root content/`): resolved
-  relative to the current working directory
-- **Absolute path** (e.g. `--prompt-root C:\my-prompts`): used as-is
+| Path form | Resolved relative to | Examples |
+|-----------|---------------------|----------|
+| Starts with `.` | Current working directory | `./workflow.json`, `../content`, `.` |
+| Absolute path | Used as-is (normalized) | `C:\configs\workflow.json`, `/opt/content` |
+| Bare path | Executable directory | `workflow.json`, `content/prompts` |
+
+This means:
+- `--workflow-config workflow.github.json` resolves to `{exe-dir}/workflow.github.json`
+- `--workflow-config ./workflow.github.json` resolves to `{CWD}/workflow.github.json`
+- `--workflow-config C:\configs\workflow.json` is used as-is
+- `--prompt-root .` means "use the current working directory for prompt files"
+- `--prompt-root prompts/custom` means `{exe-dir}/prompts/custom`
+
+Both forward slashes and backslashes work on all platforms.
 
 ## Files in this archive
 

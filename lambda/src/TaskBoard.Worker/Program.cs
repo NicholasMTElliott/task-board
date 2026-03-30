@@ -25,7 +25,7 @@ var promptRootArg = PreParseArg(args, "--prompt-root");
 var builder = Host.CreateApplicationBuilder(args);
 
 if (configFilePath is not null)
-    builder.Configuration.AddJsonFile(Path.GetFullPath(configFilePath), optional: false, reloadOnChange: false);
+    builder.Configuration.AddJsonFile(CliDefinitions.ResolvePath(configFilePath), optional: false, reloadOnChange: false);
 
 builder.Configuration.AddJsonFile("appsettings.user.json", optional: true, reloadOnChange: false);
 
@@ -37,13 +37,14 @@ builder.Configuration.AddCommandLine(args, CliDefinitions.SwitchMappings);
 
 // ── 3. Resolve prompt base directory ─────────────────────────────────────────
 var promptBaseDir = promptRootArg is not null
-    ? Path.GetFullPath(promptRootArg)   // relative to CWD, or absolute as-is
-    : AppContext.BaseDirectory;          // exe location (default)
+    ? CliDefinitions.ResolvePath(promptRootArg)
+    : AppContext.BaseDirectory;
 
 // ── 4. Resolve workflow config path from merged configuration ────────────────
-var workflowPath = builder.Configuration["WorkflowConfigPath"];
-if (string.IsNullOrEmpty(workflowPath))
-    workflowPath = Path.Combine(AppContext.BaseDirectory, "workflow.v1.json");
+var workflowPathRaw = builder.Configuration["WorkflowConfigPath"];
+var workflowPath = string.IsNullOrEmpty(workflowPathRaw)
+    ? Path.Combine(AppContext.BaseDirectory, "workflow.v1.json")
+    : CliDefinitions.ResolvePath(workflowPathRaw);
 
 builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
 {
@@ -131,7 +132,8 @@ builder.Services.AddSingleton(agentIdentity);
 // Agent mode services
 builder.Services.AddSingleton<TaskFileManager>();
 
-var worktreeBasePath = builder.Configuration["WorktreeBasePath"];
+var worktreeBaseRaw = builder.Configuration["WorktreeBasePath"];
+var worktreeBasePath = worktreeBaseRaw is not null ? CliDefinitions.ResolvePath(worktreeBaseRaw) : null;
 builder.Services.AddSingleton(sp =>
     new GitWorkspaceManager(sp.GetRequiredService<ILogger<GitWorkspaceManager>>(), worktreeBasePath));
 
@@ -178,7 +180,8 @@ logger.LogInformation("Agent identity: {AgentName}", agentIdentity.DisplayName);
 var boardId = builder.Configuration["BoardId"]
     ?? (boardProvider == "github" ? builder.Configuration["GitHubProjects:ProjectNumber"] : null);
 
-var workspacePath = builder.Configuration["AgentWorkspacePath"];
+var workspacePathRaw = builder.Configuration["AgentWorkspacePath"];
+var workspacePath = workspacePathRaw is not null ? CliDefinitions.ResolvePath(workspacePathRaw) : null;
 
 // ── 9. Mode dispatch ─────────────────────────────────────────────────────────
 var mode = builder.Configuration["Mode"]?.ToLowerInvariant();
