@@ -7,7 +7,7 @@ namespace TaskBoard.Worker.Processing;
 
 public sealed partial class AgentRunner(
     ITaskBoardClient boardClient,
-    IAgentExecutor agentExecutor,
+    IAgentExecutorResolver executorResolver,
     TaskFileManager taskFileManager,
     GitWorkspaceManager gitWorkspaceManager,
     WorkflowConfig workflowConfig,
@@ -199,8 +199,8 @@ public sealed partial class AgentRunner(
                 var step = state.Steps[stepIndex];
                 var stepRole = workflowConfig.Roles[step.Role];
 
-                logger.LogInformation("Executing step {StepIndex}/{StepCount} '{StepName}' (role={Role}) for card {CardId}",
-                    stepIndex + 1, state.Steps.Count, step.Name, step.Role, cardId);
+                logger.LogInformation("Executing step {StepIndex}/{StepCount} '{StepName}' (role={Role}, provider={Provider}) for card {CardId}",
+                    stepIndex + 1, state.Steps.Count, step.Name, step.Role, stepRole.Provider, cardId);
 
                 // 6a. Resolve system prompt file path for this step's role
                 var systemPromptFilePath = await ResolveSystemPromptFileAsync(
@@ -233,7 +233,8 @@ public sealed partial class AgentRunner(
                     ProviderParams: state.ProviderParams,
                     CommentsFilePath: commentsFilePath);
 
-                lastResult = await agentExecutor.ExecuteAsync(context, cancellationToken);
+                var stepExecutor = executorResolver.Resolve(stepRole.Provider);
+                lastResult = await stepExecutor.ExecuteAsync(context, cancellationToken);
 
                 // 6d. Update card body from task file after each step (write-after-each-step strategy)
                 await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken);
@@ -670,7 +671,8 @@ public sealed partial class AgentRunner(
                 });
 
             logger.LogInformation("Running gate check for card {CardId} in state {State}", cardId, state.Name);
-            gateResult = await agentExecutor.ExecuteAsync(gateContext, cancellationToken);
+            var gateExecutor = executorResolver.Resolve(gateRole.Provider);
+            gateResult = await gateExecutor.ExecuteAsync(gateContext, cancellationToken);
             logger.LogInformation("Gate check result for card {CardId}: {Outcome}", cardId, gateResult.Outcome);
         }
         catch (Exception ex)
@@ -837,7 +839,8 @@ public sealed partial class AgentRunner(
                 ProviderParams: effectiveParams,
                 CommentsFilePath: commentsFilePath);
 
-            var result = await agentExecutor.ExecuteAsync(context, cancellationToken);
+            var optionalExecutor = executorResolver.Resolve(stepRole.Provider);
+            var result = await optionalExecutor.ExecuteAsync(context, cancellationToken);
 
             // Update card body
             await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken);
@@ -1096,7 +1099,8 @@ public sealed partial class AgentRunner(
             CommentsFilePath: null);
 
         logger.LogInformation("Running merge resolution agent for card {CardId}", cardId);
-        return await agentExecutor.ExecuteAsync(context, cancellationToken);
+        var mergeExecutor = executorResolver.Resolve(mergeRole.Provider);
+        return await mergeExecutor.ExecuteAsync(context, cancellationToken);
     }
 
     private static string BuildMergeAgentTaskPrompt(MergeMainResult mergeResult)

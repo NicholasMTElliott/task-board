@@ -274,7 +274,7 @@ public class AgentRunnerMergeStepTests : IDisposable
     {
         return new AgentRunner(
             _boardClient,
-            executor,
+            AgentExecutorResolver.ForSingleExecutor(executor),
             _taskFileManager,
             _gitManager,
             config,

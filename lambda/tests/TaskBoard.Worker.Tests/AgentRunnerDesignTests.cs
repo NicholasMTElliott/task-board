@@ -158,7 +158,7 @@ public class AgentRunnerDesignTests : IDisposable
     private AgentRunner CreateRunner(IAgentExecutor executor)
     {
         return new AgentRunner(
-            _trelloClient, executor, _taskFileManager, _gitWorkspaceManager,
+            _trelloClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
             _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<AgentRunner>.Instance);
     }
 
