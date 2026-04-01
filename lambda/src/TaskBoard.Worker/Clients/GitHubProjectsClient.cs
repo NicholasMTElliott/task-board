@@ -428,7 +428,11 @@ public sealed class GitHubProjectsClient(
         {
             if (item.TryGetProperty("status", out var statusProp))
             {
-                return statusProp.GetString() ?? "";
+                // status can be a plain string or an object with a "name" property
+                if (statusProp.ValueKind == JsonValueKind.String)
+                    return statusProp.GetString() ?? "";
+                if (statusProp.ValueKind == JsonValueKind.Object && statusProp.TryGetProperty("name", out var nameProp))
+                    return nameProp.GetString() ?? "";
             }
         }
 
