@@ -215,7 +215,7 @@ if (mode == "agent")
     // Determine dispatch: fetch card to check if it's in a system_merge state
     var boardClientInstance = scope.ServiceProvider.GetRequiredService<ITaskBoardClient>();
     var workflowConfigInstance = scope.ServiceProvider.GetRequiredService<WorkflowConfig>();
-    var boardCards = await boardClientInstance.GetBoardCardsAsync(boardId, CancellationToken.None);
+    var boardCards = await boardClientInstance.GetBoardCardsAsync(boardId, CancellationToken.None, workflowConfigInstance.GetTerminalStateNames());
     var targetCard = boardCards.FirstOrDefault(c => c.Id == cardId);
 
     AgentRunResult result;

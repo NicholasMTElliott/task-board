@@ -263,7 +263,7 @@ public class AgentRunnerMergeStepTests : IDisposable
 
     private void SetupBoardCards(string columnId)
     {
-        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(Task.FromResult<IReadOnlyList<BoardCard>>(new List<BoardCard>
             {
                 new(CardId, CardTitle, "Implement the merge feature", columnId),

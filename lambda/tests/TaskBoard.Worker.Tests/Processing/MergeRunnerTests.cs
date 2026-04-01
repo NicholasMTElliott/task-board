@@ -178,7 +178,7 @@ public class MergeRunnerTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_CardNotFound_ReturnsError()
     {
-        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(Task.FromResult<IReadOnlyList<BoardCard>>(new List<BoardCard>()));
 
         var runner = CreateRunner();
@@ -193,7 +193,7 @@ public class MergeRunnerTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_WrongGateType_ReturnsError()
     {
-        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(Task.FromResult<IReadOnlyList<BoardCard>>(new List<BoardCard>
             {
                 new(CardId, CardTitle, "body", "Ready for Design"),
@@ -251,7 +251,7 @@ public class MergeRunnerTests : IDisposable
 
     private void SetupBoardCards(string column)
     {
-        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(Task.FromResult<IReadOnlyList<BoardCard>>(new List<BoardCard>
             {
                 new(CardId, CardTitle, "body", column),

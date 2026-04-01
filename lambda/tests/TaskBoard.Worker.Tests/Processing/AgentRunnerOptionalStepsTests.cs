@@ -487,7 +487,7 @@ public class AgentRunnerOptionalStepsTests : IDisposable
 
     private void SetupBoardCards()
     {
-        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(new List<BoardCard>
             {
                 new(TargetCardId, TargetCardTitle, "Build the optional steps feature.", TriggerListId),

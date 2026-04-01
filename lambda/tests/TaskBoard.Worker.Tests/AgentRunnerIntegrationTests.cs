@@ -216,7 +216,7 @@ public class AgentRunnerIntegrationTests : IDisposable
 
     private void SetupBoardCards(string targetDescription, string targetTitle = "User Registration Endpoint")
     {
-        _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(new List<BoardCard>
             {
                 new(TargetCardId, targetTitle, targetDescription, DesignListId),

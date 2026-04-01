@@ -7,7 +7,7 @@ namespace TaskBoard.Worker.Clients;
 public interface ITaskBoardClient
 {
     Task<BoardCard> GetCardAsync(string cardId, CancellationToken cancellationToken);
-    Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken, IReadOnlyList<string>? excludeStatuses = null);
     Task UpdateCardBodyAsync(string cardId, string body, CancellationToken cancellationToken);
     Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken cancellationToken);
     Task UpsertAgentCommentAsync(string cardId, string commentBody, string commentMarker, CancellationToken cancellationToken);

@@ -25,7 +25,7 @@ public sealed class PollingRunner(
             totalCycles++;
             try
             {
-                var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken);
+                var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalStateNames());
                 var selected = CardSelector.SelectNext(cards, workflowConfig);
 
                 if (selected is null)

@@ -52,7 +52,7 @@ public class PollingRunnerTests
         var boardClient = Substitute.For<ITaskBoardClient>();
         var callCount = 0;
 
-        boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(_ =>
             {
                 callCount++;
@@ -110,7 +110,7 @@ public class PollingRunnerTests
     {
         var boardClient = Substitute.For<ITaskBoardClient>();
 
-        boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(Task.FromResult<IReadOnlyList<BoardCard>>(new List<BoardCard>()));
 
         var agentRunner = new AgentRunner(
@@ -153,7 +153,7 @@ public class PollingRunnerTests
         var boardClient = Substitute.For<ITaskBoardClient>();
         var fetchCount = 0;
 
-        boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(_ =>
             {
                 fetchCount++;

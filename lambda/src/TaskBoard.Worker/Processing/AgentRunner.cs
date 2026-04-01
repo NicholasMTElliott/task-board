@@ -38,8 +38,8 @@ public sealed partial class AgentRunner(
         logger.LogInformation("Starting agent run {RunId} for card {CardId} in workspace {Workspace}",
             runId, cardId, workspacePath);
 
-        // 1. Fetch all board cards
-        var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken);
+        // 1. Fetch all board cards (exclude terminal states to keep the working set small)
+        var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalStateNames());
         logger.LogInformation("Fetched {Count} cards from board {BoardId}", cards.Count, boardId);
 
         // 2. Find the target card and determine its workflow state
@@ -666,7 +666,7 @@ public sealed partial class AgentRunner(
                 ProviderParams: new Dictionary<string, string>
                 {
                     ["permissionMode"] = "none",
-                    ["effort"] = "min",
+                    ["effort"] = "low",
                 });
 
             logger.LogInformation("Running gate check for card {CardId} in state {State}", cardId, state.Name);

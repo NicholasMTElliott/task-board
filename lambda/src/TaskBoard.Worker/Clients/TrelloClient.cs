@@ -40,7 +40,7 @@ public sealed class TrelloClient(
         return ToBoardCard(card);
     }
 
-    public async Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken, IReadOnlyList<string>? excludeStatuses = null)
     {
         var url = AppendAuth($"/1/boards/{boardId}/cards?fields=id,name,desc,idList&labels=true&members=true&member_fields=username");
         using var response = await _httpClient.GetAsync(url, cancellationToken);

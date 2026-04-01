@@ -75,6 +75,16 @@ public sealed record WorkflowConfig(
     public string? ConfigDirectory { get; set; }
 
     /// <summary>
+    /// Returns the names of states with gateType "terminal" — useful for excluding
+    /// completed items from board queries.
+    /// </summary>
+    public IReadOnlyList<string> GetTerminalStateNames() =>
+        States
+            .Where(kvp => string.Equals(kvp.Value.GateType, "terminal", StringComparison.OrdinalIgnoreCase))
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+    /// <summary>
     /// Returns a new config with all states normalised (legacy single-step → steps array).
     /// </summary>
     public WorkflowConfig Normalised()

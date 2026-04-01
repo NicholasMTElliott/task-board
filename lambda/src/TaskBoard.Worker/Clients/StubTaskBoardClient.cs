@@ -12,7 +12,7 @@ public sealed class StubTaskBoardClient(ILogger<StubTaskBoardClient> logger) : I
             "stub-list-id"));
     }
 
-    public Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken, IReadOnlyList<string>? excludeStatuses = null)
     {
         logger.LogInformation("[Stub] GetBoardCards {BoardId}", boardId);
         IReadOnlyList<BoardCard> cards = new List<BoardCard>

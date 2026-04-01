@@ -133,7 +133,7 @@ public class AgentRunnerTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_CardNotFound_ReturnsError()
     {
-        _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(new List<BoardCard>());
 
         var result = await _runner.ExecuteAsync("nonexistent", BoardId, _tempDir, CancellationToken.None);
@@ -145,7 +145,7 @@ public class AgentRunnerTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_CardInUnknownList_ReturnsError()
     {
-        _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(new List<BoardCard>
             {
                 new(TargetCardId, "Card", "Desc", "unknown-list"),
@@ -170,7 +170,7 @@ public class AgentRunnerTests : IDisposable
 
         var runner = CreateRunnerWithConfig(configWithNoRole);
 
-        _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(new List<BoardCard>
             {
                 new(TargetCardId, "Card", "Desc", DesignListId),
@@ -500,7 +500,7 @@ public class AgentRunnerTests : IDisposable
     private void SetupBoardCards(string? listId = null)
     {
         var targetList = listId ?? DesignListId;
-        _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(new List<BoardCard>
             {
                 new(TargetCardId, TargetCardTitle, "Implement JWT authentication", targetList),

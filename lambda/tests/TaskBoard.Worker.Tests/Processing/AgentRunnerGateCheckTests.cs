@@ -355,7 +355,7 @@ public class AgentRunnerGateCheckTests : IDisposable
 
         Assert.NotNull(capturedGateContext);
         Assert.Equal("none", capturedGateContext!.ProviderParams!["permissionMode"]);
-        Assert.Equal("min", capturedGateContext.ProviderParams["effort"]);
+        Assert.Equal("low", capturedGateContext.ProviderParams["effort"]);
         Assert.False(capturedGateContext.ProviderParams.ContainsKey("maxBudget"),
             "Gate check should not set a budget cap — budget was removed per design decision.");
         Assert.Equal("claude-haiku-4-5-20251001", capturedGateContext.Model);
@@ -394,7 +394,7 @@ public class AgentRunnerGateCheckTests : IDisposable
 
     private void SetupBoardCards(string listId)
     {
-        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(new List<BoardCard>
             {
                 new(TargetCardId, TargetCardTitle, "Implement the gate check feature", listId),

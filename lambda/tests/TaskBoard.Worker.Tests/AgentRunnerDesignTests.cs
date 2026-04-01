@@ -164,7 +164,7 @@ public class AgentRunnerDesignTests : IDisposable
 
     private void SetupBoardCards(string targetDescription)
     {
-        _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>())
+        _trelloClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(new List<BoardCard>
             {
                 new(TargetCardId, "Build Auth Endpoint", targetDescription, DesignListId),

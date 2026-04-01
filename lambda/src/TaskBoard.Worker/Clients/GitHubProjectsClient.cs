@@ -58,13 +58,28 @@ public sealed class GitHubProjectsClient(
         return new BoardCard(id, title, body, columnId, metadata, labels, assignees);
     }
 
-    public async Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken, IReadOnlyList<string>? excludeStatuses = null)
     {
+        const int fetchLimit = 500;
+
         // boardId = project number
-        // Use gh project item-list to get all items
-        var json = await RunGhAsync(
-            ["project", "item-list", boardId, "--owner", _options.Owner, "--format", "json"],
-            cancellationToken);
+        // Use gh project item-list with explicit limit (default is only 30)
+        var args = new List<string>
+        {
+            "project", "item-list", boardId, "--owner", _options.Owner,
+            "--limit", fetchLimit.ToString()
+        };
+
+        // Filter out excluded statuses at the API level to keep the working set small
+        if (excludeStatuses is { Count: > 0 })
+        {
+            var query = string.Join(' ', excludeStatuses.Select(s => $"-status:{s}"));
+            args.AddRange(["--query", query]);
+        }
+
+        args.AddRange(["--format", "json"]);
+
+        var json = await RunGhAsync(args.ToArray(), cancellationToken);
 
         using var doc = JsonDocument.Parse(json);
         var items = doc.RootElement.GetProperty("items");
@@ -146,6 +161,13 @@ public sealed class GitHubProjectsClient(
         }
 
         logger.LogInformation("Fetched {Count} cards from GitHub project {ProjectNumber}", cards.Count, boardId);
+
+        if (cards.Count >= fetchLimit)
+            logger.LogWarning(
+                "Card fetch returned {Count} items (limit {Limit}) — some items may be missing. "
+                + "Consider increasing the fetch limit or adding more API-level filters.",
+                cards.Count, fetchLimit);
+
         return cards;
     }
 
