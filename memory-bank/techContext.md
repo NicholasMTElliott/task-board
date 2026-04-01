@@ -62,7 +62,8 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ Agent executor: Claude CLI subprocess with `--json-schema` structured output
 - ✅ Multi-step execution within states (sequential steps with per-step roles/models)
 - ✅ Model selection per role (opus for design/review/QA, sonnet for implementation, haiku for gate checks)
-- ✅ Gate checks after design and implementation
+- ✅ Gate checks after design, implementation, and test
+- ✅ Optional specialist-reviewer steps (gate-triggered, per-state catalogs)
 - ✅ Direct CLI mode + polling mode
 - ✅ Git worktree isolation
 - ✅ Cross-reference resolution between cards

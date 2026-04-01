@@ -1,5 +1,7 @@
 # PGMQ on Neon Spike Results
 
+> **Legacy Prototype** — This documents the Trello/webhook/PGMQ/Lambda prototype path. The current primary workflow uses GitHub Projects with direct CLI and polling mode. See the project README for current architecture.
+
 ## Goal
 Validate whether Neon supports the PGMQ SQL/function path required for queue operations.
 

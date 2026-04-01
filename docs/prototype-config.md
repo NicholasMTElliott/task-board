@@ -1,5 +1,7 @@
 # Prototype Configuration
 
+> **Legacy Prototype** — This documents the Trello/webhook/PGMQ/Lambda prototype path. The current primary workflow uses GitHub Projects with direct CLI and polling mode. See the project README for current architecture.
+
 This prototype uses Cloudflare Worker ingestion, Neon Postgres queue storage, and Lambda Function URL kick/drain.
 
 ## Shared Environment Variables

@@ -18,7 +18,8 @@ A single founder/operator can place a card in a "Ready for" column on their kanb
 - Human-in-the-loop via Questions holding columns
 - Direct CLI invocation (`--mode agent --card-id N`) and polling mode (`--mode polling`)
 - Git worktree isolation for agent execution
-- Gate checks after design and implementation steps
+- Gate checks after design, implementation, and test steps
+- Optional specialist-reviewer steps triggered by gate checks
 - Single board, single operator
 
 ### Out of Scope (v1)
@@ -35,14 +36,14 @@ A single founder/operator can place a card in a "Ready for" column on their kanb
 | # | State | Role(s) | Gate Type |
 |---|-------|---------|-----------|
 | 1 | Backlog | — | Manual entry |
-| 2 | Ready for Design | Senior Engineer (3 steps) | agent_run |
+| 2 | Ready for Design | Senior Engineer (3 steps + optional specialist reviews) | agent_run |
 | 3 | Designing | — | In-progress |
 | 4 | Design Questions | — | Holding (NEEDS_INFO) |
 | 5 | Designed | — | Manual gate |
-| 6 | Ready for Implementation | Implementer + Code Reviewer (2 steps) | agent_run |
+| 6 | Ready for Implementation | Implementer + Code Reviewer (2 steps + optional specialist reviews) | agent_run |
 | 7 | Implementing | — | In-progress |
 | 8 | Implementation Questions | — | Holding (NEEDS_INFO) |
-| 9 | Ready for Test | QA | agent_run |
+| 9 | Ready for Test | QA (+ optional specialist reviews) | agent_run |
 | 10 | Testing | — | In-progress |
 | 11 | Tested | — | Manual gate |
 | 12 | Approved | — | system_merge |

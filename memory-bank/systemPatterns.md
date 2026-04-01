@@ -57,7 +57,23 @@ Legacy single-step states (top-level `role` + `taskPrompt`) are auto-normalized 
 2. `code_review` — review changes (opus 4.6 via `code_reviewer`)
 
 ### Gate Checks
-After all steps complete for a state, an optional `gateCheck` runs a lightweight agent (typically `gate_checker` on Haiku) to validate the output before transitioning. On failure, card moves to `GATE_FAIL` target (typically back to the trigger column for retry).
+After all steps complete for a state, a `gateCheck` runs a lightweight agent (`gate_checker` on Haiku) to validate the output before transitioning. Gate checks are configured for all three agent states: **design, implementation, and test**. On failure, card moves to `GATE_FAIL` target (typically back to the trigger column for retry).
+
+Gate checks can also request **optional specialist-reviewer steps** from a per-state catalog (see below).
+
+### Optional Specialist-Reviewer Steps
+Each agent state defines an `optionalSteps` catalog of specialist reviews. The gate check agent sees the catalog and can request any subset via `requestedSteps` in its output. If requested, `AgentRunner.ExecuteOptionalStepsAsync` executes them sequentially before transitioning.
+
+**Catalogs by state:**
+- **Ready for Design** — 12 optional reviews (UX, UI, infrastructure, data modeling, API, security threat model, performance, accessibility, legal/regulatory, migration, cost, observability)
+- **Ready for Implementation** — 12 optional reviews (security audit, SOC2 compliance, infrastructure, performance, accessibility, API contract, database, dependency, UI/visual, error handling, i18n, privacy)
+- **Ready for Test** — 10 optional reviews (security, performance, accessibility, integration, edge cases, regression risk, data integrity, compliance, disaster recovery, monitoring/alerting)
+
+**Roles used:**
+- `specialist_reviewer` (sonnet 4.6) — most optional steps
+- `senior_specialist_reviewer` (opus 4.6, `effort: max`) — high-stakes reviews (legal/regulatory, SOC2 compliance, privacy)
+
+**Prompt files:** `prompts/optional-steps/{design,impl,test}/<step_name>.md`
 
 ### IN_PROGRESS Transition
 When an agent picks up a card from a "Ready for X" trigger column, it first moves the card to the "X-ing" in-progress column before starting work. Defined as `"IN_PROGRESS": "Designing"` in the state's transitions map.
@@ -171,6 +187,9 @@ Schema:
         "role": "<role_key>",
         "taskPromptFile": "<path>"
       },
+      "optionalSteps": [
+        { "name": "<step_name>", "role": "<role_key>", "description": "...", "triggerCriteria": "...", "taskPromptFile": "<path>", "providerParams": {} }
+      ],
       "transitions": {
         "IN_PROGRESS": "<column>",
         "COMPLETE": "<column>",
@@ -208,7 +227,9 @@ Schema:
 | `implementer` | claude-sonnet-4-6 | Code implementation (same system prompt as senior_engineer) |
 | `code_reviewer` | claude-opus-4-6 | Post-implementation code review |
 | `qa` | claude-opus-4-6 | Test validation |
-| `gate_checker` | claude-haiku-4-5 | Lightweight gate checks after design/implementation |
+| `gate_checker` | claude-haiku-4-5-20251001 | Lightweight gate checks after design, implementation, and test |
+| `specialist_reviewer` | claude-sonnet-4-6 | On-demand specialist reviews requested by gate checks |
+| `senior_specialist_reviewer` | claude-opus-4-6 | High-stakes specialist reviews (legal, compliance, privacy) |
 | `merge_resolver` | claude-sonnet-4-6 | Merge conflict resolution |
 
 ## Prompt File Structure
@@ -228,6 +249,10 @@ Schema:
 | `prompts/states/ready_for_test.md` | QA testing |
 | `prompts/gates/post_design.md` | Gate check after design |
 | `prompts/gates/post_implementation.md` | Gate check after implementation |
+| `prompts/gates/post_test.md` | Gate check after test |
+| `prompts/optional-steps/design/*.md` | Optional design specialist reviews (12 files) |
+| `prompts/optional-steps/impl/*.md` | Optional implementation specialist reviews (12 files) |
+| `prompts/optional-steps/test/*.md` | Optional test specialist reviews (10 files) |
 
 ## Database Tables (Legacy Queue Path)
 

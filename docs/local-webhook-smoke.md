@@ -1,5 +1,7 @@
 # Local Webhook Smoke + Contract Validation
 
+> **Legacy Prototype** — This documents the Trello/webhook/PGMQ/Lambda prototype path. The current primary workflow uses GitHub Projects with direct CLI and polling mode. See the project README for current architecture.
+
 This document defines the local validation workflow for Trello webhook ingestion through Neon queue write and .NET processor execution.
 
 ## Prerequisites

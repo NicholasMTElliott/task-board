@@ -68,14 +68,14 @@ MergeRunner flow (system_merge states):
 | # | Column | Role(s) | Gate Type |
 |---|--------|---------|-----------|
 | 1 | Backlog | -- | Manual entry |
-| 2 | Ready for Design | Senior Engineer (3 steps) | agent_run |
+| 2 | Ready for Design | Senior Engineer (3 steps + optional specialist reviews) | agent_run |
 | 3 | Designing | -- | In-progress |
 | 4 | Design Questions | -- | Holding (NEEDS_INFO) |
 | 5 | Designed | -- | Manual gate |
-| 6 | Ready for Implementation | Implementer + Code Reviewer (2 steps) | agent_run |
+| 6 | Ready for Implementation | Implementer + Code Reviewer (2 steps + optional specialist reviews) | agent_run |
 | 7 | Implementing | -- | In-progress |
 | 8 | Implementation Questions | -- | Holding (NEEDS_INFO) |
-| 9 | Ready for Test | QA | agent_run |
+| 9 | Ready for Test | QA (+ optional specialist reviews) | agent_run |
 | 10 | Testing | -- | In-progress |
 | 11 | Tested | -- | Manual gate |
 | 12 | Approved | -- | system_merge |
@@ -93,7 +93,9 @@ MergeRunner flow (system_merge states):
 | `implementer` | claude-sonnet-4-6 | Code implementation (uses senior_engineer system prompt) |
 | `code_reviewer` | claude-opus-4-6 | Post-implementation code review |
 | `qa` | claude-opus-4-6 | Test validation |
-| `gate_checker` | claude-haiku-4-5 | Lightweight gate checks after design and implementation |
+| `gate_checker` | claude-haiku-4-5-20251001 | Lightweight gate checks after design, implementation, and test |
+| `specialist_reviewer` | claude-sonnet-4-6 | On-demand specialist reviews requested by gate checks |
+| `senior_specialist_reviewer` | claude-opus-4-6 | High-stakes specialist reviews (legal, compliance, privacy) |
 | `merge_resolver` | claude-sonnet-4-6 | Merge conflict resolution |
 
 ---
@@ -103,10 +105,10 @@ MergeRunner flow (system_merge states):
 1. Operator creates an issue, adds it to the project board in **Backlog**.
 2. Operator writes requirements/scope and moves card to **Ready for Design**.
 3. Operator runs: `.\scripts\run_once.ps1 -CardId 3` (or uses `--mode polling` for automatic pickup)
-4. Design runs 3 steps: review related tickets -> create technical design -> review for cross-ticket conflicts. Gate check validates output. Card moves to **Designed**.
+4. Design runs 3 steps: review related tickets -> create technical design -> review for cross-ticket conflicts. Gate check validates output and may trigger optional specialist reviews. Card moves to **Designed**.
 5. Operator reviews design, approves by moving to **Ready for Implementation**.
-6. Implementation runs 2 steps: implement code (Sonnet) -> code review (Opus). Gate check validates output. Card moves to **Ready for Test**.
-7. QA agent validates the implementation, moves to **Tested** on success.
+6. Implementation runs 2 steps: implement code (Sonnet) -> code review (Opus). Gate check validates output and may trigger optional specialist reviews. Card moves to **Ready for Test**.
+7. QA agent validates the implementation. Gate check validates output and may trigger optional specialist reviews. Moves to **Tested** on success.
 8. Operator approves by moving to **Approved**. System auto-merges the PR branch and moves to **Done**.
 
 If the agent needs more information, the card moves to a **Questions** column with questions posted as a comment. The operator answers and moves the card back to re-trigger.
