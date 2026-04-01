@@ -22,7 +22,12 @@
       "Bash(gh project:*)",
       "Bash(gh api:*)",
       "Bash(gh auth:*)",
-      "Bash(BOARD_PROVIDER=github AGENT_EXECUTOR=stub WORKFLOW_CONFIG_PATH=\"c:/Users/Nicho/Documents/task-board/workflow.github.json\" GitHubProjects__Owner=NicholasMTElliott GitHubProjects__Repo=NicholasMTElliott/task-board GitHubProjects__ProjectNumber=1 dotnet run --project lambda/src/TaskBoard.Worker -- --mode agent --card-id 2 --board-id 1 --workspace .)"
+      "Bash(BOARD_PROVIDER=github AGENT_EXECUTOR=stub WORKFLOW_CONFIG_PATH=\"c:/Users/Nicho/Documents/task-board/workflow.github.json\" GitHubProjects__Owner=NicholasMTElliott GitHubProjects__Repo=NicholasMTElliott/task-board GitHubProjects__ProjectNumber=1 dotnet run --project lambda/src/TaskBoard.Worker -- --mode agent --card-id 2 --board-id 1 --workspace .)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git tag:*)"
     ]
   }
 }

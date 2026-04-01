@@ -424,14 +424,14 @@ public class ClaudeAgentExecutorTests
     [Fact]
     public void BuildArgumentList_GateCheckCombined_CorrectFlags()
     {
-        // Simulates a gate check invocation: permissionMode=none, effort=min, maxBudget=0.10
+        // Simulates a gate check invocation: permissionMode=none, effort=low, maxBudget=0.10
         var executor = CreateExecutor(maxBudgetUsd: 5.00m);
         var context = CreateContext(
             model: "claude-haiku-4-5-20251001",
             providerParams: new Dictionary<string, string>
             {
                 ["permissionMode"] = "none",
-                ["effort"] = "min",
+                ["effort"] = "low",
                 ["maxBudget"] = "0.10"
             });
         var args = executor.BuildArgumentList(context, "/tmp/workspace/.aiboard/tasks/card-1-test-card.md");
@@ -447,7 +447,7 @@ public class ClaudeAgentExecutorTests
         // Effort flag present
         var effortIndex = Array.IndexOf(args, "--effort");
         Assert.True(effortIndex >= 0, "Expected --effort flag");
-        Assert.Equal("min", args[effortIndex + 1]);
+        Assert.Equal("low", args[effortIndex + 1]);
 
         // Model correct
         Assert.Contains("claude-haiku-4-5-20251001", args);
