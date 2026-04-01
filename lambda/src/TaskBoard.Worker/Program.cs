@@ -120,6 +120,15 @@ if (agentExecutorMode == "claude-cli")
     });
     builder.Services.AddSingleton<IAgentExecutor, ClaudeAgentExecutor>();
 }
+else if (agentExecutorMode == "codex")
+{
+    builder.Services.Configure<CodexCliLlmOptions>(builder.Configuration.GetSection(CodexCliLlmOptions.SectionName));
+    builder.Services.PostConfigure<CodexCliLlmOptions>(opts =>
+    {
+        opts.ExecutablePath = CodexCliResolver.Resolve(opts.ExecutablePath);
+    });
+    builder.Services.AddSingleton<IAgentExecutor, CodexAgentExecutor>();
+}
 else
 {
     builder.Services.AddSingleton<IAgentExecutor, StubAgentExecutor>();
@@ -159,9 +168,13 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
         ? host.Services.GetRequiredService<IOptions<ClaudeCliLlmOptions>>().Value.ExecutablePath
         : null;
 
+    string? codexExePath = agentExecutorMode == "codex"
+        ? host.Services.GetRequiredService<IOptions<CodexCliLlmOptions>>().Value.ExecutablePath
+        : null;
+
     var prereqErrors = await PrerequisiteValidator.ValidateAsync(
         config, boardProvider, agentExecutorMode,
-        promptBaseDir, claudeExePath, ghOpts, trelloOpts);
+        promptBaseDir, claudeExePath, ghOpts, trelloOpts, codexExePath: codexExePath);
 
     if (prereqErrors.Count > 0)
     {
