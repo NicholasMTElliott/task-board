@@ -160,7 +160,7 @@ public sealed class GitHubProjectsClient(
             cards.Add(new BoardCard(id, title, body, columnId, metadata, labels, assignees));
         }
 
-        logger.LogInformation("Fetched {Count} cards from GitHub project {ProjectNumber}", cards.Count, boardId);
+        logger.LogDebug("Fetched {Count} cards from GitHub project {ProjectNumber}", cards.Count, boardId);
 
         if (cards.Count >= fetchLimit)
             logger.LogWarning(

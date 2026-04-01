@@ -356,6 +356,51 @@ public class PollingRunnerTests
         await boardClient.DidNotReceive().MoveCardToColumnAsync("99", "Doing", Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task RunAsync_NoEligibleCards_LogsAtInformationLevel()
+    {
+        var boardClient = Substitute.For<ITaskBoardClient>();
+
+        boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Returns(Task.FromResult<IReadOnlyList<BoardCard>>(new List<BoardCard>()));
+
+        var agentRunner = new AgentRunner(
+            boardClient,
+            AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
+            new TaskFileManager(NullLogger<TaskFileManager>.Instance),
+            new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
+            TestConfig,
+            new StubCrossReferenceResolver(),
+            new AgentIdentity("Test", "Agent", "TestMachine"),
+            NullLogger<AgentRunner>.Instance);
+
+        var mergeRunner = new MergeRunner(
+            boardClient,
+            new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
+            TestConfig,
+            new AgentIdentity("Test", "Agent", "TestMachine"),
+            NullLogger<MergeRunner>.Instance);
+
+        var fakeLogger = new FakeLogger<PollingRunner>();
+
+        var pollingRunner = new PollingRunner(
+            boardClient,
+            agentRunner,
+            mergeRunner,
+            TestConfig,
+            AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
+            fakeLogger);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        await pollingRunner.RunAsync(BoardId, Workspace, TimeSpan.FromMilliseconds(50), cts.Token);
+
+        var infoLogs = fakeLogger.Logs
+            .Where(l => l.Level == LogLevel.Information)
+            .ToList();
+
+        Assert.Contains(infoLogs, l => l.Message.Contains("No eligible cards"));
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────────
 
     private sealed class FakeLogger<T> : ILogger<T>

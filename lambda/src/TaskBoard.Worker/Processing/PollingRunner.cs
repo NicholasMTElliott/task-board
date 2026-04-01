@@ -41,7 +41,7 @@ public sealed class PollingRunner(
 
                 if (selected is null)
                 {
-                    logger.LogDebug("No eligible cards found (cycle {Cycle}), waiting", totalCycles);
+                    logger.LogInformation("No eligible cards found (cycle {Cycle}), waiting", totalCycles);
                 }
                 else
                 {
