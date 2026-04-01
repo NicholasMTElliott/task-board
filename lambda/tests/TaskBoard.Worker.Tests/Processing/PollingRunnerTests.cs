@@ -70,7 +70,7 @@ public class PollingRunnerTests
 
         var agentRunner = new AgentRunner(
             boardClient,
-            new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance),
+            AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             new TaskFileManager(NullLogger<TaskFileManager>.Instance),
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
@@ -115,7 +115,7 @@ public class PollingRunnerTests
 
         var agentRunner = new AgentRunner(
             boardClient,
-            new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance),
+            AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             new TaskFileManager(NullLogger<TaskFileManager>.Instance),
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
@@ -166,7 +166,7 @@ public class PollingRunnerTests
 
         var agentRunner = new AgentRunner(
             boardClient,
-            new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance),
+            AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             new TaskFileManager(NullLogger<TaskFileManager>.Instance),
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,

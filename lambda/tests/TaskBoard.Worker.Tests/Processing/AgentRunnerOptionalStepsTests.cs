@@ -479,7 +479,7 @@ public class AgentRunnerOptionalStepsTests : IDisposable
     private AgentRunner CreateRunner(IAgentExecutor executor, WorkflowConfig config)
     {
         return new AgentRunner(
-            _boardClient, executor, _taskFileManager, _gitWorkspaceManager,
+            _boardClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
             config.Normalised(), new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
             NullLogger<AgentRunner>.Instance);

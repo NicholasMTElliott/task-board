@@ -32,3 +32,11 @@ public enum AgentOutcome
     NEEDS_INFO,
     ERROR
 }
+
+/// <summary>
+/// Resolves the appropriate <see cref="IAgentExecutor"/> for a given provider key.
+/// </summary>
+public interface IAgentExecutorResolver
+{
+    IAgentExecutor Resolve(string providerKey);
+}

@@ -40,7 +40,7 @@ public class AgentRunnerTests : IDisposable
 
         _runner = new AgentRunner(
             _trelloClient,
-            _agentExecutor,
+            AgentExecutorResolver.ForSingleExecutor(_agentExecutor),
             _taskFileManager,
             _gitWorkspaceManager,
             _workflowConfig,
@@ -190,7 +190,7 @@ public class AgentRunnerTests : IDisposable
             .Returns<AgentResult>(_ => throw new InvalidOperationException("LLM provider is down"));
 
         var runner = new AgentRunner(
-            _trelloClient, throwingExecutor, _taskFileManager, _gitWorkspaceManager,
+            _trelloClient, AgentExecutorResolver.ForSingleExecutor(throwingExecutor), _taskFileManager, _gitWorkspaceManager,
             BuildWorkflowConfig().Normalised(), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<AgentRunner>.Instance);
 
         SetupBoardCards();
@@ -497,6 +497,58 @@ public class AgentRunnerTests : IDisposable
             $"Could not find repo root (no .git directory) starting from {AppContext.BaseDirectory}");
     }
 
+    [Fact]
+    public async Task ExecuteAsync_StepsWithDifferentRoleProviders_ResolvesCorrectExecutorPerStep()
+    {
+        var executorA = Substitute.For<IAgentExecutor>();
+        var executorB = Substitute.For<IAgentExecutor>();
+        executorA.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(new AgentResult(AgentOutcome.COMPLETE));
+        executorB.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(new AgentResult(AgentOutcome.COMPLETE));
+
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-multi"] = new("Multi-Provider Design", null, "agent_run",
+                    null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-review"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
+                    },
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("step_one", "role_a", TaskPrompt: "First step"),
+                        new WorkflowStep("step_two", "role_b", TaskPrompt: "Second step"),
+                    ]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["role_a"] = new("model-a", "System prompt A.", [], Provider: "claude-cli"),
+                ["role_b"] = new("model-b", "System prompt B.", [], Provider: "codex"),
+            }).Normalised();
+
+        var resolver = new AgentExecutorResolver(new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["claude-cli"] = executorA,
+            ["codex"] = executorB,
+        });
+
+        var runner = new AgentRunner(
+            _trelloClient, resolver, _taskFileManager, _gitWorkspaceManager,
+            config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<AgentRunner>.Instance);
+        SetupBoardCards("list-multi");
+
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+        await executorA.Received(1).ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>());
+        await executorB.Received(1).ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
     private void SetupBoardCards(string? listId = null)
     {
         var targetList = listId ?? DesignListId;
@@ -511,7 +563,7 @@ public class AgentRunnerTests : IDisposable
     private AgentRunner CreateRunnerWithConfig(WorkflowConfig config)
     {
         return new AgentRunner(
-            _trelloClient, _agentExecutor, _taskFileManager, _gitWorkspaceManager,
+            _trelloClient, AgentExecutorResolver.ForSingleExecutor(_agentExecutor), _taskFileManager, _gitWorkspaceManager,
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<AgentRunner>.Instance);
     }
 
@@ -617,7 +669,7 @@ public class AgentRunnerTests : IDisposable
 
         var config = BuildMultiStepWorkflowConfig().Normalised();
         var runner = new AgentRunner(
-            _trelloClient, sequencedExecutor, _taskFileManager, _gitWorkspaceManager,
+            _trelloClient, AgentExecutorResolver.ForSingleExecutor(sequencedExecutor), _taskFileManager, _gitWorkspaceManager,
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
@@ -645,7 +697,7 @@ public class AgentRunnerTests : IDisposable
 
         var config = BuildMultiStepWorkflowConfig().Normalised();
         var runner = new AgentRunner(
-            _trelloClient, errorExecutor, _taskFileManager, _gitWorkspaceManager,
+            _trelloClient, AgentExecutorResolver.ForSingleExecutor(errorExecutor), _taskFileManager, _gitWorkspaceManager,
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 

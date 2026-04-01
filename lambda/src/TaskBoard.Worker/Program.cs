@@ -110,29 +110,44 @@ switch (boardProvider)
 }
 
 // ── 6. Agent executor selection ──────────────────────────────────────────────
+// AGENT_EXECUTOR=stub → all providers mapped to stub (testing/dev)
+// Any other value (or unset) → production mode: each role's provider field drives executor selection
 var agentExecutorMode = builder.Configuration["AgentExecutor"]?.ToLowerInvariant() ?? "stub";
-if (agentExecutorMode == "claude-cli")
+
+// Always register StubAgentExecutor (used in stub mode and tests)
+builder.Services.AddSingleton<StubAgentExecutor>();
+
+if (agentExecutorMode != "stub")
 {
+    // Register real provider executors
     builder.Services.Configure<ClaudeCliLlmOptions>(builder.Configuration.GetSection(ClaudeCliLlmOptions.SectionName));
     builder.Services.PostConfigure<ClaudeCliLlmOptions>(opts =>
     {
         opts.ExecutablePath = ClaudeCliResolver.Resolve(opts.ExecutablePath);
     });
-    builder.Services.AddSingleton<IAgentExecutor, ClaudeAgentExecutor>();
+    builder.Services.AddSingleton<ClaudeAgentExecutor>();
+
+    // Extension point: when Codex support is needed, register CodexAgentExecutor here
+    // builder.Services.Configure<CodexCliLlmOptions>(builder.Configuration.GetSection(CodexCliLlmOptions.SectionName));
+    // builder.Services.PostConfigure<CodexCliLlmOptions>(opts => { opts.ExecutablePath = CodexCliResolver.Resolve(opts.ExecutablePath); });
+    // builder.Services.AddSingleton<CodexAgentExecutor>();
 }
-else if (agentExecutorMode == "codex")
+
+builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
 {
-    builder.Services.Configure<CodexCliLlmOptions>(builder.Configuration.GetSection(CodexCliLlmOptions.SectionName));
-    builder.Services.PostConfigure<CodexCliLlmOptions>(opts =>
+    if (agentExecutorMode == "stub")
     {
-        opts.ExecutablePath = CodexCliResolver.Resolve(opts.ExecutablePath);
-    });
-    builder.Services.AddSingleton<IAgentExecutor, CodexAgentExecutor>();
-}
-else
-{
-    builder.Services.AddSingleton<IAgentExecutor, StubAgentExecutor>();
-}
+        return AgentExecutorResolver.ForSingleExecutor(
+            sp.GetRequiredService<StubAgentExecutor>());
+    }
+
+    var executors = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["claude-cli"] = sp.GetRequiredService<ClaudeAgentExecutor>(),
+        // Extension point: ["codex"] = sp.GetRequiredService<CodexAgentExecutor>(),
+    };
+    return new AgentExecutorResolver(executors);
+});
 
 // Generate agent identity for this process instance
 var agentIdentity = AgentIdentity.Generate();

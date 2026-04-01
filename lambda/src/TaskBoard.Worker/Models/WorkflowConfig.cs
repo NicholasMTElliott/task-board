@@ -155,7 +155,8 @@ public sealed record WorkflowRole(
     string Model,
     string SystemPrompt,
     List<string> Sections,
-    string? SystemPromptFile = null);
+    string? SystemPromptFile = null,
+    string Provider = "claude-cli");
 
 public sealed record PollingConfig(
     string? PriorityFieldName = null,
