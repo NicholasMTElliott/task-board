@@ -57,4 +57,44 @@ public class AgentExecutorResolverTests
         Assert.Same(executor, resolver.Resolve("codex"));
         Assert.Same(executor, resolver.Resolve("stub"));
     }
+
+    [Fact]
+    public void AvailableProviders_ReturnsRegisteredKeys()
+    {
+        var executorA = Substitute.For<IAgentExecutor>();
+        var executorB = Substitute.For<IAgentExecutor>();
+        var resolver = new AgentExecutorResolver(new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["claude-cli"] = executorA,
+            ["codex"] = executorB,
+        });
+
+        Assert.Contains("claude-cli", resolver.AvailableProviders);
+        Assert.Contains("codex", resolver.AvailableProviders);
+        Assert.Equal(2, resolver.AvailableProviders.Count);
+    }
+
+    [Fact]
+    public void AvailableProviders_CaseInsensitive_ContainsKeys()
+    {
+        var executor = Substitute.For<IAgentExecutor>();
+        var resolver = new AgentExecutorResolver(new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["claude-cli"] = executor,
+        });
+
+        Assert.Contains("CLAUDE-CLI", resolver.AvailableProviders);
+        Assert.Contains("Claude-Cli", resolver.AvailableProviders);
+    }
+
+    [Fact]
+    public void ForSingleExecutor_AvailableProviders_ContainsAllKnownKeys()
+    {
+        var executor = Substitute.For<IAgentExecutor>();
+        var resolver = AgentExecutorResolver.ForSingleExecutor(executor);
+
+        Assert.Contains("claude-cli", resolver.AvailableProviders);
+        Assert.Contains("codex", resolver.AvailableProviders);
+        Assert.Contains("stub", resolver.AvailableProviders);
+    }
 }

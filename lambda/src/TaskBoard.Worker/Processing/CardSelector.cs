@@ -3,13 +3,24 @@ using TaskBoard.Worker.Models;
 
 namespace TaskBoard.Worker.Processing;
 
+public sealed record CardSelectionResult(
+    BoardCard? Selected,
+    IReadOnlyList<SkippedCard> SkippedDueToProviders);
+
+public sealed record SkippedCard(
+    BoardCard Card,
+    string StateName,
+    IReadOnlyList<string> MissingProviders);
+
 public static class CardSelector
 {
-    public static BoardCard? SelectNext(
+    public static CardSelectionResult SelectNext(
         IReadOnlyList<BoardCard> cards,
-        WorkflowConfig workflowConfig)
+        WorkflowConfig workflowConfig,
+        IReadOnlySet<string>? availableProviders = null)
     {
         var eligible = new List<(BoardCard Card, WorkflowState State, int Position)>();
+        var skippedCards = new List<SkippedCard>();
 
         for (var i = 0; i < cards.Count; i++)
         {
@@ -23,11 +34,23 @@ public static class CardSelector
             if (!CardFilterEvaluator.PassesAll(card, state.Filters))
                 continue;
 
+            // Provider eligibility check
+            if (availableProviders is not null)
+            {
+                var required = workflowConfig.GetRequiredProviders(state);
+                var missing = required.Except(availableProviders, StringComparer.OrdinalIgnoreCase).ToList();
+                if (missing.Count > 0)
+                {
+                    skippedCards.Add(new SkippedCard(card, state.Name, missing));
+                    continue;
+                }
+            }
+
             eligible.Add((card, state, i));
         }
 
         if (eligible.Count == 0)
-            return null;
+            return new CardSelectionResult(null, skippedCards);
 
         var pollingConfig = workflowConfig.Polling;
 
@@ -52,7 +75,7 @@ public static class CardSelector
             return aNum.CompareTo(bNum);
         });
 
-        return eligible[0].Card;
+        return new CardSelectionResult(eligible[0].Card, skippedCards);
     }
 
     private static int GetPriorityRank(BoardCard card, PollingConfig? pollingConfig)

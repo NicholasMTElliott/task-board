@@ -43,7 +43,7 @@ public class PrerequisiteValidatorIntegrationTests
         var config = LoadProductionConfig();
 
         var errors = await PrerequisiteValidator.ValidateAsync(
-            config, "stub", "stub", repoRoot);
+            config, "stub", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "stub" }, repoRoot);
 
         Assert.True(errors.Count == 0,
             $"Prerequisite validation failed with stub providers:\n{string.Join("\n", errors)}");
@@ -94,7 +94,7 @@ public class PrerequisiteValidatorIntegrationTests
                 });
 
             var errors = await PrerequisiteValidator.ValidateAsync(
-                config, "stub", "stub", tempDir);
+                config, "stub", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "stub" }, tempDir);
 
             // Both missing files should be reported
             Assert.Contains(errors, e => e.Contains("missing_a.md"));

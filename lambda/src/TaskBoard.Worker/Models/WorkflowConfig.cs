@@ -85,6 +85,42 @@ public sealed record WorkflowConfig(
             .ToList();
 
     /// <summary>
+    /// Collects all distinct provider keys required to execute a given state.
+    /// Examines: steps, gate check, and optional steps.
+    /// Returns empty set for states with no agent requirements (e.g., system_merge, manual_gate).
+    /// </summary>
+    public HashSet<string> GetRequiredProviders(WorkflowState state)
+    {
+        var providers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (state.Steps is { Count: > 0 })
+        {
+            foreach (var step in state.Steps)
+            {
+                if (Roles.TryGetValue(step.Role, out var role))
+                    providers.Add(role.Provider);
+            }
+        }
+
+        if (state.GateCheck is not null
+            && Roles.TryGetValue(state.GateCheck.Role, out var gateRole))
+        {
+            providers.Add(gateRole.Provider);
+        }
+
+        if (state.OptionalSteps is { Count: > 0 })
+        {
+            foreach (var optStep in state.OptionalSteps)
+            {
+                if (Roles.TryGetValue(optStep.Role, out var optRole))
+                    providers.Add(optRole.Provider);
+            }
+        }
+
+        return providers;
+    }
+
+    /// <summary>
     /// Returns a new config with all states normalised (legacy single-step → steps array).
     /// </summary>
     public WorkflowConfig Normalised()

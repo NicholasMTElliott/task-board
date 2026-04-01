@@ -5,19 +5,38 @@ namespace TaskBoard.Worker.Models;
 public static class PrerequisiteValidator
 {
     /// <summary>
+    /// Probes the local system for known AI provider CLIs.
+    /// Returns the set of provider keys that are available.
+    /// Safe to call before host build (no DI dependencies).
+    /// </summary>
+    public static async Task<HashSet<string>> DetectAvailableProvidersAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var claudeExe = OperatingSystem.IsWindows() ? "claude.cmd" : "claude";
+        if (await IsCliAvailableAsync(claudeExe, cancellationToken))
+            available.Add("claude-cli");
+
+        var codexExe = OperatingSystem.IsWindows() ? "codex.cmd" : "codex";
+        if (await IsCliAvailableAsync(codexExe, cancellationToken))
+            available.Add("codex");
+
+        return available;
+    }
+
+    /// <summary>
     /// Validates that all runtime prerequisites are met for the configured
-    /// providers and executor. Returns a list of human-readable error messages
+    /// providers and board. Returns a list of human-readable error messages
     /// (empty = all checks passed).
     /// </summary>
     public static async Task<List<string>> ValidateAsync(
         WorkflowConfig config,
         string boardProvider,
-        string agentExecutor,
+        HashSet<string> availableProviders,
         string promptBaseDirectory,
-        string? claudeExecutablePath = null,
         GitHubProjectsOptions? githubOptions = null,
         TrelloClientOptions? trelloOptions = null,
-        string? codexExePath = null,
         CancellationToken cancellationToken = default)
     {
         var errors = new List<string>();
@@ -42,18 +61,11 @@ public static class PrerequisiteValidator
             // "stub" and unrecognized → no provider checks
         }
 
-        // Agent-executor-specific checks
-        if (string.Equals(agentExecutor, "claude-cli", StringComparison.OrdinalIgnoreCase))
+        // Validate at least one AI provider is available
+        if (availableProviders.Count == 0)
         {
-            var claudeExe = claudeExecutablePath ?? (OperatingSystem.IsWindows() ? "claude.cmd" : "claude");
-            await ValidateCliToolAsync(errors, claudeExe, ["--version"],
-                "Claude CLI is required for claude-cli agent executor", cancellationToken);
-        }
-        else if (string.Equals(agentExecutor, "codex", StringComparison.OrdinalIgnoreCase))
-        {
-            var codexExe = codexExePath ?? (OperatingSystem.IsWindows() ? "codex.cmd" : "codex");
-            await ValidateCliToolAsync(errors, codexExe, ["--version"],
-                "Codex CLI is required for codex agent executor", cancellationToken);
+            errors.Add("No AI agent providers are available. " +
+                "At least one of claude-cli (Claude CLI) or codex (Codex CLI) must be installed and on PATH.");
         }
 
         // Prompt file checks
@@ -75,6 +87,14 @@ public static class PrerequisiteValidator
     }
 
     // --- Private helpers ---
+
+    private static async Task<bool> IsCliAvailableAsync(
+        string fileName, CancellationToken cancellationToken)
+    {
+        var (success, _) = await TryRunCommandAsync(
+            fileName, ["--version"], cancellationToken: cancellationToken);
+        return success;
+    }
 
     private static async Task ValidateCliToolAsync(
         List<string> errors, string fileName, string[] args,
