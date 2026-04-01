@@ -8,6 +8,7 @@ public sealed class PollingRunner(
     AgentRunner agentRunner,
     MergeRunner mergeRunner,
     WorkflowConfig workflowConfig,
+    IAgentExecutorResolver executorResolver,
     ILogger<PollingRunner> logger)
 {
     public async Task RunAsync(
@@ -26,7 +27,17 @@ public sealed class PollingRunner(
             try
             {
                 var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalStateNames());
-                var selected = CardSelector.SelectNext(cards, workflowConfig);
+                var selectionResult = CardSelector.SelectNext(cards, workflowConfig, executorResolver.AvailableProviders);
+
+                foreach (var skipped in selectionResult.SkippedDueToProviders)
+                {
+                    logger.LogWarning(
+                        "Card {CardId} ({Title}) in '{State}' is not claimable — missing providers: {MissingProviders}",
+                        skipped.Card.Id, skipped.Card.Title, skipped.StateName,
+                        string.Join(", ", skipped.MissingProviders));
+                }
+
+                var selected = selectionResult.Selected;
 
                 if (selected is null)
                 {

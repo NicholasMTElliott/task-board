@@ -22,6 +22,10 @@ public class PrerequisiteValidatorTests
             $"Could not find repo root (no .git directory) starting from {AppContext.BaseDirectory}");
     }
 
+    /// <summary>A non-empty available providers set for tests that don't care about provider validation.</summary>
+    private static HashSet<string> AnyProvider() =>
+        new(StringComparer.OrdinalIgnoreCase) { "stub" };
+
     /// <summary>
     /// Builds a minimal WorkflowConfig with one agent_run state that uses
     /// prompt files under the given base directory.
@@ -288,7 +292,7 @@ public class PrerequisiteValidatorTests
     {
         var config = MakeMinimalConfig();
         var errors = await PrerequisiteValidator.ValidateAsync(
-            config, "github", "stub", Path.GetTempPath(),
+            config, "github", AnyProvider(), Path.GetTempPath(),
             githubOptions: null);
 
         Assert.Contains(errors, e => e.Contains("GitHubProjectsOptions not configured"));
@@ -301,7 +305,7 @@ public class PrerequisiteValidatorTests
         var options = new GitHubProjectsOptions { Owner = "", Repo = "user/repo", ProjectNumber = "1" };
 
         var errors = await PrerequisiteValidator.ValidateAsync(
-            config, "github", "stub", Path.GetTempPath(),
+            config, "github", AnyProvider(), Path.GetTempPath(),
             githubOptions: options);
 
         Assert.Contains(errors, e => e.Contains("GitHubProjects__Owner"));
@@ -314,7 +318,7 @@ public class PrerequisiteValidatorTests
         var options = new GitHubProjectsOptions { Owner = "user", Repo = "", ProjectNumber = "1" };
 
         var errors = await PrerequisiteValidator.ValidateAsync(
-            config, "github", "stub", Path.GetTempPath(),
+            config, "github", AnyProvider(), Path.GetTempPath(),
             githubOptions: options);
 
         Assert.Contains(errors, e => e.Contains("GitHubProjects__Repo"));
@@ -327,7 +331,7 @@ public class PrerequisiteValidatorTests
         var options = new GitHubProjectsOptions { Owner = "user", Repo = "user/repo", ProjectNumber = "" };
 
         var errors = await PrerequisiteValidator.ValidateAsync(
-            config, "github", "stub", Path.GetTempPath(),
+            config, "github", AnyProvider(), Path.GetTempPath(),
             githubOptions: options);
 
         Assert.Contains(errors, e => e.Contains("GitHubProjects__ProjectNumber"));
@@ -342,7 +346,7 @@ public class PrerequisiteValidatorTests
         var options = new TrelloClientOptions { ApiKey = "", ApiToken = "token" };
 
         var errors = await PrerequisiteValidator.ValidateAsync(
-            config, "trello", "stub", Path.GetTempPath(),
+            config, "trello", AnyProvider(), Path.GetTempPath(),
             trelloOptions: options);
 
         Assert.Contains(errors, e => e.Contains("Trello API key"));
@@ -355,7 +359,7 @@ public class PrerequisiteValidatorTests
         var options = new TrelloClientOptions { ApiKey = "key", ApiToken = "" };
 
         var errors = await PrerequisiteValidator.ValidateAsync(
-            config, "trello", "stub", Path.GetTempPath(),
+            config, "trello", AnyProvider(), Path.GetTempPath(),
             trelloOptions: options);
 
         Assert.Contains(errors, e => e.Contains("Trello API token"));
@@ -369,7 +373,7 @@ public class PrerequisiteValidatorTests
         var options = new TrelloClientOptions { ApiKey = "", ApiToken = "" };
 
         var errors = await PrerequisiteValidator.ValidateAsync(
-            config, "live", "stub", Path.GetTempPath(),
+            config, "live", AnyProvider(), Path.GetTempPath(),
             trelloOptions: options);
 
         Assert.Contains(errors, e => e.Contains("Trello API key"));
@@ -384,7 +388,7 @@ public class PrerequisiteValidatorTests
         var config = MakeMinimalConfig();
 
         var errors = await PrerequisiteValidator.ValidateAsync(
-            config, "stub", "stub", Path.GetTempPath());
+            config, "stub", AnyProvider(), Path.GetTempPath());
 
         // Stub providers produce no provider-specific errors
         Assert.DoesNotContain(errors, e =>
@@ -399,7 +403,7 @@ public class PrerequisiteValidatorTests
         var config = MakeMinimalConfig();
 
         var errors = await PrerequisiteValidator.ValidateAsync(
-            config, "some_future_provider", "stub", Path.GetTempPath());
+            config, "some_future_provider", AnyProvider(), Path.GetTempPath());
 
         Assert.DoesNotContain(errors, e =>
             e.Contains("GitHubProjects") ||
@@ -416,9 +420,35 @@ public class PrerequisiteValidatorTests
         var config = MakeMinimalConfig();
 
         var errors = await PrerequisiteValidator.ValidateAsync(
-            config, "stub", "stub", Path.GetTempPath());
+            config, "stub", AnyProvider(), Path.GetTempPath());
 
         Assert.DoesNotContain(errors, e => e.Contains("git") && e.Contains("not found"));
+    }
+
+    // ── AI provider availability ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task ValidateAsync_NoProviders_ReportsError()
+    {
+        var config = MakeMinimalConfig();
+        var emptyProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var errors = await PrerequisiteValidator.ValidateAsync(
+            config, "stub", emptyProviders, Path.GetTempPath());
+
+        Assert.Contains(errors, e => e.Contains("No AI agent providers are available"));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_AtLeastOneProvider_NoProviderError()
+    {
+        var config = MakeMinimalConfig();
+        var providers = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli" };
+
+        var errors = await PrerequisiteValidator.ValidateAsync(
+            config, "stub", providers, Path.GetTempPath());
+
+        Assert.DoesNotContain(errors, e => e.Contains("No AI agent providers are available"));
     }
 
     // ── Error collection (all errors reported, not fail-fast) ───────────────
@@ -431,7 +461,7 @@ public class PrerequisiteValidatorTests
         var options = new GitHubProjectsOptions { Owner = "", Repo = "", ProjectNumber = "" };
 
         var errors = await PrerequisiteValidator.ValidateAsync(
-            config, "github", "stub", Path.GetTempPath(),
+            config, "github", AnyProvider(), Path.GetTempPath(),
             githubOptions: options);
 
         // All three missing-field errors should appear together

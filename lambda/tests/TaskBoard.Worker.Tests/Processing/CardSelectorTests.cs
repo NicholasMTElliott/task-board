@@ -82,8 +82,8 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, MakeConfig());
 
-        Assert.NotNull(result);
-        Assert.Equal("3", result.Id); // Ready for Test has pipelineOrder=3
+        Assert.NotNull(result.Selected);
+        Assert.Equal("3", result.Selected!.Id); // Ready for Test has pipelineOrder=3
     }
 
     [Fact]
@@ -97,9 +97,9 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, MakeConfig());
 
-        Assert.NotNull(result);
+        Assert.NotNull(result.Selected);
         // Same stage, no priority, position tiebreaker: index 0 wins
-        Assert.Equal("10", result.Id);
+        Assert.Equal("10", result.Selected!.Id);
     }
 
     // --- Priority ranking ---
@@ -118,8 +118,8 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, MakeConfig(polling: polling));
 
-        Assert.NotNull(result);
-        Assert.Equal("8", result.Id); // P0 rank 0 < P1 rank 1
+        Assert.NotNull(result.Selected);
+        Assert.Equal("8", result.Selected!.Id); // P0 rank 0 < P1 rank 1
     }
 
     // --- Position tiebreaker ---
@@ -138,8 +138,8 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, MakeConfig(polling: polling));
 
-        Assert.NotNull(result);
-        Assert.Equal("10", result.Id); // position 0 < position 1
+        Assert.NotNull(result.Selected);
+        Assert.Equal("10", result.Selected!.Id); // position 0 < position 1
     }
 
     // --- Issue number tiebreaker ---
@@ -165,9 +165,9 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, MakeConfig());
 
-        Assert.NotNull(result);
+        Assert.NotNull(result.Selected);
         // Position 0 (card 20) wins over position 1 (card 5)
-        Assert.Equal("20", result.Id);
+        Assert.Equal("20", result.Selected!.Id);
     }
 
     // --- No eligible cards ---
@@ -186,7 +186,7 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, MakeConfig());
 
-        Assert.Null(result);
+        Assert.Null(result.Selected);
     }
 
     [Fact]
@@ -194,7 +194,7 @@ public class CardSelectorTests
     {
         var result = CardSelector.SelectNext(new List<BoardCard>(), MakeConfig());
 
-        Assert.Null(result);
+        Assert.Null(result.Selected);
     }
 
     // --- Non-agent_run filtering ---
@@ -212,8 +212,8 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, MakeConfig());
 
-        Assert.NotNull(result);
-        Assert.Equal("3", result.Id);
+        Assert.NotNull(result.Selected);
+        Assert.Equal("3", result.Selected!.Id);
     }
 
     // --- Missing priority field ---
@@ -231,8 +231,8 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, MakeConfig(polling: polling));
 
-        Assert.NotNull(result);
-        Assert.Equal("2", result.Id); // P0 has rank 0, card 1 has rank MaxValue
+        Assert.NotNull(result.Selected);
+        Assert.Equal("2", result.Selected!.Id); // P0 has rank 0, card 1 has rank MaxValue
     }
 
     // --- Unknown priority value ---
@@ -251,8 +251,8 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, MakeConfig(polling: polling));
 
-        Assert.NotNull(result);
-        Assert.Equal("2", result.Id); // P1 has rank 1, "Unknown" has rank MaxValue
+        Assert.NotNull(result.Selected);
+        Assert.Equal("2", result.Selected!.Id); // P1 has rank 1, "Unknown" has rank MaxValue
     }
 
     // --- No polling config ---
@@ -272,9 +272,9 @@ public class CardSelectorTests
         // Config with polling: null
         var result = CardSelector.SelectNext(cards, MakeConfig(polling: null));
 
-        Assert.NotNull(result);
+        Assert.NotNull(result.Selected);
         // Without polling config, priority is ignored. Position tiebreaker: index 0 wins
-        Assert.Equal("10", result.Id);
+        Assert.Equal("10", result.Selected!.Id);
     }
 
     // --- Full 4-tier sort (from the design examples) ---
@@ -297,8 +297,8 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, MakeConfig(polling: polling));
 
-        Assert.NotNull(result);
-        Assert.Equal("3", result.Id); // Ready for Test pipelineOrder=3 is highest
+        Assert.NotNull(result.Selected);
+        Assert.Equal("3", result.Selected!.Id); // Ready for Test pipelineOrder=3 is highest
     }
 
     [Fact]
@@ -317,8 +317,8 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, MakeConfig(polling: polling));
 
-        Assert.NotNull(result);
-        Assert.Equal("8", result.Id); // Same stage as 7, but P0 > P1
+        Assert.NotNull(result.Selected);
+        Assert.Equal("8", result.Selected!.Id); // Same stage as 7, but P0 > P1
     }
 
     // --- system_merge eligibility ---
@@ -334,8 +334,8 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, config);
 
-        Assert.NotNull(result);
-        Assert.Equal("1", result.Id);
+        Assert.NotNull(result.Selected);
+        Assert.Equal("1", result.Selected!.Id);
     }
 
     [Fact]
@@ -350,8 +350,8 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, config);
 
-        Assert.NotNull(result);
-        Assert.Equal("1", result.Id); // pipelineOrder 4 > 3
+        Assert.NotNull(result.Selected);
+        Assert.Equal("1", result.Selected!.Id); // pipelineOrder 4 > 3
     }
 
     // --- Card filter predicates ---
@@ -374,7 +374,7 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, config);
 
-        Assert.Null(result);
+        Assert.Null(result.Selected);
     }
 
     [Fact]
@@ -394,8 +394,8 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, config);
 
-        Assert.NotNull(result);
-        Assert.Equal("1", result.Id);
+        Assert.NotNull(result.Selected);
+        Assert.Equal("1", result.Selected!.Id);
     }
 
     [Fact]
@@ -411,8 +411,8 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, config);
 
-        Assert.NotNull(result);
-        Assert.Equal("1", result.Id);
+        Assert.NotNull(result.Selected);
+        Assert.Equal("1", result.Selected!.Id);
     }
 
     [Fact]
@@ -434,8 +434,8 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, config);
 
-        Assert.NotNull(result);
-        Assert.Equal("2", result.Id);
+        Assert.NotNull(result.Selected);
+        Assert.Equal("2", result.Selected!.Id);
     }
 
     [Fact]
@@ -458,7 +458,7 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, config);
 
-        Assert.Null(result);
+        Assert.Null(result.Selected);
     }
 
     // --- Card in unknown column ---
@@ -474,7 +474,194 @@ public class CardSelectorTests
 
         var result = CardSelector.SelectNext(cards, MakeConfig());
 
-        Assert.NotNull(result);
-        Assert.Equal("2", result.Id);
+        Assert.NotNull(result.Selected);
+        Assert.Equal("2", result.Selected!.Id);
+    }
+
+    // --- Provider eligibility filtering ---
+
+    private static WorkflowConfig MakeConfigWithProviders(string stepProvider, string? gateProvider = null)
+    {
+        var gateCheck = gateProvider is not null
+            ? new GateCheckConfig("gate_role")
+            : null;
+
+        return new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Ready for Design"] = new("Ready for Design", null, "agent_run",
+                    null, new Dictionary<string, TransitionTarget>(), PipelineOrder: 1,
+                    Steps: [new WorkflowStep("step1", "step_role")],
+                    GateCheck: gateCheck),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["step_role"] = new("model", "prompt", new List<string>(), Provider: stepProvider),
+                ["gate_role"] = new("model", "prompt", new List<string>(),
+                    Provider: gateProvider ?? "claude-cli"),
+            });
+    }
+
+    [Fact]
+    public void AllProvidersAvailable_CardSelected()
+    {
+        var config = MakeConfigWithProviders("claude-cli");
+        var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli" };
+
+        var result = CardSelector.SelectNext(
+            [Card("1", "Ready for Design")], config, available);
+
+        Assert.NotNull(result.Selected);
+        Assert.Equal("1", result.Selected!.Id);
+        Assert.Empty(result.SkippedDueToProviders);
+    }
+
+    [Fact]
+    public void MissingProvider_CardSkipped()
+    {
+        var config = MakeConfigWithProviders("codex");
+        var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli" };
+
+        var result = CardSelector.SelectNext(
+            [Card("1", "Ready for Design")], config, available);
+
+        Assert.Null(result.Selected);
+    }
+
+    [Fact]
+    public void MissingProvider_CardIncludedInSkippedList()
+    {
+        var config = MakeConfigWithProviders("codex");
+        var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli" };
+
+        var result = CardSelector.SelectNext(
+            [Card("1", "Ready for Design")], config, available);
+
+        Assert.Single(result.SkippedDueToProviders);
+        Assert.Equal("1", result.SkippedDueToProviders[0].Card.Id);
+        Assert.Equal("Ready for Design", result.SkippedDueToProviders[0].StateName);
+        Assert.Contains("codex", result.SkippedDueToProviders[0].MissingProviders);
+    }
+
+    [Fact]
+    public void MixedStates_OnlyEligibleSelected()
+    {
+        // Card 1 requires codex (unavailable), card 2 requires claude-cli (available)
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Needs Codex"] = new("Needs Codex", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>(), PipelineOrder: 1,
+                    Steps: [new WorkflowStep("step", "codex_role")]),
+                ["Needs Claude"] = new("Needs Claude", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>(), PipelineOrder: 1,
+                    Steps: [new WorkflowStep("step", "claude_role")]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["codex_role"] = new("model", "prompt", new List<string>(), Provider: "codex"),
+                ["claude_role"] = new("model", "prompt", new List<string>(), Provider: "claude-cli"),
+            });
+
+        var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli" };
+        var cards = new List<BoardCard>
+        {
+            Card("1", "Needs Codex"),
+            Card("2", "Needs Claude"),
+        };
+
+        var result = CardSelector.SelectNext(cards, config, available);
+
+        Assert.NotNull(result.Selected);
+        Assert.Equal("2", result.Selected!.Id);
+        Assert.Single(result.SkippedDueToProviders);
+        Assert.Equal("1", result.SkippedDueToProviders[0].Card.Id);
+    }
+
+    [Fact]
+    public void AllCardsSkippedByProvider_ReturnsNullWithSkippedList()
+    {
+        var config = MakeConfigWithProviders("codex");
+        var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli" };
+
+        var result = CardSelector.SelectNext(
+            [Card("1", "Ready for Design"), Card("2", "Ready for Design")], config, available);
+
+        Assert.Null(result.Selected);
+        Assert.Equal(2, result.SkippedDueToProviders.Count);
+    }
+
+    [Fact]
+    public void NullAvailableProviders_NoFiltering()
+    {
+        // When availableProviders is null, backward-compatible: no filtering occurs
+        var config = MakeConfigWithProviders("codex");
+
+        var result = CardSelector.SelectNext(
+            [Card("1", "Ready for Design")], config, availableProviders: null);
+
+        Assert.NotNull(result.Selected);
+        Assert.Equal("1", result.Selected!.Id);
+        Assert.Empty(result.SkippedDueToProviders);
+    }
+
+    [Fact]
+    public void SystemMergeState_NoProviderRequirements_AlwaysEligible()
+    {
+        // system_merge states have no steps/gate/optional — always eligible regardless of providers
+        var config = MakeConfigWithMerge();
+        var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli" };
+
+        var result = CardSelector.SelectNext(
+            [Card("1", "Accepted")], config, available);
+
+        Assert.NotNull(result.Selected);
+        Assert.Equal("1", result.Selected!.Id);
+    }
+
+    [Fact]
+    public void GateCheckRequiresUnavailableProvider_CardSkipped()
+    {
+        // Gate check uses a provider that's not available
+        var config = MakeConfigWithProviders(stepProvider: "claude-cli", gateProvider: "codex");
+        var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli" };
+
+        var result = CardSelector.SelectNext(
+            [Card("1", "Ready for Design")], config, available);
+
+        Assert.Null(result.Selected);
+        Assert.Single(result.SkippedDueToProviders);
+        Assert.Contains("codex", result.SkippedDueToProviders[0].MissingProviders);
+    }
+
+    [Fact]
+    public void OptionalStepsRequireUnavailableProvider_CardSkipped()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Ready for Design"] = new("Ready for Design", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>(), PipelineOrder: 1,
+                    Steps: [new WorkflowStep("step", "claude_role")],
+                    OptionalSteps:
+                    [
+                        new OptionalStepDefinition("security_review", "codex_role",
+                            Description: "Security review"),
+                    ]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["claude_role"] = new("model", "prompt", new List<string>(), Provider: "claude-cli"),
+                ["codex_role"] = new("model", "prompt", new List<string>(), Provider: "codex"),
+            });
+
+        var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli" };
+
+        var result = CardSelector.SelectNext(
+            [Card("1", "Ready for Design")], config, available);
+
+        Assert.Null(result.Selected);
+        Assert.Single(result.SkippedDueToProviders);
+        Assert.Contains("codex", result.SkippedDueToProviders[0].MissingProviders);
     }
 }

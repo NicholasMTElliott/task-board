@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -90,6 +91,7 @@ public class PollingRunnerTests
             agentRunner,
             mergeRunner,
             TestConfig,
+            AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             NullLogger<PollingRunner>.Instance);
 
         // Cancel after one cycle has had time to run
@@ -135,6 +137,7 @@ public class PollingRunnerTests
             agentRunner,
             mergeRunner,
             TestConfig,
+            AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             NullLogger<PollingRunner>.Instance);
 
         using var cts = new CancellationTokenSource();
@@ -186,6 +189,7 @@ public class PollingRunnerTests
             agentRunner,
             mergeRunner,
             TestConfig,
+            AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             NullLogger<PollingRunner>.Instance);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -195,5 +199,178 @@ public class PollingRunnerTests
         // The loop survived the exceptions and continued polling
         Assert.True(fetchCount >= 3,
             $"Expected at least 3 fetch attempts (2 failures + 1 success), got {fetchCount}");
+    }
+
+    [Fact]
+    public async Task RunAsync_CardSkippedByProvider_LogsWarning()
+    {
+        // Config where the state requires "codex" but only "claude-cli" is available
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Ready for Design"] = new("Ready for Design", null, "agent_run",
+                    null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["IN_PROGRESS"] = TransitionTarget.ForColumn("Designing"),
+                        ["COMPLETE"]    = TransitionTarget.ForColumn("Designed"),
+                        ["ERROR"]       = TransitionTarget.ForColumn("Error"),
+                    },
+                    PipelineOrder: 1,
+                    Steps: [new WorkflowStep("step1", "codex_role")]),
+                ["Designing"] = new("Designing", null, "in_progress",
+                    null, new Dictionary<string, TransitionTarget>()),
+                ["Designed"] = new("Designed", null, "manual_gate",
+                    null, new Dictionary<string, TransitionTarget>()),
+                ["Error"] = new("Error", null, "holding",
+                    null, new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["codex_role"] = new("codex-model", "You are a coder.", new List<string>(),
+                    Provider: "codex"),
+            }).Normalised();
+
+        var boardClient = Substitute.For<ITaskBoardClient>();
+        boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Returns(Task.FromResult<IReadOnlyList<BoardCard>>(new List<BoardCard>
+            {
+                new("42", "Needs Codex", "body", "Ready for Design"),
+            }));
+
+        var agentRunner = new AgentRunner(
+            boardClient,
+            AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
+            new TaskFileManager(NullLogger<TaskFileManager>.Instance),
+            new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
+            config,
+            new StubCrossReferenceResolver(),
+            new AgentIdentity("Test", "Agent", "TestMachine"),
+            NullLogger<AgentRunner>.Instance);
+
+        var mergeRunner = new MergeRunner(
+            boardClient,
+            new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
+            config,
+            new AgentIdentity("Test", "Agent", "TestMachine"),
+            NullLogger<MergeRunner>.Instance);
+
+        // Resolver only has "claude-cli", not "codex"
+        var resolverWithClaudeOnly = new AgentExecutorResolver(
+            new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["claude-cli"] = new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance),
+            });
+
+        var warningLogger = new FakeLogger<PollingRunner>();
+
+        var pollingRunner = new PollingRunner(
+            boardClient,
+            agentRunner,
+            mergeRunner,
+            config,
+            resolverWithClaudeOnly,
+            warningLogger);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        await pollingRunner.RunAsync(BoardId, Workspace, TimeSpan.FromMilliseconds(50), cts.Token);
+
+        // Card "42" was skipped because "codex" wasn't available — warning should be logged
+        var warnings = warningLogger.Logs
+            .Where(l => l.Level == Microsoft.Extensions.Logging.LogLevel.Warning)
+            .ToList();
+        Assert.Contains(warnings, l => l.Message.Contains("42") && l.Message.Contains("codex"));
+    }
+
+    [Fact]
+    public async Task RunAsync_PassesAvailableProvidersToCardSelector()
+    {
+        // Card requires "codex"; resolver only has "claude-cli" — card is NOT executed
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Needs Codex"] = new("Needs Codex", null, "agent_run",
+                    null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["IN_PROGRESS"] = TransitionTarget.ForColumn("Doing"),
+                        ["COMPLETE"]    = TransitionTarget.ForColumn("Done"),
+                        ["ERROR"]       = TransitionTarget.ForColumn("Error"),
+                    },
+                    PipelineOrder: 1,
+                    Steps: [new WorkflowStep("step", "codex_role")]),
+                ["Doing"] = new("Doing", null, "in_progress",
+                    null, new Dictionary<string, TransitionTarget>()),
+                ["Done"] = new("Done", null, "terminal",
+                    null, new Dictionary<string, TransitionTarget>()),
+                ["Error"] = new("Error", null, "holding",
+                    null, new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["codex_role"] = new("codex-model", "prompt", new List<string>(), Provider: "codex"),
+            }).Normalised();
+
+        var boardClient = Substitute.For<ITaskBoardClient>();
+        boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Returns(Task.FromResult<IReadOnlyList<BoardCard>>(new List<BoardCard>
+            {
+                new("99", "Codex Card", "body", "Needs Codex"),
+            }));
+
+        var agentRunner = new AgentRunner(
+            boardClient,
+            AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
+            new TaskFileManager(NullLogger<TaskFileManager>.Instance),
+            new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
+            config,
+            new StubCrossReferenceResolver(),
+            new AgentIdentity("Test", "Agent", "TestMachine"),
+            NullLogger<AgentRunner>.Instance);
+
+        var mergeRunner = new MergeRunner(
+            boardClient,
+            new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
+            config,
+            new AgentIdentity("Test", "Agent", "TestMachine"),
+            NullLogger<MergeRunner>.Instance);
+
+        var resolverWithClaudeOnly = new AgentExecutorResolver(
+            new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["claude-cli"] = new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance),
+            });
+
+        var pollingRunner = new PollingRunner(
+            boardClient,
+            agentRunner,
+            mergeRunner,
+            config,
+            resolverWithClaudeOnly,
+            NullLogger<PollingRunner>.Instance);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        await pollingRunner.RunAsync(BoardId, Workspace, TimeSpan.FromMilliseconds(50), cts.Token);
+
+        // Card was skipped: MoveCardToColumnAsync should NOT have been called for "Doing"
+        await boardClient.DidNotReceive().MoveCardToColumnAsync("99", "Doing", Arg.Any<CancellationToken>());
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────────────
+
+    private sealed class FakeLogger<T> : ILogger<T>
+    {
+        public List<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Logs { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Logs.Add((logLevel, formatter(state, exception)));
     }
 }

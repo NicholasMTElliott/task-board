@@ -39,4 +39,10 @@ public enum AgentOutcome
 public interface IAgentExecutorResolver
 {
     IAgentExecutor Resolve(string providerKey);
+
+    /// <summary>
+    /// The set of provider keys for which executors are registered.
+    /// Used by CardSelector to determine which states can be executed.
+    /// </summary>
+    IReadOnlySet<string> AvailableProviders { get; }
 }

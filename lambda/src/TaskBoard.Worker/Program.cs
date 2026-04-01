@@ -111,26 +111,41 @@ switch (boardProvider)
 
 // ── 6. Agent executor selection ──────────────────────────────────────────────
 // AGENT_EXECUTOR=stub → all providers mapped to stub (testing/dev)
-// Any other value (or unset) → production mode: each role's provider field drives executor selection
+// Any other value (or unset) → production mode: real providers are auto-detected
 var agentExecutorMode = builder.Configuration["AgentExecutor"]?.ToLowerInvariant() ?? "stub";
 
 // Always register StubAgentExecutor (used in stub mode and tests)
 builder.Services.AddSingleton<StubAgentExecutor>();
 
-if (agentExecutorMode != "stub")
+HashSet<string> detectedProviders;
+if (agentExecutorMode == "stub")
 {
-    // Register real provider executors
-    builder.Services.Configure<ClaudeCliLlmOptions>(builder.Configuration.GetSection(ClaudeCliLlmOptions.SectionName));
-    builder.Services.PostConfigure<ClaudeCliLlmOptions>(opts =>
-    {
-        opts.ExecutablePath = ClaudeCliResolver.Resolve(opts.ExecutablePath);
-    });
-    builder.Services.AddSingleton<ClaudeAgentExecutor>();
+    // Stub mode: all providers map to stub, all considered available
+    detectedProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli", "codex", "stub" };
+}
+else
+{
+    detectedProviders = await PrerequisiteValidator.DetectAvailableProvidersAsync();
 
-    // Extension point: when Codex support is needed, register CodexAgentExecutor here
-    // builder.Services.Configure<CodexCliLlmOptions>(builder.Configuration.GetSection(CodexCliLlmOptions.SectionName));
-    // builder.Services.PostConfigure<CodexCliLlmOptions>(opts => { opts.ExecutablePath = CodexCliResolver.Resolve(opts.ExecutablePath); });
-    // builder.Services.AddSingleton<CodexAgentExecutor>();
+    if (detectedProviders.Contains("claude-cli"))
+    {
+        builder.Services.Configure<ClaudeCliLlmOptions>(builder.Configuration.GetSection(ClaudeCliLlmOptions.SectionName));
+        builder.Services.PostConfigure<ClaudeCliLlmOptions>(opts =>
+        {
+            opts.ExecutablePath = ClaudeCliResolver.Resolve(opts.ExecutablePath);
+        });
+        builder.Services.AddSingleton<ClaudeAgentExecutor>();
+    }
+
+    if (detectedProviders.Contains("codex"))
+    {
+        builder.Services.Configure<CodexCliLlmOptions>(builder.Configuration.GetSection(CodexCliLlmOptions.SectionName));
+        builder.Services.PostConfigure<CodexCliLlmOptions>(opts =>
+        {
+            opts.ExecutablePath = CodexCliResolver.Resolve(opts.ExecutablePath);
+        });
+        builder.Services.AddSingleton<CodexAgentExecutor>();
+    }
 }
 
 builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
@@ -141,11 +156,11 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
             sp.GetRequiredService<StubAgentExecutor>());
     }
 
-    var executors = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
-    {
-        ["claude-cli"] = sp.GetRequiredService<ClaudeAgentExecutor>(),
-        // Extension point: ["codex"] = sp.GetRequiredService<CodexAgentExecutor>(),
-    };
+    var executors = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase);
+    if (detectedProviders.Contains("claude-cli"))
+        executors["claude-cli"] = sp.GetRequiredService<ClaudeAgentExecutor>();
+    if (detectedProviders.Contains("codex"))
+        executors["codex"] = sp.GetRequiredService<CodexAgentExecutor>();
     return new AgentExecutorResolver(executors);
 });
 
@@ -170,6 +185,17 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
 
 // ── 7. Runtime prerequisite validation ───────────────────────────────────────
 {
+    // Warn if AGENT_EXECUTOR is set to a real provider name (now deprecated for provider selection)
+    var rawAgentExec = builder.Configuration["AgentExecutor"];
+    if (rawAgentExec is not null
+        && !string.Equals(rawAgentExec, "stub", StringComparison.OrdinalIgnoreCase))
+    {
+        logger.LogWarning(
+            "AGENT_EXECUTOR is set to '{Value}' but this value is no longer used for provider selection — " +
+            "real providers are now auto-detected. Only 'stub' retains special meaning.",
+            rawAgentExec);
+    }
+
     var config = host.Services.GetRequiredService<WorkflowConfig>();
 
     GitHubProjectsOptions? ghOpts = boardProvider == "github"
@@ -179,17 +205,9 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
         ? host.Services.GetRequiredService<IOptions<TrelloClientOptions>>().Value
         : null;
 
-    string? claudeExePath = agentExecutorMode == "claude-cli"
-        ? host.Services.GetRequiredService<IOptions<ClaudeCliLlmOptions>>().Value.ExecutablePath
-        : null;
-
-    string? codexExePath = agentExecutorMode == "codex"
-        ? host.Services.GetRequiredService<IOptions<CodexCliLlmOptions>>().Value.ExecutablePath
-        : null;
-
     var prereqErrors = await PrerequisiteValidator.ValidateAsync(
-        config, boardProvider, agentExecutorMode,
-        promptBaseDir, claudeExePath, ghOpts, trelloOpts, codexExePath: codexExePath);
+        config, boardProvider, detectedProviders,
+        promptBaseDir, ghOpts, trelloOpts);
 
     if (prereqErrors.Count > 0)
     {
@@ -200,6 +218,8 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
     }
 
     logger.LogInformation("All prerequisites validated successfully");
+    logger.LogInformation("Available AI providers: {Providers}",
+        string.Join(", ", detectedProviders.Where(p => p != "stub").Order()));
 }
 
 logger.LogInformation("Agent identity: {AgentName}", agentIdentity.DisplayName);

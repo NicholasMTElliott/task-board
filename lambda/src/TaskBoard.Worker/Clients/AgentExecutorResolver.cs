@@ -3,6 +3,9 @@ namespace TaskBoard.Worker.Clients;
 public sealed class AgentExecutorResolver(
     IReadOnlyDictionary<string, IAgentExecutor> executors) : IAgentExecutorResolver
 {
+    public IReadOnlySet<string> AvailableProviders { get; } =
+        new HashSet<string>(executors.Keys, StringComparer.OrdinalIgnoreCase);
+
     public IAgentExecutor Resolve(string providerKey)
     {
         if (executors.TryGetValue(providerKey, out var executor))
