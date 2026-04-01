@@ -17,6 +17,7 @@ public static class PrerequisiteValidator
         string? claudeExecutablePath = null,
         GitHubProjectsOptions? githubOptions = null,
         TrelloClientOptions? trelloOptions = null,
+        string? codexExePath = null,
         CancellationToken cancellationToken = default)
     {
         var errors = new List<string>();
@@ -47,6 +48,12 @@ public static class PrerequisiteValidator
             var claudeExe = claudeExecutablePath ?? (OperatingSystem.IsWindows() ? "claude.cmd" : "claude");
             await ValidateCliToolAsync(errors, claudeExe, ["--version"],
                 "Claude CLI is required for claude-cli agent executor", cancellationToken);
+        }
+        else if (string.Equals(agentExecutor, "codex", StringComparison.OrdinalIgnoreCase))
+        {
+            var codexExe = codexExePath ?? (OperatingSystem.IsWindows() ? "codex.cmd" : "codex");
+            await ValidateCliToolAsync(errors, codexExe, ["--version"],
+                "Codex CLI is required for codex agent executor", cancellationToken);
         }
 
         // Prompt file checks
