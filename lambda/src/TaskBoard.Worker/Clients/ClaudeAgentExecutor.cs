@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
@@ -10,40 +9,6 @@ public sealed class ClaudeAgentExecutor(
     ILogger<ClaudeAgentExecutor> logger) : IAgentExecutor
 {
     private readonly ClaudeCliLlmOptions _options = options.Value;
-
-    private const string OutcomeSchema = """
-        {
-          "type": "object",
-          "properties": {
-            "outcome": {
-              "type": "string",
-              "enum": ["COMPLETE", "NEEDS_INFO", "ERROR"]
-            },
-            "detail": {
-              "type": "string"
-            },
-            "questions": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "question": { "type": "string" },
-                  "recommendations": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                  }
-                },
-                "required": ["question"]
-              }
-            },
-            "requestedSteps": {
-              "type": "array",
-              "items": { "type": "string" }
-            }
-          },
-          "required": ["outcome"]
-        }
-        """;
 
     public async Task<AgentResult> ExecuteAsync(
         AgentExecutionContext context, CancellationToken cancellationToken)
@@ -59,11 +24,14 @@ public sealed class ClaudeAgentExecutor(
         var userPrompt = BuildUserPrompt(context, taskFilePath);
 
         logger.LogDebug("Claude CLI command: {FileName} {Args}",
-            _options.ExecutablePath, FormatArgsForLogging(args));
+            _options.ExecutablePath, ProcessRunner.FormatArgsForLogging(args));
 
-        var (exitCode, stdout, stderr) = await RunProcessAsync(
+        var (exitCode, stdout, stderr) = await ProcessRunner.RunProcessAsync(
             _options.ExecutablePath, args, context.WorkspacePath,
-            _options.TimeoutSeconds, cancellationToken, stdinData: userPrompt);
+            _options.TimeoutSeconds, cancellationToken,
+            stdinData: userPrompt,
+            envVarsToRemove: ["CLAUDECODE"],
+            agentName: "Claude agent");
 
         if (exitCode != 0)
         {
@@ -116,46 +84,7 @@ public sealed class ClaudeAgentExecutor(
         sb.AppendLine();
         sb.AppendLine("---");
         sb.AppendLine();
-        sb.AppendLine("## Instructions");
-        sb.AppendLine();
-        sb.AppendLine($"- The target task file is at: {taskFilePath}");
-        sb.AppendLine("- All project tasks are in the .aiboard/tasks/ directory for context.");
-
-        if (context.CommentsFilePath is not null)
-        {
-            sb.AppendLine();
-            sb.AppendLine("## Prior Conversation");
-            sb.AppendLine();
-            sb.AppendLine($"There is a conversation history file for this task at: {context.CommentsFilePath}.");
-            sb.AppendLine();
-            sb.AppendLine("This file has two sections:");
-            sb.AppendLine("- **Reviewer Directives** — Comments from the human project operator. "
-                + "These are AUTHORITATIVE. If a reviewer directive conflicts with any prior agent "
-                + "recommendation or assumption, the reviewer directive takes precedence. "
-                + "Always read and address reviewer directives before proceeding with your task.");
-            sb.AppendLine("- **Agent History** — Output from prior agent runs (design documents, code "
-                + "reviews, test results, gate checks). Use this for context about prior work, "
-                + "but treat it as advisory, not authoritative.");
-            sb.AppendLine();
-            sb.AppendLine("**Read this file before starting work.** It is READ-ONLY — do not modify it.");
-            sb.AppendLine();
-        }
-
-        sb.AppendLine("## Quality Gates");
-        sb.AppendLine();
-        sb.AppendLine("These are mandatory requirements. Do NOT return COMPLETE if any gate fails:");
-        sb.AppendLine("- The project MUST build successfully.");
-        sb.AppendLine("- All existing tests MUST pass.");
-        sb.AppendLine("- New features MUST have test coverage that proves the requirements are met.");
-        sb.AppendLine("- ALL requirements in the ticket description MUST be addressed — both the literal text and the spirit/intent.");
-        sb.AppendLine();
-        sb.AppendLine("## Outcome Rules");
-        sb.AppendLine();
-        sb.AppendLine("- **COMPLETE**: All quality gates pass and the work is fully done. Use this ONLY when there are zero blocking issues.");
-        sb.AppendLine("- **NEEDS_INFO**: Any quality gate fails, any requirement is unmet, or you need answers before proceeding. Describe each issue as a question in the questions array with recommendations for resolution.");
-        sb.AppendLine("- **ERROR**: Something went wrong that prevents you from doing the work at all (e.g. missing files, broken environment). Describe the issue in the detail field.");
-        sb.AppendLine("- Always include a summary in the detail field of your structured response, regardless of outcome. This summary is posted as a comment on the ticket.");
-        sb.AppendLine("- Format the detail field as GitHub-flavored markdown. Use headings, tables, bullet points, and code blocks as appropriate. This content is rendered directly on a GitHub issue.");
+        PromptBuilder.AppendSharedSections(sb, context, taskFilePath);
         return sb.ToString();
     }
 
@@ -187,7 +116,7 @@ public sealed class ClaudeAgentExecutor(
 
         args.AddRange([
             "--no-session-persistence",
-            "--json-schema", MinifyJson(OutcomeSchema),
+            "--json-schema", MinifyJson(AgentSchemas.OutcomeSchema),
             "--append-system-prompt-file", context.SystemPromptFilePath,
         ]);
 
@@ -462,105 +391,9 @@ public sealed class ClaudeAgentExecutor(
         return inner.Trim();
     }
 
-    internal static string FormatArgsForLogging(string[] args)
-    {
-        var sb = new StringBuilder();
-        for (int i = 0; i < args.Length; i++)
-        {
-            if (i > 0) sb.Append(' ');
-            var arg = args[i];
-            if (arg.Length > 2000)
-                arg = arg[..2000] + "...[truncated]";
-            sb.Append(arg.Contains(' ') ? $"\"{arg}\"" : arg);
-        }
-        return sb.ToString();
-    }
-
-private static string MinifyJson(string json)
+    private static string MinifyJson(string json)
     {
         using var doc = JsonDocument.Parse(json);
         return JsonSerializer.Serialize(doc.RootElement);
-    }
-
-    private static async Task<(int ExitCode, string Stdout, string Stderr)> RunProcessAsync(
-        string executable, string[] argumentList, string workingDirectory,
-        int timeoutSeconds, CancellationToken cancellationToken, string? stdinData = null)
-    {
-        using var process = new Process();
-        var startInfo = new ProcessStartInfo
-        {
-            WorkingDirectory = workingDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = stdinData is not null,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-
-        startInfo.FileName = executable;
-        foreach (var arg in argumentList)
-            startInfo.ArgumentList.Add(arg);
-
-        // Clear env vars that prevent Claude CLI from running as a subprocess
-        startInfo.Environment.Remove("CLAUDECODE");
-
-        process.StartInfo = startInfo;
-
-        var stdoutBuf = new StringBuilder();
-        var stderrBuf = new StringBuilder();
-
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) stdoutBuf.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderrBuf.AppendLine(e.Data); };
-
-        process.Start();
-
-        // MUST begin async output reads BEFORE writing to stdin.
-        // Otherwise, if stdinData is large enough to fill the OS pipe buffer (~4 KB),
-        // WriteAsync blocks waiting for the child to consume stdin — but the child
-        // may be blocked writing to stdout (which nobody is reading yet) → deadlock.
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-
-        // Pipe prompt via stdin to avoid Windows command-line length limits
-        if (stdinData is not null)
-        {
-            try
-            {
-                await process.StandardInput.WriteAsync(stdinData);
-                await process.StandardInput.FlushAsync();
-                process.StandardInput.Close();
-            }
-            catch (IOException ex)
-            {
-                // The child process exited or closed its stdin before we finished writing.
-                // Wait briefly for the process to exit so we can capture its exit code and stderr.
-                using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                try { await process.WaitForExitAsync(exitCts.Token); } catch { /* best effort */ }
-
-                var exitInfo = process.HasExited ? $"exit code {process.ExitCode}" : "still running";
-                var stderrSnapshot = stderrBuf.ToString();
-                throw new InvalidOperationException(
-                    $"Failed to write prompt to subprocess stdin ({exitInfo}). " +
-                    $"Stderr: {stderrSnapshot[..Math.Min(1000, stderrSnapshot.Length)]}".TrimEnd(),
-                    ex);
-            }
-        }
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-
-        try
-        {
-            await process.WaitForExitAsync(timeoutCts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
-            throw new TimeoutException(
-                $"Claude agent timed out after {timeoutSeconds}s. " +
-                $"Partial stderr: {stderrBuf.ToString()[..Math.Min(500, stderrBuf.Length)]}");
-        }
-
-        return (process.ExitCode, stdoutBuf.ToString(), stderrBuf.ToString());
     }
 }
