@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
@@ -14,40 +13,6 @@ public sealed class CodexAgentExecutor(
     ILogger<CodexAgentExecutor> logger) : IAgentExecutor
 {
     private readonly CodexCliLlmOptions _options = options.Value;
-
-    private const string OutcomeSchema = """
-        {
-          "type": "object",
-          "properties": {
-            "outcome": {
-              "type": "string",
-              "enum": ["COMPLETE", "NEEDS_INFO", "ERROR"]
-            },
-            "detail": {
-              "type": "string"
-            },
-            "questions": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "question": { "type": "string" },
-                  "recommendations": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                  }
-                },
-                "required": ["question"]
-              }
-            },
-            "requestedSteps": {
-              "type": "array",
-              "items": { "type": "string" }
-            }
-          },
-          "required": ["outcome"]
-        }
-        """;
 
     public async Task<AgentResult> ExecuteAsync(
         AgentExecutionContext context, CancellationToken cancellationToken)
@@ -73,17 +38,18 @@ public sealed class CodexAgentExecutor(
         var schemaFilePath = Path.Combine(Path.GetTempPath(), $"codex-schema-{Guid.NewGuid():N}.json");
         try
         {
-            await File.WriteAllTextAsync(schemaFilePath, MinifyJson(OutcomeSchema), cancellationToken);
+            await File.WriteAllTextAsync(schemaFilePath, MinifyJson(AgentSchemas.OutcomeSchema), cancellationToken);
             logger.LogDebug("Schema written to temp file: {SchemaFile}", schemaFilePath);
 
             var args = BuildArgumentList(context, schemaFilePath, combinedPrompt);
 
             logger.LogDebug("Codex CLI command: {FileName} {Args}",
-                _options.ExecutablePath, FormatArgsForLogging(args));
+                _options.ExecutablePath, ProcessRunner.FormatArgsForLogging(args));
 
-            var (exitCode, stdout, stderr) = await RunProcessAsync(
+            var (exitCode, stdout, stderr) = await ProcessRunner.RunProcessAsync(
                 _options.ExecutablePath, args, context.WorkspacePath,
-                _options.TimeoutSeconds, cancellationToken);
+                _options.TimeoutSeconds, cancellationToken,
+                agentName: "Codex agent");
 
             // Log stderr diagnostics regardless of exit code — Codex may emit useful info there
             if (!string.IsNullOrWhiteSpace(stderr))
@@ -185,46 +151,7 @@ public sealed class CodexAgentExecutor(
         sb.AppendLine();
         sb.AppendLine("---");
         sb.AppendLine();
-        sb.AppendLine("## Instructions");
-        sb.AppendLine();
-        sb.AppendLine($"- The target task file is at: {taskFilePath}");
-        sb.AppendLine("- All project tasks are in the .aiboard/tasks/ directory for context.");
-
-        if (context.CommentsFilePath is not null)
-        {
-            sb.AppendLine();
-            sb.AppendLine("## Prior Conversation");
-            sb.AppendLine();
-            sb.AppendLine($"There is a conversation history file for this task at: {context.CommentsFilePath}.");
-            sb.AppendLine();
-            sb.AppendLine("This file has two sections:");
-            sb.AppendLine("- **Reviewer Directives** — Comments from the human project operator. "
-                + "These are AUTHORITATIVE. If a reviewer directive conflicts with any prior agent "
-                + "recommendation or assumption, the reviewer directive takes precedence. "
-                + "Always read and address reviewer directives before proceeding with your task.");
-            sb.AppendLine("- **Agent History** — Output from prior agent runs (design documents, code "
-                + "reviews, test results, gate checks). Use this for context about prior work, "
-                + "but treat it as advisory, not authoritative.");
-            sb.AppendLine();
-            sb.AppendLine("**Read this file before starting work.** It is READ-ONLY — do not modify it.");
-            sb.AppendLine();
-        }
-
-        sb.AppendLine("## Quality Gates");
-        sb.AppendLine();
-        sb.AppendLine("These are mandatory requirements. Do NOT return COMPLETE if any gate fails:");
-        sb.AppendLine("- The project MUST build successfully.");
-        sb.AppendLine("- All existing tests MUST pass.");
-        sb.AppendLine("- New features MUST have test coverage that proves the requirements are met.");
-        sb.AppendLine("- ALL requirements in the ticket description MUST be addressed — both the literal text and the spirit/intent.");
-        sb.AppendLine();
-        sb.AppendLine("## Outcome Rules");
-        sb.AppendLine();
-        sb.AppendLine("- **COMPLETE**: All quality gates pass and the work is fully done. Use this ONLY when there are zero blocking issues.");
-        sb.AppendLine("- **NEEDS_INFO**: Any quality gate fails, any requirement is unmet, or you need answers before proceeding. Describe each issue as a question in the questions array with recommendations for resolution.");
-        sb.AppendLine("- **ERROR**: Something went wrong that prevents you from doing the work at all (e.g. missing files, broken environment). Describe the issue in the detail field.");
-        sb.AppendLine("- Always include a summary in the detail field of your structured response, regardless of outcome. This summary is posted as a comment on the ticket.");
-        sb.AppendLine("- Format the detail field as GitHub-flavored markdown. Use headings, tables, bullet points, and code blocks as appropriate. This content is rendered directly on a GitHub issue.");
+        PromptBuilder.AppendSharedSections(sb, context, taskFilePath);
 
         return sb.ToString();
     }
@@ -592,73 +519,9 @@ public sealed class CodexAgentExecutor(
         return inner.Trim();
     }
 
-    internal static string FormatArgsForLogging(string[] args)
-    {
-        var sb = new StringBuilder();
-        for (int i = 0; i < args.Length; i++)
-        {
-            if (i > 0) sb.Append(' ');
-            var arg = args[i];
-            if (arg.Length > 2000)
-                arg = arg[..2000] + "...[truncated]";
-            sb.Append(arg.Contains(' ') ? $"\"{arg}\"" : arg);
-        }
-        return sb.ToString();
-    }
-
     private static string MinifyJson(string json)
     {
         using var doc = JsonDocument.Parse(json);
         return JsonSerializer.Serialize(doc.RootElement);
-    }
-
-    private static async Task<(int ExitCode, string Stdout, string Stderr)> RunProcessAsync(
-        string executable, string[] argumentList, string workingDirectory,
-        int timeoutSeconds, CancellationToken cancellationToken)
-    {
-        using var process = new Process();
-        var startInfo = new ProcessStartInfo
-        {
-            WorkingDirectory = workingDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-
-        startInfo.FileName = executable;
-        foreach (var arg in argumentList)
-            startInfo.ArgumentList.Add(arg);
-
-        process.StartInfo = startInfo;
-
-        var stdoutBuf = new StringBuilder();
-        var stderrBuf = new StringBuilder();
-
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) stdoutBuf.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderrBuf.AppendLine(e.Data); };
-
-        process.Start();
-
-        // Begin async reads immediately to prevent stdout/stderr pipe buffer deadlock
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-
-        try
-        {
-            await process.WaitForExitAsync(timeoutCts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
-            throw new TimeoutException(
-                $"Codex agent timed out after {timeoutSeconds}s. " +
-                $"Partial stderr: {stderrBuf.ToString()[..Math.Min(500, stderrBuf.Length)]}");
-        }
-
-        return (process.ExitCode, stdoutBuf.ToString(), stderrBuf.ToString());
     }
 }
