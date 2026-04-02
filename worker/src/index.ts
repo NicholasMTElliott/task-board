@@ -73,6 +73,12 @@ function normalizeMessageId(messageId: unknown): number {
   return normalized;
 }
 
+function validateQueueName(queueName: string): void {
+  if (!/^[a-zA-Z0-9_-]+$/.test(queueName)) {
+    throw new Error(`Invalid queue name: ${queueName}`);
+  }
+}
+
 // ── Ping enqueueing (shared across all providers) ────────────────────────────
 
 export const enqueuePing = async (
@@ -80,6 +86,7 @@ export const enqueuePing = async (
   queueName: string,
   source: string
 ): Promise<number> => {
+  validateQueueName(queueName);
   const ping = JSON.stringify({
     source,
     ts: new Date().toISOString()
@@ -101,6 +108,7 @@ export const enqueueWebhookEvent = async (
   cardId: string | null,
   payload: TrelloWebhookPayload
 ): Promise<number> => {
+  validateQueueName(queueName);
   const queuePayload = {
     actionId,
     cardId,
@@ -156,7 +164,7 @@ export const verifyGitHubWebhook = async (
   signatureHeader: string | null,
   secret: string
 ): Promise<boolean> => {
-  if (!signatureHeader) return false;
+  if (!signatureHeader || !secret) return false;
 
   // GitHub sends "sha256=<hex>"
   const prefix = "sha256=";
@@ -315,7 +323,7 @@ async function handleGitHubWebhook(
   deps: WebhookDependencies
 ): Promise<Response> {
   const secret = env.GITHUB_WEBHOOK_SECRET?.trim();
-  if (!secret) {
+  if (!secret || secret.length === 0) {
     return jsonResponse(500, { error: "GITHUB_WEBHOOK_SECRET not configured" });
   }
 
@@ -337,13 +345,31 @@ async function handleGitHubWebhook(
     return jsonResponse(200, { accepted: true, event: "ping", message: "Webhook registered" });
   }
 
-  // Only process relevant event types
-  const relevantEvents = new Set(["projects_v2_item", "issues"]);
-  if (!eventType || !relevantEvents.has(eventType)) {
+  // Only process project item status changes — the primary signal that a card moved columns.
+  // "issues" events are intentionally excluded: they fire for every label/assignee/comment change
+  // which would generate excessive pings. The board re-query catches issue-level changes.
+  if (eventType !== "projects_v2_item") {
     console.log(JSON.stringify({
       message: "GitHub webhook ignored — irrelevant event", eventType
     }));
     return jsonResponse(200, { accepted: false, reason: "irrelevant_event", eventType });
+  }
+
+  // Filter by action — only "edited" (field value changed, e.g. status) triggers a ping.
+  // "created"/"deleted"/"archived"/"restored" are less relevant for column-move detection.
+  let body: Record<string, unknown>;
+  try {
+    body = JSON.parse(bodyText) as Record<string, unknown>;
+  } catch {
+    return jsonResponse(400, { error: "Invalid JSON payload" });
+  }
+
+  const action = typeof body.action === "string" ? body.action : null;
+  if (action !== "edited") {
+    console.log(JSON.stringify({
+      message: "GitHub webhook ignored — non-edit action", eventType, action
+    }));
+    return jsonResponse(200, { accepted: false, reason: "non_edit_action", eventType, action });
   }
 
   const sql = neon(env.NEON_DATABASE_URL) as SqlFunction;

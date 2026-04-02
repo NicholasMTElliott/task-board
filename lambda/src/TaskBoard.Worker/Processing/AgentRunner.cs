@@ -625,19 +625,21 @@ public sealed partial class AgentRunner(
         // Append optional step catalog if configured
         if (state.OptionalSteps is { Count: > 0 })
         {
-            gatePrompt += "\n\n## Available Optional Review Steps\n\n"
-                + "The following specialist review steps are available. Request any that are clearly "
-                + "warranted by the changes above. Only request steps whose trigger criteria match.\n\n"
-                + "| Step Name | Description | When to Request |\n"
-                + "|-----------|-------------|----------------|\n";
+            var sb = new StringBuilder(gatePrompt);
+            sb.AppendLine("\n\n## Available Optional Review Steps\n");
+            sb.AppendLine("The following specialist review steps are available. Request any that are clearly "
+                + "warranted by the changes above. Only request steps whose trigger criteria match.\n");
+            sb.AppendLine("| Step Name | Description | When to Request |");
+            sb.AppendLine("|-----------|-------------|----------------|");
 
             foreach (var opt in state.OptionalSteps)
             {
-                gatePrompt += $"| `{opt.Name}` | {opt.Description} | {opt.Triggers} |\n";
+                sb.AppendLine($"| `{opt.Name}` | {opt.Description} | {opt.Triggers} |");
             }
 
-            gatePrompt += "\nTo request optional steps, include a `requestedSteps` array in your output "
-                + "with the step names. You may request steps alongside a COMPLETE verdict.\n";
+            sb.AppendLine("\nTo request optional steps, include a `requestedSteps` array in your output "
+                + "with the step names. You may request steps alongside a COMPLETE verdict.");
+            gatePrompt = sb.ToString();
         }
 
         // Resolve system prompt

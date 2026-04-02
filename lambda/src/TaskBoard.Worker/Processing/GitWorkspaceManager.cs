@@ -357,6 +357,15 @@ public sealed class GitWorkspaceManager(
         {
             return false;
         }
+        catch (GitOperationException ex)
+        {
+            // Unexpected exit code (e.g., 128 for invalid ref, network error, corrupted repo).
+            // Safe default: treat as "not ancestor" so the caller doesn't assume the merge happened.
+            logger.LogWarning(ex,
+                "IsAncestorAsync: unexpected git exit code {ExitCode} for {Ancestor} -> {Descendant}",
+                ex.ExitCode, potentialAncestor, descendant);
+            return false;
+        }
     }
 
     public async Task DeleteRemoteBranchAsync(
@@ -408,6 +417,13 @@ public sealed class GitWorkspaceManager(
             ex.Message.Contains("fetch first", StringComparison.OrdinalIgnoreCase))
         {
             return PushStatus.NonFastForward;
+        }
+        catch (GitOperationException ex)
+        {
+            // Non-retryable push error (auth, repo not found, network, etc.)
+            // Log and rethrow so the caller (MergeRunner) can handle it as a fatal error.
+            logger.LogError(ex, "Push failed with unexpected error for {LocalRef} -> {RemoteRef}", localRef, remoteRef);
+            throw;
         }
     }
 

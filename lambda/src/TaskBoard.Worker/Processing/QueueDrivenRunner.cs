@@ -31,7 +31,7 @@ public sealed class QueueDrivenRunner(
     {
         var options = pgmqOptions.Value;
         var maxConcurrent = options.MaxConcurrentAgents;
-        var semaphore = maxConcurrent > 0 ? new SemaphoreSlim(maxConcurrent) : null;
+        using var semaphore = maxConcurrent > 0 ? new SemaphoreSlim(maxConcurrent) : null;
 
         logger.LogInformation(
             "Queue-driven runner started. Queue={Queue}, MaxConcurrent={MaxConcurrent}, FallbackInterval={FallbackSec}s",
@@ -47,12 +47,23 @@ public sealed class QueueDrivenRunner(
 
                 if (pings.Count > 0)
                 {
-                    // Archive all pings — they're just notifications
+                    // Archive all pings — they're just notifications.
+                    // If archiving fails, the ping reappears after visibility timeout.
+                    // This is harmless (claiming prevents duplicate work) but wastes an API call,
+                    // so we log failures and continue rather than retrying.
+                    var archiveFailures = 0;
                     foreach (var ping in pings)
                     {
                         try { await pingQueue.ArchivePingAsync(ping.MessageId, cancellationToken); }
-                        catch (Exception ex) { logger.LogWarning(ex, "Failed to archive ping {MsgId}", ping.MessageId); }
+                        catch (Exception ex)
+                        {
+                            archiveFailures++;
+                            logger.LogWarning(ex, "Failed to archive ping {MsgId}", ping.MessageId);
+                        }
                     }
+                    if (archiveFailures > 0)
+                        logger.LogWarning("Failed to archive {FailCount}/{Total} pings — they will reappear after visibility timeout",
+                            archiveFailures, pings.Count);
 
                     logger.LogInformation("Received {Count} ping(s), fetching board state", pings.Count);
                     await ProcessBoardAsync(boardId, workspacePath, semaphore, cancellationToken);
