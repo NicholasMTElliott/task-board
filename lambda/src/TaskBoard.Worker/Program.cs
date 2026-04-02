@@ -307,7 +307,7 @@ if (mode == "polling")
 
     var pollIntervalStr = builder.Configuration["PollIntervalSeconds"];
     var pollInterval = TimeSpan.FromSeconds(
-        int.TryParse(pollIntervalStr, out var secs) ? secs : 60);
+        int.TryParse(pollIntervalStr, out var secs) ? secs : 120);
 
     // Validate polling-specific config requirements
     var pollingErrors = WorkflowConfigValidator.Validate(

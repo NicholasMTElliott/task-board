@@ -4,10 +4,10 @@ namespace TaskBoard.Worker.Tests;
 
 public class CodexAgentExecutorTests
 {
-    private static CodexAgentExecutor CreateExecutor(string approvalPolicy = "auto-edit")
+    private static CodexAgentExecutor CreateExecutor(bool fullAuto = true, string? sandbox = null)
     {
         var options = Microsoft.Extensions.Options.Options.Create(
-            new CodexCliLlmOptions { ApprovalPolicy = approvalPolicy });
+            new CodexCliLlmOptions { FullAuto = fullAuto, Sandbox = sandbox });
         return new CodexAgentExecutor(options,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<CodexAgentExecutor>.Instance);
     }
@@ -35,7 +35,7 @@ public class CodexAgentExecutorTests
     public void BuildArgumentList_StartsWithExecSubcommand()
     {
         var executor = CreateExecutor();
-        var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json", "the prompt");
+        var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json");
 
         Assert.Equal("exec", args[0]);
     }
@@ -44,7 +44,7 @@ public class CodexAgentExecutorTests
     public void BuildArgumentList_ContainsModelFlag()
     {
         var executor = CreateExecutor();
-        var args = executor.BuildArgumentList(CreateContext(model: "my-model"), "/tmp/schema.json", "the prompt");
+        var args = executor.BuildArgumentList(CreateContext(model: "my-model"), "/tmp/schema.json");
 
         var modelIndex = Array.IndexOf(args, "--model");
         Assert.True(modelIndex >= 0, "Expected --model flag");
@@ -55,7 +55,7 @@ public class CodexAgentExecutorTests
     public void BuildArgumentList_ContainsJsonFlag()
     {
         var executor = CreateExecutor();
-        var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json", "the prompt");
+        var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json");
 
         Assert.Contains("--json", args);
     }
@@ -64,7 +64,7 @@ public class CodexAgentExecutorTests
     public void BuildArgumentList_ContainsOutputSchemaFlag()
     {
         var executor = CreateExecutor();
-        var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json", "the prompt");
+        var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json");
 
         var idx = Array.IndexOf(args, "--output-schema");
         Assert.True(idx >= 0, "Expected --output-schema flag");
@@ -72,46 +72,52 @@ public class CodexAgentExecutorTests
     }
 
     [Fact]
-    public void BuildArgumentList_ContainsApprovalPolicyFlag()
+    public void BuildArgumentList_FullAutoEnabled_ContainsFullAutoFlag()
     {
-        var executor = CreateExecutor(approvalPolicy: "auto-edit");
-        var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json", "the prompt");
+        var executor = CreateExecutor(fullAuto: true);
+        var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json");
 
-        var idx = Array.IndexOf(args, "--approval-policy");
-        Assert.True(idx >= 0, "Expected --approval-policy flag");
-        Assert.Equal("auto-edit", args[idx + 1]);
+        Assert.Contains("--full-auto", args);
     }
 
     [Fact]
-    public void BuildArgumentList_ApprovalPolicyOverrideViaProviderParams()
+    public void BuildArgumentList_FullAutoDisabled_DoesNotContainFullAutoFlag()
     {
-        var executor = CreateExecutor(approvalPolicy: "auto-edit");
+        var executor = CreateExecutor(fullAuto: false);
+        var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json");
+
+        Assert.DoesNotContain("--full-auto", args);
+    }
+
+    [Fact]
+    public void BuildArgumentList_SandboxOverrideViaProviderParams()
+    {
+        var executor = CreateExecutor(fullAuto: false);
         var context = CreateContext(providerParams: new Dictionary<string, string>
         {
-            ["approvalPolicy"] = "full-auto"
+            ["sandbox"] = "workspace-write"
         });
-        var args = executor.BuildArgumentList(context, "/tmp/schema.json", "the prompt");
+        var args = executor.BuildArgumentList(context, "/tmp/schema.json");
 
-        var idx = Array.IndexOf(args, "--approval-policy");
-        Assert.True(idx >= 0);
-        Assert.Equal("full-auto", args[idx + 1]);
+        var idx = Array.IndexOf(args, "--sandbox");
+        Assert.True(idx >= 0, "Expected --sandbox flag");
+        Assert.Equal("workspace-write", args[idx + 1]);
     }
 
     [Fact]
-    public void BuildArgumentList_PromptIsLastArg()
+    public void BuildArgumentList_StdinIndicatorIsLastArg()
     {
         var executor = CreateExecutor();
-        var prompt = "do the task";
-        var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json", prompt);
+        var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json");
 
-        Assert.Equal(prompt, args[^1]);
+        Assert.Equal("-", args[^1]);
     }
 
     [Fact]
     public void BuildArgumentList_DoesNotContainClaudeSpecificFlags()
     {
         var executor = CreateExecutor();
-        var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json", "the prompt");
+        var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json");
 
         Assert.DoesNotContain("--print", args);
         Assert.DoesNotContain("--output-format", args);

@@ -598,6 +598,15 @@ public sealed class GitHubProjectsClient(
 
         if (process.ExitCode != 0)
         {
+            if (stderr.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+                || stderr.Contains("abuse detection", StringComparison.OrdinalIgnoreCase)
+                || stderr.Contains("secondary rate", StringComparison.OrdinalIgnoreCase)
+                || stderr.Contains("HTTP 429", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new RateLimitException(
+                    $"GitHub API rate limit hit. gh exited with code {process.ExitCode}. stderr: {stderr}");
+            }
+
             throw new InvalidOperationException(
                 $"gh exited with code {process.ExitCode}. stderr: {stderr}");
         }
