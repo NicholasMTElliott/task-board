@@ -20,7 +20,9 @@ public class TrelloClientTests
     {
         var opts = options ?? DefaultOptions;
         var handler = new MockHttpMessageHandler();
-        var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.trello.com") };
+        // Wire TrelloAuthHandler into the pipeline so auth params are appended (matching production)
+        var authHandler = new TrelloClient.TrelloAuthHandler(opts) { InnerHandler = handler };
+        var httpClient = new HttpClient(authHandler) { BaseAddress = new Uri("https://api.trello.com") };
         var client = new TrelloClient(httpClient, Options.Create(opts), NullLogger<TrelloClient>.Instance);
         return (client, handler);
     }
@@ -184,6 +186,9 @@ public class TrelloClientTests
     public async Task UpsertComment_SearchFails_Throws()
     {
         var (sut, handler) = CreateSut();
+        // 500 is transient — retry helper will retry 2 more times (3 total)
+        handler.EnqueueResponse(HttpStatusCode.InternalServerError, "server error");
+        handler.EnqueueResponse(HttpStatusCode.InternalServerError, "server error");
         handler.EnqueueResponse(HttpStatusCode.InternalServerError, "server error");
 
         var ex = await Assert.ThrowsAsync<TrelloApiException>(
