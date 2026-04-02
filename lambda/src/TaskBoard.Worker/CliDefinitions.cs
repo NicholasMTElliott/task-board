@@ -99,7 +99,7 @@ internal static class CliDefinitions
             ("--board-id <id>",           "Board identifier / project number",                 null),
             ("--workspace <path>",        "Agent workspace / repository path",                 null),
             ("--worktree-base <path>",    "Base path for git worktrees",                       null),
-            ("--poll-interval <secs>",    "Polling interval in seconds",                       "60"),
+            ("--poll-interval <secs>",    "Base polling interval in seconds (adaptive backoff scales up on idle/error)", "120"),
         ], pad);
 
         WriteSection("GitHub Projects", [

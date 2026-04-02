@@ -9,9 +9,15 @@ public sealed class CodexCliLlmOptions
     public int TimeoutSeconds { get; init; } = 900;
 
     /// <summary>
-    /// Approval policy passed to codex --approval-policy.
-    /// "auto-edit" approves all file edits without prompting.
-    /// "full-auto" also approves command execution.
+    /// When true, passes --full-auto to codex exec (workspace-write sandbox, on-request approvals).
+    /// When false, codex runs in its default read-only mode.
     /// </summary>
-    public string ApprovalPolicy { get; init; } = "auto-edit";
+    public bool FullAuto { get; init; } = true;
+
+    /// <summary>
+    /// Sandbox policy passed to codex --sandbox.
+    /// Valid values: "read-only", "workspace-write", "danger-full-access".
+    /// Null means use the codex default (or the --full-auto preset).
+    /// </summary>
+    public string? Sandbox { get; init; }
 }

@@ -474,7 +474,8 @@
       "sections": ["Design Review Summary", "Technical Design", "Decisions", "Implementation"]
     },
     "qa": {
-      "model": "claude-opus-4-6",
+      "provider": "codex",
+      "model": "gpt-5.4",
       "systemPromptFile": "prompts/qa.md",
       "sections": ["Test Plan", "Test Results"]
     },
@@ -484,9 +485,10 @@
       "sections": ["Technical Design", "Decisions", "Implementation"]
     },
     "code_reviewer": {
-      "model": "claude-opus-4-6",
+      "model": "gpt-5.4",
       "systemPromptFile": "prompts/code_reviewer.md",
-      "sections": []
+      "sections": [],
+      "provider": "codex"
     },
     "merge_resolver": {
       "model": "claude-sonnet-4-6",

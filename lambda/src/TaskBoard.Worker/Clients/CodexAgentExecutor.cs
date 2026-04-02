@@ -26,29 +26,24 @@ public sealed class CodexAgentExecutor(
         var combinedPrompt = await BuildCombinedPromptAsync(context, cancellationToken);
 
         logger.LogDebug("Combined prompt length: {Length} chars", combinedPrompt.Length);
-        if (combinedPrompt.Length > 20_000)
-        {
-            logger.LogWarning(
-                "Combined prompt is {Length} chars — this may approach Windows CreateProcess limits (~32,767). " +
-                "Consider reducing system prompt or task prompt length.",
-                combinedPrompt.Length);
-        }
 
         // Write schema to temp file (Codex uses --output-schema <filepath>)
         var schemaFilePath = Path.Combine(Path.GetTempPath(), $"codex-schema-{Guid.NewGuid():N}.json");
         try
         {
-            await File.WriteAllTextAsync(schemaFilePath, MinifyJson(AgentSchemas.OutcomeSchema), cancellationToken);
+            await File.WriteAllTextAsync(schemaFilePath, MinifyJson(AgentSchemas.OutcomeSchemaOpenAI), cancellationToken);
             logger.LogDebug("Schema written to temp file: {SchemaFile}", schemaFilePath);
 
-            var args = BuildArgumentList(context, schemaFilePath, combinedPrompt);
+            var args = BuildArgumentList(context, schemaFilePath);
 
             logger.LogDebug("Codex CLI command: {FileName} {Args}",
                 _options.ExecutablePath, ProcessRunner.FormatArgsForLogging(args));
 
+            // Pipe prompt via stdin ("-" arg) to avoid Windows command-line length limits
             var (exitCode, stdout, stderr) = await ProcessRunner.RunProcessAsync(
                 _options.ExecutablePath, args, context.WorkspacePath,
                 _options.TimeoutSeconds, cancellationToken,
+                stdinData: combinedPrompt,
                 agentName: "Codex agent");
 
             // Log stderr diagnostics regardless of exit code — Codex may emit useful info there
@@ -157,10 +152,10 @@ public sealed class CodexAgentExecutor(
     }
 
     internal string[] BuildArgumentList(
-        AgentExecutionContext context, string schemaFilePath, string combinedPrompt)
+        AgentExecutionContext context, string schemaFilePath)
     {
-        // codex exec [options] "<prompt>"
-        // Flags must come before the prompt argument.
+        // codex exec [options] -
+        // "-" tells codex to read the prompt from stdin (avoids Windows command-line length limits).
         var args = new List<string> { "exec" };
 
         // Model selection
@@ -175,17 +170,29 @@ public sealed class CodexAgentExecutor(
         // Schema file for structured output validation
         args.AddRange(["--output-schema", schemaFilePath]);
 
-        // Approval policy: auto-approve edits without human prompting
-        // Use providerParams override if provided, else global default
-        var approvalPolicy = context.ProviderParams?.TryGetValue("approvalPolicy", out var ap) == true
-            ? ap
-            : _options.ApprovalPolicy;
-        args.AddRange(["--approval-policy", approvalPolicy]);
+        // Automation preset: --full-auto enables workspace-write sandbox + on-request approvals.
+        // providerParams can override via "fullAuto" (truthy string) or "sandbox" (explicit policy).
+        var useFullAuto = context.ProviderParams?.TryGetValue("fullAuto", out var fa) == true
+            ? string.Equals(fa, "true", StringComparison.OrdinalIgnoreCase)
+            : _options.FullAuto;
 
-        // The task/prompt — passed as final positional argument
-        // Note: .NET ProcessStartInfo.ArgumentList bypasses cmd.exe quoting (~8KB limit does not apply);
-        // Windows CreateProcess limit is ~32KB. Log a warning if the prompt is very large.
-        args.Add(combinedPrompt);
+        if (useFullAuto)
+        {
+            args.Add("--full-auto");
+        }
+
+        // Explicit sandbox policy overrides --full-auto's default sandbox level
+        var sandbox = context.ProviderParams?.TryGetValue("sandbox", out var sb) == true
+            ? sb
+            : _options.Sandbox;
+
+        if (!string.IsNullOrWhiteSpace(sandbox))
+        {
+            args.AddRange(["--sandbox", sandbox]);
+        }
+
+        // Read prompt from stdin
+        args.Add("-");
 
         return args.ToArray();
     }
