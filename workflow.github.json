@@ -165,7 +165,8 @@
       "gitBehavior": "commit_and_push",
       "includeInAgentContext": true,
       "providerParams": {
-        "effort": "medium"
+        "effort": "medium",
+        "sandbox": "danger-full-access"
       },
       "steps": [
         {
