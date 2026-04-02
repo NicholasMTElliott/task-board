@@ -116,7 +116,7 @@ public sealed class ClaudeAgentExecutor(
 
         args.AddRange([
             "--no-session-persistence",
-            "--json-schema", MinifyJson(AgentSchemas.OutcomeSchema),
+            "--json-schema", AgentOutputParser.MinifyJson(AgentSchemas.OutcomeSchema),
             "--append-system-prompt-file", context.SystemPromptFilePath,
         ]);
 
@@ -137,38 +137,7 @@ public sealed class ClaudeAgentExecutor(
     }
 
     internal static AgentResult ParseResult(string stdout)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(stdout);
-            var root = doc.RootElement;
-
-            // Try structured_output first (Claude CLI --output-format json envelope)
-            if (root.TryGetProperty("structured_output", out var structured)
-                && structured.ValueKind == JsonValueKind.Object
-                && structured.TryGetProperty("outcome", out var structuredOutcome))
-            {
-                var outcome = ParseOutcomeString(structuredOutcome.GetString());
-                var detail = structured.TryGetProperty("detail", out var d) ? d.GetString() : null;
-                var questions = ParseQuestions(structured);
-                var requestedSteps = ParseRequestedSteps(structured);
-                return new AgentResult(outcome, detail, questions, null, requestedSteps);
-            }
-
-            // Try result field
-            if (root.TryGetProperty("result", out var result))
-            {
-                var resultText = result.GetString() ?? "";
-                return new AgentResult(TryParseOutcomeFromText(resultText));
-            }
-        }
-        catch (JsonException)
-        {
-            // Raw text output
-        }
-
-        return new AgentResult(TryParseOutcomeFromText(stdout));
-    }
+        => AgentOutputParser.ParseResult(stdout);
 
     internal (string? ResultJson, string ConversationLog) ParseStreamOutput(string stdout)
     {
@@ -205,36 +174,44 @@ public sealed class ClaudeAgentExecutor(
                     && so.ValueKind == JsonValueKind.Object
                     && so.TryGetProperty("outcome", out _);
 
-                if (hasStructuredOutput && type != "result")
-                {
-                    logger.LogWarning(
-                        "Found structured_output in unexpected message type={Type} at line {LineNumber}: {Raw}",
-                        type, lineNumber, trimmed[..Math.Min(1000, trimmed.Length)]);
-                }
-
-                if (type == "result")
+                // Capture structured_output from any event type.
+                // Claude typically puts it on type="result", but we handle it defensively
+                // in case the format evolves (same strategy as CodexAgentExecutor).
+                if (hasStructuredOutput)
                 {
                     resultMessageCount++;
                     lastResultJson = trimmed;
-                    logger.LogInformation("NDJSON result message #{Count} at line {LineNumber}: {Raw}",
-                        resultMessageCount, lineNumber, trimmed[..Math.Min(2000, trimmed.Length)]);
 
-                    if (hasStructuredOutput)
+                    if (type != "result")
                     {
-                        structuredOutputCount++;
-                        if (structuredOutputCount > 1)
-                        {
-                            logger.LogWarning(
-                                "Multiple result messages with structured_output! " +
-                                "Previous at line {PrevLine}, current at line {CurrLine}. Using first.",
-                                resultWithStructuredOutputLine, lineNumber);
-                        }
-                        else
-                        {
-                            resultWithStructuredOutput = trimmed;
-                            resultWithStructuredOutputLine = lineNumber;
-                        }
+                        logger.LogWarning(
+                            "Found structured_output in unexpected message type={Type} at line {LineNumber}: {Raw}",
+                            type, lineNumber, trimmed[..Math.Min(1000, trimmed.Length)]);
                     }
+
+                    logger.LogInformation("NDJSON structured_output #{Count} at line {LineNumber}: {Raw}",
+                        structuredOutputCount + 1, lineNumber, trimmed[..Math.Min(2000, trimmed.Length)]);
+
+                    if (structuredOutputCount == 0)
+                    {
+                        resultWithStructuredOutput = trimmed;
+                        resultWithStructuredOutputLine = lineNumber;
+                    }
+                    else
+                    {
+                        logger.LogWarning(
+                            "Multiple structured_output events! " +
+                            "Previous at line {PrevLine}, current at line {CurrLine}. Using first.",
+                            resultWithStructuredOutputLine, lineNumber);
+                    }
+                    structuredOutputCount++;
+                }
+                else if (type == "result")
+                {
+                    // Result message without structured_output — still track it as fallback
+                    resultMessageCount++;
+                    lastResultJson = trimmed;
+                    logger.LogInformation("NDJSON result message (no structured_output) at line {LineNumber}", lineNumber);
                 }
                 else if (type == "assistant")
                 {
@@ -291,109 +268,4 @@ public sealed class ClaudeAgentExecutor(
         return (resultJson, log);
     }
 
-    private static List<AgentQuestion>? ParseQuestions(JsonElement structured)
-    {
-        if (!structured.TryGetProperty("questions", out var questionsEl)
-            || questionsEl.ValueKind != JsonValueKind.Array)
-            return null;
-
-        var questions = new List<AgentQuestion>();
-        foreach (var item in questionsEl.EnumerateArray())
-        {
-            if (!item.TryGetProperty("question", out var q))
-                continue;
-
-            List<string>? recommendations = null;
-            if (item.TryGetProperty("recommendations", out var recsEl)
-                && recsEl.ValueKind == JsonValueKind.Array)
-            {
-                recommendations = [];
-                foreach (var rec in recsEl.EnumerateArray())
-                {
-                    var val = rec.GetString();
-                    if (val is not null)
-                        recommendations.Add(val);
-                }
-            }
-
-            questions.Add(new AgentQuestion(q.GetString()!, recommendations));
-        }
-
-        return questions.Count > 0 ? questions : null;
-    }
-
-    private static IReadOnlyList<string>? ParseRequestedSteps(JsonElement structured)
-    {
-        if (!structured.TryGetProperty("requestedSteps", out var stepsEl)
-            || stepsEl.ValueKind != JsonValueKind.Array)
-            return null;
-
-        var steps = stepsEl.EnumerateArray()
-            .Where(e => e.ValueKind == JsonValueKind.String)
-            .Select(e => e.GetString()!)
-            .ToList();
-
-        return steps.Count > 0 ? steps : null;
-    }
-
-    private static AgentOutcome ParseOutcomeString(string? outcome)
-    {
-        return outcome?.ToUpperInvariant() switch
-        {
-            "COMPLETE" => AgentOutcome.COMPLETE,
-            "SUCCESS" => AgentOutcome.COMPLETE,       // backward compat
-            "NEEDS_INFO" => AgentOutcome.NEEDS_INFO,
-            "QUESTIONS" => AgentOutcome.NEEDS_INFO,   // backward compat
-            "ERROR" => AgentOutcome.ERROR,
-            _ => AgentOutcome.ERROR
-        };
-    }
-
-    private static AgentOutcome TryParseOutcomeFromText(string text)
-    {
-        // Try parsing as JSON (might be embedded in result field)
-        try
-        {
-            var stripped = StripMarkdownFences(text.Trim());
-            using var doc = JsonDocument.Parse(stripped);
-            if (doc.RootElement.TryGetProperty("outcome", out var outcome))
-            {
-                return ParseOutcomeString(outcome.GetString());
-            }
-        }
-        catch (JsonException) { }
-
-        // Last resort: look for outcome keywords
-        if (text.Contains("COMPLETE", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase))
-            return AgentOutcome.COMPLETE;
-        if (text.Contains("NEEDS_INFO", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("QUESTIONS", StringComparison.OrdinalIgnoreCase))
-            return AgentOutcome.NEEDS_INFO;
-
-        return AgentOutcome.ERROR;
-    }
-
-    private static string StripMarkdownFences(string text)
-    {
-        if (!text.StartsWith("```"))
-            return text;
-
-        var firstNewline = text.IndexOf('\n');
-        if (firstNewline < 0)
-            return text;
-
-        var inner = text[(firstNewline + 1)..];
-        var lastFence = inner.LastIndexOf("```");
-        if (lastFence >= 0)
-            inner = inner[..lastFence];
-
-        return inner.Trim();
-    }
-
-    private static string MinifyJson(string json)
-    {
-        using var doc = JsonDocument.Parse(json);
-        return JsonSerializer.Serialize(doc.RootElement);
-    }
 }

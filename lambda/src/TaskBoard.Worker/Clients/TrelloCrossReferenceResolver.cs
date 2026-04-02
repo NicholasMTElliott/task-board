@@ -16,8 +16,6 @@ public sealed partial class TrelloCrossReferenceResolver(
         PropertyNameCaseInsensitive = true
     };
 
-    private readonly TrelloClientOptions _options = options.Value;
-
     [GeneratedRegex(@"https://trello\.com/c/([a-zA-Z0-9]+)(?:/[^\s)]*)?")]
     private static partial Regex TrelloCardUrlPattern();
 
@@ -61,7 +59,7 @@ public sealed partial class TrelloCrossReferenceResolver(
     {
         try
         {
-            var url = AppendAuth($"/1/cards/{cardId}/attachments");
+            var url = ($"/1/cards/{cardId}/attachments");
             using var response = await httpClient.GetAsync(url, cancellationToken);
 
             if (!response.IsSuccessStatusCode)
@@ -120,7 +118,7 @@ public sealed partial class TrelloCrossReferenceResolver(
     private async Task<TrelloCardInfo?> ResolveShortLinkAsync(
         string shortLink, CancellationToken cancellationToken)
     {
-        var url = AppendAuth($"/1/cards/{shortLink}?fields=id,name");
+        var url = ($"/1/cards/{shortLink}?fields=id,name");
         using var response = await httpClient.GetAsync(url, cancellationToken);
 
         if (response.StatusCode == HttpStatusCode.NotFound)
@@ -139,9 +137,4 @@ public sealed partial class TrelloCrossReferenceResolver(
         return JsonSerializer.Deserialize<TrelloCardInfo>(json, JsonOptions);
     }
 
-    private string AppendAuth(string url)
-    {
-        var separator = url.Contains('?') ? '&' : '?';
-        return $"{url}{separator}key={_options.ApiKey}&token={_options.ApiToken}";
-    }
 }

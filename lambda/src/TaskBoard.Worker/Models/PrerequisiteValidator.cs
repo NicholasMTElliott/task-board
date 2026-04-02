@@ -162,7 +162,7 @@ public static class PrerequisiteValidator
 
         foreach (var (_, state) in config.States)
         {
-            if (!string.Equals(state.GateType, "agent_run", StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(state.GateType, GateTypes.AgentRun, StringComparison.OrdinalIgnoreCase))
                 continue;
 
             // Step task prompt files

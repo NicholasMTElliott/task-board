@@ -27,7 +27,7 @@ public static class CardSelector
             var card = cards[i];
             if (!workflowConfig.States.TryGetValue(card.ColumnId, out var state))
                 continue;
-            if (state.GateType is not ("agent_run" or "system_merge"))
+            if (state.GateType is not (GateTypes.AgentRun or GateTypes.SystemMerge))
                 continue;
 
             // Apply state-level filters (AND-combined)

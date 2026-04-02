@@ -30,7 +30,7 @@ public sealed class TrelloClient(
 
     public async Task<BoardCard> GetCardAsync(string cardId, CancellationToken cancellationToken)
     {
-        var url = AppendAuth($"/1/cards/{cardId}?fields=id,name,desc,idList&labels=true&members=true&member_fields=username");
+        var url = ($"/1/cards/{cardId}?fields=id,name,desc,idList&labels=true&members=true&member_fields=username");
         using var response = await _httpClient.GetAsync(url, cancellationToken);
         await EnsureSuccessOrThrow(response, "GetCard", cardId);
 
@@ -42,7 +42,7 @@ public sealed class TrelloClient(
 
     public async Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken, IReadOnlyList<string>? excludeStatuses = null)
     {
-        var url = AppendAuth($"/1/boards/{boardId}/cards?fields=id,name,desc,idList&labels=true&members=true&member_fields=username");
+        var url = ($"/1/boards/{boardId}/cards?fields=id,name,desc,idList&labels=true&members=true&member_fields=username");
         using var response = await _httpClient.GetAsync(url, cancellationToken);
         await EnsureSuccessOrThrow(response, "GetBoardCards", boardId);
 
@@ -54,7 +54,7 @@ public sealed class TrelloClient(
 
     public async Task UpdateCardBodyAsync(string cardId, string body, CancellationToken cancellationToken)
     {
-        var url = AppendAuth($"/1/cards/{cardId}");
+        var url = ($"/1/cards/{cardId}");
         using var content = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("desc", body) });
         using var response = await _httpClient.PutAsync(url, content, cancellationToken);
         await EnsureSuccessOrThrow(response, "UpdateCardDescription", cardId);
@@ -64,7 +64,7 @@ public sealed class TrelloClient(
 
     public async Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken cancellationToken)
     {
-        var url = AppendAuth($"/1/cards/{cardId}/idList");
+        var url = ($"/1/cards/{cardId}/idList");
         using var content = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("value", columnId) });
         using var response = await _httpClient.PutAsync(url, content, cancellationToken);
         await EnsureSuccessOrThrow(response, "MoveCardToList", cardId);
@@ -77,7 +77,7 @@ public sealed class TrelloClient(
         var markedBody = $"{commentMarker}\n{commentBody}";
 
         // Search for existing agent comment
-        var searchUrl = AppendAuth($"/1/cards/{cardId}/actions?filter=commentCard");
+        var searchUrl = ($"/1/cards/{cardId}/actions?filter=commentCard");
         using var searchResponse = await _httpClient.GetAsync(searchUrl, cancellationToken);
         await EnsureSuccessOrThrow(searchResponse, "SearchComments", cardId);
 
@@ -87,7 +87,7 @@ public sealed class TrelloClient(
         if (existingCommentId is not null)
         {
             // Update existing comment
-            var updateUrl = AppendAuth($"/1/actions/{existingCommentId}/text");
+            var updateUrl = ($"/1/actions/{existingCommentId}/text");
             using var updateContent = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("value", markedBody) });
             using var updateResponse = await _httpClient.PutAsync(updateUrl, updateContent, cancellationToken);
             await EnsureSuccessOrThrow(updateResponse, "UpdateComment", cardId);
@@ -97,7 +97,7 @@ public sealed class TrelloClient(
         else
         {
             // Create new comment
-            var createUrl = AppendAuth($"/1/cards/{cardId}/actions/comments");
+            var createUrl = ($"/1/cards/{cardId}/actions/comments");
             using var createContent = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("text", markedBody) });
             using var createResponse = await _httpClient.PostAsync(createUrl, createContent, cancellationToken);
             await EnsureSuccessOrThrow(createResponse, "CreateComment", cardId);
@@ -108,7 +108,7 @@ public sealed class TrelloClient(
 
     public async Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken)
     {
-        var url = AppendAuth($"/1/cards/{cardId}/actions?filter=commentCard&limit=1000");
+        var url = ($"/1/cards/{cardId}/actions?filter=commentCard&limit=1000");
         using var response = await _httpClient.GetAsync(url, cancellationToken);
         await EnsureSuccessOrThrow(response, "GetCardComments", cardId);
 
@@ -143,7 +143,7 @@ public sealed class TrelloClient(
     {
         // Resolve label ID from name on the board
         var labelId = await ResolveLabelIdAsync(cardId, labelName, cancellationToken);
-        var url = AppendAuth($"/1/cards/{cardId}/idLabels");
+        var url = ($"/1/cards/{cardId}/idLabels");
         using var content = new FormUrlEncodedContent([new KeyValuePair<string, string>("value", labelId)]);
         using var response = await _httpClient.PostAsync(url, content, cancellationToken);
         await EnsureSuccessOrThrow(response, "AddLabel", cardId);
@@ -153,7 +153,7 @@ public sealed class TrelloClient(
     public async Task RemoveLabelAsync(string cardId, string labelName, CancellationToken cancellationToken)
     {
         var labelId = await ResolveLabelIdAsync(cardId, labelName, cancellationToken);
-        var url = AppendAuth($"/1/cards/{cardId}/idLabels/{labelId}");
+        var url = ($"/1/cards/{cardId}/idLabels/{labelId}");
         using var response = await _httpClient.DeleteAsync(url, cancellationToken);
         await EnsureSuccessOrThrow(response, "RemoveLabel", cardId);
         _logger.LogInformation("Removed label '{Label}' from card {CardId}", labelName, cardId);
@@ -162,7 +162,7 @@ public sealed class TrelloClient(
     public async Task AssignAsync(string cardId, string username, CancellationToken cancellationToken)
     {
         var memberId = await ResolveMemberIdAsync(cardId, username, cancellationToken);
-        var url = AppendAuth($"/1/cards/{cardId}/idMembers");
+        var url = ($"/1/cards/{cardId}/idMembers");
         using var content = new FormUrlEncodedContent([new KeyValuePair<string, string>("value", memberId)]);
         using var response = await _httpClient.PostAsync(url, content, cancellationToken);
         await EnsureSuccessOrThrow(response, "Assign", cardId);
@@ -174,7 +174,7 @@ public sealed class TrelloClient(
         if (username is not null)
         {
             var memberId = await ResolveMemberIdAsync(cardId, username, cancellationToken);
-            var url = AppendAuth($"/1/cards/{cardId}/idMembers/{memberId}");
+            var url = ($"/1/cards/{cardId}/idMembers/{memberId}");
             using var response = await _httpClient.DeleteAsync(url, cancellationToken);
             await EnsureSuccessOrThrow(response, "Unassign", cardId);
             _logger.LogInformation("Unassigned '{User}' from card {CardId}", username, cardId);
@@ -182,7 +182,7 @@ public sealed class TrelloClient(
         else
         {
             // Remove all members
-            var url = AppendAuth($"/1/cards/{cardId}?fields=idMembers");
+            var url = ($"/1/cards/{cardId}?fields=idMembers");
             using var getResponse = await _httpClient.GetAsync(url, cancellationToken);
             await EnsureSuccessOrThrow(getResponse, "GetCardMembers", cardId);
             var json = await getResponse.Content.ReadAsStringAsync(cancellationToken);
@@ -193,7 +193,7 @@ public sealed class TrelloClient(
                 {
                     var mId = mid.GetString();
                     if (mId is null) continue;
-                    var removeUrl = AppendAuth($"/1/cards/{cardId}/idMembers/{mId}");
+                    var removeUrl = ($"/1/cards/{cardId}/idMembers/{mId}");
                     using var removeResponse = await _httpClient.DeleteAsync(removeUrl, cancellationToken);
                     // Best effort per member
                 }
@@ -233,7 +233,7 @@ public sealed class TrelloClient(
     private async Task<string> ResolveLabelIdAsync(string cardId, string labelName, CancellationToken cancellationToken)
     {
         // Get labels from the card to find the board ID, then look up the label
-        var cardUrl = AppendAuth($"/1/cards/{cardId}?fields=idBoard");
+        var cardUrl = ($"/1/cards/{cardId}?fields=idBoard");
         using var cardResp = await _httpClient.GetAsync(cardUrl, cancellationToken);
         await EnsureSuccessOrThrow(cardResp, "GetCardBoard", cardId);
         var cardJson = await cardResp.Content.ReadAsStringAsync(cancellationToken);
@@ -241,7 +241,7 @@ public sealed class TrelloClient(
         var boardId = cardDoc.RootElement.GetProperty("idBoard").GetString()
             ?? throw new InvalidOperationException($"Could not get board ID for card {cardId}");
 
-        var labelsUrl = AppendAuth($"/1/boards/{boardId}/labels?limit=1000");
+        var labelsUrl = ($"/1/boards/{boardId}/labels?limit=1000");
         using var labelsResp = await _httpClient.GetAsync(labelsUrl, cancellationToken);
         await EnsureSuccessOrThrow(labelsResp, "GetBoardLabels", boardId);
         var labelsJson = await labelsResp.Content.ReadAsStringAsync(cancellationToken);
@@ -262,7 +262,7 @@ public sealed class TrelloClient(
 
     private async Task<string> ResolveMemberIdAsync(string cardId, string username, CancellationToken cancellationToken)
     {
-        var cardUrl = AppendAuth($"/1/cards/{cardId}?fields=idBoard");
+        var cardUrl = ($"/1/cards/{cardId}?fields=idBoard");
         using var cardResp = await _httpClient.GetAsync(cardUrl, cancellationToken);
         await EnsureSuccessOrThrow(cardResp, "GetCardBoard", cardId);
         var cardJson = await cardResp.Content.ReadAsStringAsync(cancellationToken);
@@ -270,7 +270,7 @@ public sealed class TrelloClient(
         var boardId = cardDoc.RootElement.GetProperty("idBoard").GetString()
             ?? throw new InvalidOperationException($"Could not get board ID for card {cardId}");
 
-        var membersUrl = AppendAuth($"/1/boards/{boardId}/members");
+        var membersUrl = ($"/1/boards/{boardId}/members");
         using var membersResp = await _httpClient.GetAsync(membersUrl, cancellationToken);
         await EnsureSuccessOrThrow(membersResp, "GetBoardMembers", boardId);
         var membersJson = await membersResp.Content.ReadAsStringAsync(cancellationToken);
@@ -326,10 +326,33 @@ public sealed class TrelloClient(
         return null;
     }
 
-    private string AppendAuth(string url)
+    /// <summary>
+    /// Strips Trello API credentials (key/token query params) from a URL for safe logging/error messages.
+    /// </summary>
+    internal static string SanitizeUrl(string url)
     {
-        var separator = url.Contains('?') ? '&' : '?';
-        return $"{url}{separator}key={_options.ApiKey}&token={_options.ApiToken}";
+        return System.Text.RegularExpressions.Regex.Replace(
+            url, @"([?&])(key|token)=[^&]*", m => m.Groups[1].Value == "?" ? "?" : "")
+            .Replace("?&", "?").TrimEnd('?');
+    }
+
+    /// <summary>
+    /// Delegating handler that appends Trello API key and token to all outbound requests.
+    /// Keeps credentials out of URL strings constructed in client code, so exceptions and
+    /// logs from <see cref="HttpClient"/> never expose them.
+    /// </summary>
+    internal sealed class TrelloAuthHandler(TrelloClientOptions options) : DelegatingHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var uri = request.RequestUri!;
+            var separator = string.IsNullOrEmpty(uri.Query) ? "?" : "&";
+            request.RequestUri = new Uri(
+                $"{uri.GetLeftPart(UriPartial.Path)}{uri.Query}{separator}key={options.ApiKey}&token={options.ApiToken}",
+                UriKind.Absolute);
+            return base.SendAsync(request, cancellationToken);
+        }
     }
 
     private static async Task EnsureSuccessOrThrow(HttpResponseMessage response, string operation, string resourceId)

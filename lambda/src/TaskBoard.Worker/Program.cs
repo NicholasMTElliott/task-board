@@ -73,6 +73,14 @@ builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
     // Normalise legacy single-step states into canonical steps-based model
     config = config.Normalised();
 
+    // Re-validate after normalization to catch any issues introduced by the transform
+    var postErrors = WorkflowConfigValidator.Validate(config);
+    if (postErrors.Count > 0)
+    {
+        throw new InvalidOperationException(
+            $"Workflow config post-normalization validation failed:\n{string.Join("\n", postErrors)}");
+    }
+
     // Set prompt resolution base directory
     config.ConfigDirectory = promptBaseDir;
 
@@ -87,16 +95,27 @@ switch (boardProvider)
     case "trello":
     case "live":
         builder.Services.Configure<TrelloClientOptions>(builder.Configuration.GetSection(TrelloClientOptions.SectionName));
+        var trelloBaseUrl = builder.Configuration.GetSection("Trello")["BaseUrl"] ?? "https://api.trello.com";
+        builder.Services.AddTransient(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptions<TrelloClientOptions>>().Value;
+            return new TrelloClient.TrelloAuthHandler(opts) { InnerHandler = new HttpClientHandler() };
+        });
+        builder.Services.AddTransient<TransientRetryHandler>();
         builder.Services.AddHttpClient<ITaskBoardClient, TrelloClient>(client =>
         {
-            var baseUrl = builder.Configuration.GetSection("Trello")["BaseUrl"] ?? "https://api.trello.com";
-            client.BaseAddress = new Uri(baseUrl);
-        });
+            client.BaseAddress = new Uri(trelloBaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(30);
+        })
+        .AddHttpMessageHandler<TransientRetryHandler>()
+        .AddHttpMessageHandler<TrelloClient.TrelloAuthHandler>();
         builder.Services.AddHttpClient<ICrossReferenceResolver, TrelloCrossReferenceResolver>(client =>
         {
-            var baseUrl = builder.Configuration.GetSection("Trello")["BaseUrl"] ?? "https://api.trello.com";
-            client.BaseAddress = new Uri(baseUrl);
-        });
+            client.BaseAddress = new Uri(trelloBaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(30);
+        })
+        .AddHttpMessageHandler<TransientRetryHandler>()
+        .AddHttpMessageHandler<TrelloClient.TrelloAuthHandler>();
         break;
     case "github":
         builder.Services.Configure<GitHubProjectsOptions>(builder.Configuration.GetSection(GitHubProjectsOptions.SectionName));
@@ -173,8 +192,9 @@ builder.Services.AddSingleton<TaskFileManager>();
 
 var worktreeBaseRaw = builder.Configuration["WorktreeBasePath"];
 var worktreeBasePath = worktreeBaseRaw is not null ? CliDefinitions.ResolvePath(worktreeBaseRaw) : null;
+var gitTimeoutSeconds = int.TryParse(builder.Configuration["GitTimeoutSeconds"], out var gts) ? gts : 30;
 builder.Services.AddSingleton(sp =>
-    new GitWorkspaceManager(sp.GetRequiredService<ILogger<GitWorkspaceManager>>(), worktreeBasePath));
+    new GitWorkspaceManager(sp.GetRequiredService<ILogger<GitWorkspaceManager>>(), worktreeBasePath, gitTimeoutSeconds));
 
 builder.Services.AddSingleton<AgentRunner>();
 builder.Services.AddSingleton<MergeRunner>();
@@ -269,7 +289,7 @@ if (mode == "agent")
     AgentRunResult result;
     if (targetCard is not null
         && workflowConfigInstance.States.TryGetValue(targetCard.ColumnId, out var cardState)
-        && string.Equals(cardState.GateType, "system_merge", StringComparison.OrdinalIgnoreCase))
+        && string.Equals(cardState.GateType, GateTypes.SystemMerge, StringComparison.OrdinalIgnoreCase))
     {
         var mergeRunner = scope.ServiceProvider.GetRequiredService<MergeRunner>();
         result = await mergeRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);

@@ -14,7 +14,7 @@ public static class WorkflowConfigValidator
 
         foreach (var (stateId, state) in config.States)
         {
-            if (string.Equals(state.GateType, "agent_run", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(state.GateType, GateTypes.AgentRun, StringComparison.OrdinalIgnoreCase))
             {
                 if (state.Steps is { Count: > 0 })
                 {
@@ -183,7 +183,7 @@ public static class WorkflowConfigValidator
     private static void ValidatePollingConfig(WorkflowConfig config, List<string> errors)
     {
         var runnableStates = config.States
-            .Where(kvp => kvp.Value.GateType is "agent_run" or "system_merge")
+            .Where(kvp => kvp.Value.GateType is GateTypes.AgentRun or GateTypes.SystemMerge)
             .ToList();
 
         foreach (var (stateId, state) in runnableStates)

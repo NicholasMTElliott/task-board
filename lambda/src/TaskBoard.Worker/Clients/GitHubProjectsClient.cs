@@ -207,21 +207,26 @@ public sealed class GitHubProjectsClient(
         // Get the item ID for this issue in the project
         var itemId = await ResolveProjectItemId(cardId, projectId, cancellationToken);
 
-        // Execute the mutation
-        var mutation = $$"""
-            mutation {
+        // Execute the mutation using GraphQL variables to avoid interpolation
+        const string mutation = """
+            mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
               updateProjectV2ItemFieldValue(input: {
-                projectId: "{{projectId}}"
-                itemId: "{{itemId}}"
-                fieldId: "{{fieldId}}"
-                value: { singleSelectOptionId: "{{optionId}}" }
+                projectId: $projectId
+                itemId: $itemId
+                fieldId: $fieldId
+                value: { singleSelectOptionId: $optionId }
               }) {
                 projectV2Item { id }
               }
             }
             """;
 
-        await RunGhAsync(["api", "graphql", "-f", $"query={mutation}"], cancellationToken);
+        await RunGhAsync(["api", "graphql",
+            "-f", $"query={mutation}",
+            "-f", $"projectId={projectId}",
+            "-f", $"itemId={itemId}",
+            "-f", $"fieldId={fieldId}",
+            "-f", $"optionId={optionId}"], cancellationToken);
         logger.LogInformation("Moved issue {IssueNumber} to status {Status}", cardId, columnId);
     }
 
@@ -334,12 +339,12 @@ public sealed class GitHubProjectsClient(
     private async Task<(string ProjectId, string FieldId, string OptionId)> ResolveStatusFieldOption(
         string projectNumber, string statusName, CancellationToken cancellationToken)
     {
-        var query = $$"""
-            query {
-              user(login: "{{_options.Owner}}") {
-                projectV2(number: {{projectNumber}}) {
+        const string query = """
+            query($owner: String!, $projectNumber: Int!, $fieldName: String!) {
+              user(login: $owner) {
+                projectV2(number: $projectNumber) {
                   id
-                  field(name: "{{_options.StatusFieldName}}") {
+                  field(name: $fieldName) {
                     ... on ProjectV2SingleSelectField {
                       id
                       options { id name }
@@ -350,8 +355,13 @@ public sealed class GitHubProjectsClient(
             }
             """;
 
-        var json = await RunGhAsync(["api", "graphql", "-f", $"query={query}"], cancellationToken);
+        var json = await RunGhAsync(["api", "graphql",
+            "-f", $"query={query}",
+            "-f", $"owner={_options.Owner}",
+            "-F", $"projectNumber={projectNumber}",
+            "-f", $"fieldName={_options.StatusFieldName}"], cancellationToken);
         using var doc = JsonDocument.Parse(json);
+        ThrowOnGraphQlErrors(doc, $"ResolveStatusFieldOption({statusName})");
 
         var project = doc.RootElement.GetProperty("data").GetProperty("user").GetProperty("projectV2");
         var projectId = project.GetProperty("id").GetString()
@@ -376,10 +386,10 @@ public sealed class GitHubProjectsClient(
         // gh issue view --json projectItems doesn't include the node ID.
         // Query the project directly via GraphQL to find the item for this issue.
         var repoParts = _options.Repo.Split('/');
-        var query = $$"""
-            query {
-              repository(owner: "{{repoParts[0]}}", name: "{{repoParts[1]}}") {
-                issue(number: {{issueNumber}}) {
+        const string query = """
+            query($repoOwner: String!, $repoName: String!, $issueNumber: Int!) {
+              repository(owner: $repoOwner, name: $repoName) {
+                issue(number: $issueNumber) {
                   projectItems(first: 10) {
                     nodes {
                       id
@@ -391,8 +401,13 @@ public sealed class GitHubProjectsClient(
             }
             """;
 
-        var json = await RunGhAsync(["api", "graphql", "-f", $"query={query}"], cancellationToken);
+        var json = await RunGhAsync(["api", "graphql",
+            "-f", $"query={query}",
+            "-f", $"repoOwner={repoParts[0]}",
+            "-f", $"repoName={repoParts[1]}",
+            "-F", $"issueNumber={issueNumber}"], cancellationToken);
         using var doc = JsonDocument.Parse(json);
+        ThrowOnGraphQlErrors(doc, $"ResolveProjectItemId({issueNumber})");
 
         var nodes = doc.RootElement
             .GetProperty("data").GetProperty("repository").GetProperty("issue")
@@ -507,20 +522,26 @@ public sealed class GitHubProjectsClient(
             _options.ProjectNumber, value, cancellationToken);
         var itemId = await ResolveProjectItemId(cardId, projectId, cancellationToken);
 
-        var mutation = $$"""
-            mutation {
+        // Reuse the same parameterized mutation as MoveCardToColumnAsync
+        const string setFieldMutation = """
+            mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
               updateProjectV2ItemFieldValue(input: {
-                projectId: "{{projectId}}"
-                itemId: "{{itemId}}"
-                fieldId: "{{fieldId}}"
-                value: { singleSelectOptionId: "{{optionId}}" }
+                projectId: $projectId
+                itemId: $itemId
+                fieldId: $fieldId
+                value: { singleSelectOptionId: $optionId }
               }) {
                 projectV2Item { id }
               }
             }
             """;
 
-        await RunGhAsync(["api", "graphql", "-f", $"query={mutation}"], cancellationToken);
+        await RunGhAsync(["api", "graphql",
+            "-f", $"query={setFieldMutation}",
+            "-f", $"projectId={projectId}",
+            "-f", $"itemId={itemId}",
+            "-f", $"fieldId={fieldId}",
+            "-f", $"optionId={optionId}"], cancellationToken);
         logger.LogInformation("Set field '{Field}' to '{Value}' on issue {IssueNumber}", fieldName, value, cardId);
     }
 
@@ -530,19 +551,23 @@ public sealed class GitHubProjectsClient(
             _options.ProjectNumber, fieldName, cancellationToken);
         var itemId = await ResolveProjectItemId(cardId, projectId, cancellationToken);
 
-        var mutation = $$"""
-            mutation {
+        const string clearMutation = """
+            mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!) {
               clearProjectV2ItemFieldValue(input: {
-                projectId: "{{projectId}}"
-                itemId: "{{itemId}}"
-                fieldId: "{{fieldId}}"
+                projectId: $projectId
+                itemId: $itemId
+                fieldId: $fieldId
               }) {
                 projectV2Item { id }
               }
             }
             """;
 
-        await RunGhAsync(["api", "graphql", "-f", $"query={mutation}"], cancellationToken);
+        await RunGhAsync(["api", "graphql",
+            "-f", $"query={clearMutation}",
+            "-f", $"projectId={projectId}",
+            "-f", $"itemId={itemId}",
+            "-f", $"fieldId={fieldId}"], cancellationToken);
         logger.LogInformation("Cleared field '{Field}' on issue {IssueNumber}", fieldName, cardId);
     }
 
@@ -561,11 +586,44 @@ public sealed class GitHubProjectsClient(
         var marker = "#issuecomment-";
         var idx = url.IndexOf(marker, StringComparison.Ordinal);
         if (idx < 0) return null;
-        return url[(idx + marker.Length)..];
+        var suffix = url[(idx + marker.Length)..];
+        // Validate the extracted ID is purely numeric
+        return suffix.Length > 0 && suffix.All(char.IsAsciiDigit) ? suffix : null;
+    }
+
+    /// <summary>
+    /// Checks a parsed GraphQL JSON response for an "errors" array and throws if present.
+    /// GraphQL can return HTTP 200 with errors; <c>gh</c> exit code won't catch these.
+    /// </summary>
+    private static void ThrowOnGraphQlErrors(JsonDocument doc, string context)
+    {
+        if (doc.RootElement.TryGetProperty("errors", out var errors)
+            && errors.ValueKind == JsonValueKind.Array
+            && errors.GetArrayLength() > 0)
+        {
+            var messages = errors.EnumerateArray()
+                .Select(e => e.TryGetProperty("message", out var m) ? m.GetString() : e.ToString())
+                .ToList();
+            throw new InvalidOperationException(
+                $"GraphQL error ({context}): {string.Join("; ", messages)}");
+        }
     }
 
     private async Task<string> RunGhAsync(
         string[] args, CancellationToken cancellationToken, string? stdinData = null)
+    {
+        var opName = $"gh {string.Join(" ", args.Take(3))}";
+        return await RetryHelper.ExecuteWithRetryAsync(
+            () => RunGhCoreAsync(args, stdinData, cancellationToken),
+            IsTransientGhError,
+            maxRetries: 2,
+            logger,
+            opName,
+            cancellationToken);
+    }
+
+    private async Task<string> RunGhCoreAsync(
+        string[] args, string? stdinData, CancellationToken cancellationToken)
     {
         var psi = new ProcessStartInfo
         {
@@ -612,5 +670,25 @@ public sealed class GitHubProjectsClient(
         }
 
         return stdout;
+    }
+
+    /// <summary>
+    /// Determines if a gh CLI error is transient and worth retrying.
+    /// Rate limit errors are NOT retried here — they're handled at the polling level.
+    /// </summary>
+    private static bool IsTransientGhError(Exception ex)
+    {
+        if (ex is RateLimitException) return false;
+
+        var msg = ex.Message;
+        return msg.Contains("HTTP 500", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("HTTP 502", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("HTTP 503", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("connection refused", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("connection reset", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("timed out", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("ETIMEDOUT", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("ECONNRESET", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("socket hang up", StringComparison.OrdinalIgnoreCase);
     }
 }

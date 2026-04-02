@@ -31,7 +31,7 @@ public sealed class CodexAgentExecutor(
         var schemaFilePath = Path.Combine(Path.GetTempPath(), $"codex-schema-{Guid.NewGuid():N}.json");
         try
         {
-            await File.WriteAllTextAsync(schemaFilePath, MinifyJson(AgentSchemas.OutcomeSchemaOpenAI), cancellationToken);
+            await File.WriteAllTextAsync(schemaFilePath, AgentOutputParser.MinifyJson(AgentSchemas.OutcomeSchemaOpenAI), cancellationToken);
             logger.LogDebug("Schema written to temp file: {SchemaFile}", schemaFilePath);
 
             var args = BuildArgumentList(context, schemaFilePath);
@@ -197,52 +197,8 @@ public sealed class CodexAgentExecutor(
         return args.ToArray();
     }
 
-    /// <summary>
-    /// Parses a single JSON message (from a NDJSON stream line or full stdout fallback)
-    /// into an <see cref="AgentResult"/>.
-    /// </summary>
     internal static AgentResult ParseResult(string stdout)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(stdout);
-            var root = doc.RootElement;
-
-            // Try structured_output first (preferred path — schema-validated response)
-            if (root.TryGetProperty("structured_output", out var structured)
-                && structured.ValueKind == JsonValueKind.Object
-                && structured.TryGetProperty("outcome", out var structuredOutcome))
-            {
-                var outcome = ParseOutcomeString(structuredOutcome.GetString());
-                var detail = structured.TryGetProperty("detail", out var d) ? d.GetString() : null;
-                var questions = ParseQuestions(structured);
-                var requestedSteps = ParseRequestedSteps(structured);
-                return new AgentResult(outcome, detail, questions, null, requestedSteps);
-            }
-
-            // Try result field (some Codex event shapes wrap output here)
-            if (root.TryGetProperty("result", out var result))
-            {
-                var resultText = result.GetString() ?? "";
-                return new AgentResult(TryParseOutcomeFromText(resultText));
-            }
-
-            // Try output field (Responses API turn.completed shape)
-            if (root.TryGetProperty("output", out var output))
-            {
-                var outputText = output.ValueKind == JsonValueKind.String
-                    ? output.GetString() ?? ""
-                    : output.ToString();
-                return new AgentResult(TryParseOutcomeFromText(outputText));
-            }
-        }
-        catch (JsonException)
-        {
-            // Raw text output — fall through to keyword scan
-        }
-
-        return new AgentResult(TryParseOutcomeFromText(stdout));
-    }
+        => AgentOutputParser.ParseResult(stdout);
 
     /// <summary>
     /// Parses the NDJSON stream emitted by <c>codex exec --json</c>.
@@ -426,109 +382,4 @@ public sealed class CodexAgentExecutor(
         sb.Append(text);
     }
 
-    private static List<AgentQuestion>? ParseQuestions(JsonElement structured)
-    {
-        if (!structured.TryGetProperty("questions", out var questionsEl)
-            || questionsEl.ValueKind != JsonValueKind.Array)
-            return null;
-
-        var questions = new List<AgentQuestion>();
-        foreach (var item in questionsEl.EnumerateArray())
-        {
-            if (!item.TryGetProperty("question", out var q))
-                continue;
-
-            List<string>? recommendations = null;
-            if (item.TryGetProperty("recommendations", out var recsEl)
-                && recsEl.ValueKind == JsonValueKind.Array)
-            {
-                recommendations = [];
-                foreach (var rec in recsEl.EnumerateArray())
-                {
-                    var val = rec.GetString();
-                    if (val is not null)
-                        recommendations.Add(val);
-                }
-            }
-
-            questions.Add(new AgentQuestion(q.GetString()!, recommendations));
-        }
-
-        return questions.Count > 0 ? questions : null;
-    }
-
-    private static IReadOnlyList<string>? ParseRequestedSteps(JsonElement structured)
-    {
-        if (!structured.TryGetProperty("requestedSteps", out var stepsEl)
-            || stepsEl.ValueKind != JsonValueKind.Array)
-            return null;
-
-        var steps = stepsEl.EnumerateArray()
-            .Where(e => e.ValueKind == JsonValueKind.String)
-            .Select(e => e.GetString()!)
-            .ToList();
-
-        return steps.Count > 0 ? steps : null;
-    }
-
-    private static AgentOutcome ParseOutcomeString(string? outcome)
-    {
-        return outcome?.ToUpperInvariant() switch
-        {
-            "COMPLETE" => AgentOutcome.COMPLETE,
-            "SUCCESS" => AgentOutcome.COMPLETE,       // backward compat
-            "NEEDS_INFO" => AgentOutcome.NEEDS_INFO,
-            "QUESTIONS" => AgentOutcome.NEEDS_INFO,   // backward compat
-            "ERROR" => AgentOutcome.ERROR,
-            _ => AgentOutcome.ERROR
-        };
-    }
-
-    private static AgentOutcome TryParseOutcomeFromText(string text)
-    {
-        // Try parsing as JSON (might be schema-validated response or embedded in result field)
-        try
-        {
-            var stripped = StripMarkdownFences(text.Trim());
-            using var doc = JsonDocument.Parse(stripped);
-            if (doc.RootElement.TryGetProperty("outcome", out var outcome))
-            {
-                return ParseOutcomeString(outcome.GetString());
-            }
-        }
-        catch (JsonException) { }
-
-        // Last resort: look for outcome keywords
-        if (text.Contains("COMPLETE", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase))
-            return AgentOutcome.COMPLETE;
-        if (text.Contains("NEEDS_INFO", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("QUESTIONS", StringComparison.OrdinalIgnoreCase))
-            return AgentOutcome.NEEDS_INFO;
-
-        return AgentOutcome.ERROR;
-    }
-
-    private static string StripMarkdownFences(string text)
-    {
-        if (!text.StartsWith("```"))
-            return text;
-
-        var firstNewline = text.IndexOf('\n');
-        if (firstNewline < 0)
-            return text;
-
-        var inner = text[(firstNewline + 1)..];
-        var lastFence = inner.LastIndexOf("```");
-        if (lastFence >= 0)
-            inner = inner[..lastFence];
-
-        return inner.Trim();
-    }
-
-    private static string MinifyJson(string json)
-    {
-        using var doc = JsonDocument.Parse(json);
-        return JsonSerializer.Serialize(doc.RootElement);
-    }
 }
