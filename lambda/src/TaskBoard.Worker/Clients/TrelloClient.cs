@@ -30,113 +30,129 @@ public sealed class TrelloClient(
 
     public async Task<BoardCard> GetCardAsync(string cardId, CancellationToken cancellationToken)
     {
-        var url = ($"/1/cards/{cardId}?fields=id,name,desc,idList&labels=true&members=true&member_fields=username");
-        using var response = await _httpClient.GetAsync(url, cancellationToken);
-        await EnsureSuccessOrThrow(response, "GetCard", cardId);
+        return await WithRetryAsync(async () =>
+        {
+            var url = $"/1/cards/{cardId}?fields=id,name,desc,idList&labels=true&members=true&member_fields=username";
+            using var response = await _httpClient.GetAsync(url, cancellationToken);
+            await EnsureSuccessOrThrow(response, "GetCard", cardId);
 
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        var card = JsonSerializer.Deserialize<TrelloCard>(json, JsonOptions)
-               ?? throw new TrelloApiException("GetCard", cardId, response.StatusCode, "Null deserialization result");
-        return ToBoardCard(card);
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            var card = JsonSerializer.Deserialize<TrelloCard>(json, JsonOptions)
+                   ?? throw new TrelloApiException("GetCard", cardId, response.StatusCode, "Null deserialization result");
+            return ToBoardCard(card);
+        }, "GetCard", cancellationToken);
     }
 
     public async Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken, IReadOnlyList<string>? excludeStatuses = null)
     {
-        var url = ($"/1/boards/{boardId}/cards?fields=id,name,desc,idList&labels=true&members=true&member_fields=username");
-        using var response = await _httpClient.GetAsync(url, cancellationToken);
-        await EnsureSuccessOrThrow(response, "GetBoardCards", boardId);
+        return await WithRetryAsync(async () =>
+        {
+            var url = $"/1/boards/{boardId}/cards?fields=id,name,desc,idList&labels=true&members=true&member_fields=username";
+            using var response = await _httpClient.GetAsync(url, cancellationToken);
+            await EnsureSuccessOrThrow(response, "GetBoardCards", boardId);
 
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        var cards = JsonSerializer.Deserialize<List<TrelloCard>>(json, JsonOptions)
-               ?? throw new TrelloApiException("GetBoardCards", boardId, response.StatusCode, "Null deserialization result");
-        return cards.Select(ToBoardCard).ToList();
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            var cards = JsonSerializer.Deserialize<List<TrelloCard>>(json, JsonOptions)
+                   ?? throw new TrelloApiException("GetBoardCards", boardId, response.StatusCode, "Null deserialization result");
+            return cards.Select(ToBoardCard).ToList();
+        }, "GetBoardCards", cancellationToken);
     }
 
     public async Task UpdateCardBodyAsync(string cardId, string body, CancellationToken cancellationToken)
     {
-        var url = ($"/1/cards/{cardId}");
-        using var content = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("desc", body) });
-        using var response = await _httpClient.PutAsync(url, content, cancellationToken);
-        await EnsureSuccessOrThrow(response, "UpdateCardDescription", cardId);
+        await WithRetryAsync(async () =>
+        {
+            var url = $"/1/cards/{cardId}";
+            using var content = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("desc", body) });
+            using var response = await _httpClient.PutAsync(url, content, cancellationToken);
+            await EnsureSuccessOrThrow(response, "UpdateCardDescription", cardId);
 
-        _logger.LogInformation("Updated description for card {CardId} ({Length} chars)", cardId, body.Length);
+            _logger.LogInformation("Updated description for card {CardId} ({Length} chars)", cardId, body.Length);
+        }, "UpdateCardBody", cancellationToken);
     }
 
     public async Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken cancellationToken)
     {
-        var url = ($"/1/cards/{cardId}/idList");
-        using var content = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("value", columnId) });
-        using var response = await _httpClient.PutAsync(url, content, cancellationToken);
-        await EnsureSuccessOrThrow(response, "MoveCardToList", cardId);
+        await WithRetryAsync(async () =>
+        {
+            var url = $"/1/cards/{cardId}/idList";
+            using var content = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("value", columnId) });
+            using var response = await _httpClient.PutAsync(url, content, cancellationToken);
+            await EnsureSuccessOrThrow(response, "MoveCardToList", cardId);
 
-        _logger.LogInformation("Moved card {CardId} to list {ListId}", cardId, columnId);
+            _logger.LogInformation("Moved card {CardId} to list {ListId}", cardId, columnId);
+        }, "MoveCardToColumn", cancellationToken);
     }
 
     public async Task UpsertAgentCommentAsync(string cardId, string commentBody, string commentMarker, CancellationToken cancellationToken)
     {
-        var markedBody = $"{commentMarker}\n{commentBody}";
-
-        // Search for existing agent comment
-        var searchUrl = ($"/1/cards/{cardId}/actions?filter=commentCard");
-        using var searchResponse = await _httpClient.GetAsync(searchUrl, cancellationToken);
-        await EnsureSuccessOrThrow(searchResponse, "SearchComments", cardId);
-
-        var searchJson = await searchResponse.Content.ReadAsStringAsync(cancellationToken);
-        var existingCommentId = FindAgentCommentId(searchJson, commentMarker);
-
-        if (existingCommentId is not null)
+        await WithRetryAsync(async () =>
         {
-            // Update existing comment
-            var updateUrl = ($"/1/actions/{existingCommentId}/text");
-            using var updateContent = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("value", markedBody) });
-            using var updateResponse = await _httpClient.PutAsync(updateUrl, updateContent, cancellationToken);
-            await EnsureSuccessOrThrow(updateResponse, "UpdateComment", cardId);
+            var markedBody = $"{commentMarker}\n{commentBody}";
 
-            _logger.LogInformation("Updated agent comment {CommentId} on card {CardId}", existingCommentId, cardId);
-        }
-        else
-        {
-            // Create new comment
-            var createUrl = ($"/1/cards/{cardId}/actions/comments");
-            using var createContent = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("text", markedBody) });
-            using var createResponse = await _httpClient.PostAsync(createUrl, createContent, cancellationToken);
-            await EnsureSuccessOrThrow(createResponse, "CreateComment", cardId);
+            // Search for existing agent comment
+            var searchUrl = $"/1/cards/{cardId}/actions?filter=commentCard";
+            using var searchResponse = await _httpClient.GetAsync(searchUrl, cancellationToken);
+            await EnsureSuccessOrThrow(searchResponse, "SearchComments", cardId);
 
-            _logger.LogInformation("Created new agent comment on card {CardId}", cardId);
-        }
+            var searchJson = await searchResponse.Content.ReadAsStringAsync(cancellationToken);
+            var existingCommentId = FindAgentCommentId(searchJson, commentMarker);
+
+            if (existingCommentId is not null)
+            {
+                var updateUrl = $"/1/actions/{existingCommentId}/text";
+                using var updateContent = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("value", markedBody) });
+                using var updateResponse = await _httpClient.PutAsync(updateUrl, updateContent, cancellationToken);
+                await EnsureSuccessOrThrow(updateResponse, "UpdateComment", cardId);
+
+                _logger.LogInformation("Updated agent comment {CommentId} on card {CardId}", existingCommentId, cardId);
+            }
+            else
+            {
+                var createUrl = $"/1/cards/{cardId}/actions/comments";
+                using var createContent = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("text", markedBody) });
+                using var createResponse = await _httpClient.PostAsync(createUrl, createContent, cancellationToken);
+                await EnsureSuccessOrThrow(createResponse, "CreateComment", cardId);
+
+                _logger.LogInformation("Created new agent comment on card {CardId}", cardId);
+            }
+        }, "UpsertComment", cancellationToken);
     }
 
     public async Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken)
     {
-        var url = ($"/1/cards/{cardId}/actions?filter=commentCard&limit=1000");
-        using var response = await _httpClient.GetAsync(url, cancellationToken);
-        await EnsureSuccessOrThrow(response, "GetCardComments", cardId);
-
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        using var doc = JsonDocument.Parse(json);
-
-        var comments = new List<CardComment>();
-        foreach (var item in doc.RootElement.EnumerateArray())
+        return await WithRetryAsync(async () =>
         {
-            var author = item.TryGetProperty("memberCreator", out var mc)
-                ? (mc.TryGetProperty("fullName", out var fn) ? fn.GetString() : null)
-                  ?? (mc.TryGetProperty("username", out var un) ? un.GetString() : null)
-                  ?? "unknown"
-                : "unknown";
-            var body = item.TryGetProperty("data", out var data)
-                && data.TryGetProperty("text", out var text)
-                ? text.GetString() ?? ""
-                : "";
-            var createdAt = item.TryGetProperty("date", out var dateProp)
-                ? DateTimeOffset.Parse(dateProp.GetString()!)
-                : DateTimeOffset.MinValue;
+            var url = $"/1/cards/{cardId}/actions?filter=commentCard&limit=1000";
+            using var response = await _httpClient.GetAsync(url, cancellationToken);
+            await EnsureSuccessOrThrow(response, "GetCardComments", cardId);
 
-            comments.Add(new CardComment(author, body, createdAt));
-        }
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var doc = JsonDocument.Parse(json);
 
-        comments.Sort((a, b) => a.CreatedAt.CompareTo(b.CreatedAt));
-        _logger.LogInformation("Fetched {Count} comments for card {CardId}", comments.Count, cardId);
-        return comments;
+            var comments = new List<CardComment>();
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                var author = item.TryGetProperty("memberCreator", out var mc)
+                    ? (mc.TryGetProperty("fullName", out var fn) ? fn.GetString() : null)
+                      ?? (mc.TryGetProperty("username", out var un) ? un.GetString() : null)
+                      ?? "unknown"
+                    : "unknown";
+                var body = item.TryGetProperty("data", out var data)
+                    && data.TryGetProperty("text", out var text)
+                    ? text.GetString() ?? ""
+                    : "";
+                var createdAt = item.TryGetProperty("date", out var dateProp)
+                    ? DateTimeOffset.Parse(dateProp.GetString()!)
+                    : DateTimeOffset.MinValue;
+
+                comments.Add(new CardComment(author, body, createdAt));
+            }
+
+            comments.Sort((a, b) => a.CreatedAt.CompareTo(b.CreatedAt));
+            _logger.LogInformation("Fetched {Count} comments for card {CardId}", comments.Count, cardId);
+            return comments;
+        }, "GetCardComments", cancellationToken);
     }
 
     public async Task AddLabelAsync(string cardId, string labelName, CancellationToken cancellationToken)
@@ -362,5 +378,39 @@ public sealed class TrelloClient(
             var body = await response.Content.ReadAsStringAsync();
             throw new TrelloApiException(operation, resourceId, response.StatusCode, body);
         }
+    }
+
+    /// <summary>
+    /// Wraps an HTTP operation with transient retry (2 retries, exponential backoff).
+    /// Each retry makes a fresh HTTP request (avoids HttpRequestMessage reuse issues).
+    /// </summary>
+    private Task<T> WithRetryAsync<T>(
+        Func<Task<T>> action, string operationName, CancellationToken cancellationToken)
+    {
+        return RetryHelper.ExecuteWithRetryAsync(
+            action, IsTransientTrelloError, maxRetries: 2, _logger, operationName, cancellationToken);
+    }
+
+    private Task WithRetryAsync(
+        Func<Task> action, string operationName, CancellationToken cancellationToken)
+    {
+        return RetryHelper.ExecuteWithRetryAsync(
+            action, IsTransientTrelloError, maxRetries: 2, _logger, operationName, cancellationToken);
+    }
+
+    private static bool IsTransientTrelloError(Exception ex)
+    {
+        if (ex is TrelloApiException trelloEx)
+        {
+            return trelloEx.StatusCode is
+                System.Net.HttpStatusCode.InternalServerError or
+                System.Net.HttpStatusCode.BadGateway or
+                System.Net.HttpStatusCode.ServiceUnavailable or
+                System.Net.HttpStatusCode.GatewayTimeout or
+                System.Net.HttpStatusCode.RequestTimeout;
+        }
+
+        return ex is HttpRequestException
+            || (ex is TaskCanceledException tce && tce.InnerException is TimeoutException);
     }
 }

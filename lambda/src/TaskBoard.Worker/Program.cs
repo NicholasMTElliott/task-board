@@ -101,20 +101,17 @@ switch (boardProvider)
             var opts = sp.GetRequiredService<IOptions<TrelloClientOptions>>().Value;
             return new TrelloClient.TrelloAuthHandler(opts) { InnerHandler = new HttpClientHandler() };
         });
-        builder.Services.AddTransient<TransientRetryHandler>();
         builder.Services.AddHttpClient<ITaskBoardClient, TrelloClient>(client =>
         {
             client.BaseAddress = new Uri(trelloBaseUrl);
             client.Timeout = TimeSpan.FromSeconds(30);
         })
-        .AddHttpMessageHandler<TransientRetryHandler>()
         .AddHttpMessageHandler<TrelloClient.TrelloAuthHandler>();
         builder.Services.AddHttpClient<ICrossReferenceResolver, TrelloCrossReferenceResolver>(client =>
         {
             client.BaseAddress = new Uri(trelloBaseUrl);
             client.Timeout = TimeSpan.FromSeconds(30);
         })
-        .AddHttpMessageHandler<TransientRetryHandler>()
         .AddHttpMessageHandler<TrelloClient.TrelloAuthHandler>();
         break;
     case "github":
