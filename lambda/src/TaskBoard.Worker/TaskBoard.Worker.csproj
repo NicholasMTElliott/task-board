@@ -33,6 +33,7 @@
     <Content Include="..\..\..\workflow.github.example.json" CopyToOutputDirectory="PreserveNewest" Link="workflow.github.example.json" />
     <Content Include="..\..\..\prompts\**\*" CopyToOutputDirectory="PreserveNewest" LinkBase="prompts" />
     <Content Include="..\..\..\QUICKSTART.md" CopyToOutputDirectory="PreserveNewest" Link="QUICKSTART.md" />
+    <Content Include="..\..\..\docs\**\*.md" CopyToOutputDirectory="PreserveNewest" LinkBase="docs" />
     <Content Include="..\..\..\appsettings.user.example.json" CopyToOutputDirectory="PreserveNewest" Link="appsettings.user.example.json" />
   </ItemGroup>
 
