@@ -44,7 +44,26 @@ aiboard --mode polling --workspace <PATH_TO_YOUR_REPO>
 ```
 
 Polls the board and picks up the highest-priority card in any "Ready for" column.
-Default interval is 60 seconds; override with `--poll-interval <SECONDS>`.
+Default interval is 120 seconds (with adaptive backoff); override with `--poll-interval <SECONDS>`.
+
+## Run in queue mode (webhook-driven)
+
+```
+aiboard --mode queue --workspace <PATH_TO_YOUR_REPO> --neon-connection "postgresql://user:pass@host/db?sslmode=require"
+```
+
+Polls a Postgres PGMQ queue for webhook "ping" notifications instead of the board directly.
+When a ping arrives, fetches the board once and processes **all** eligible cards concurrently.
+Falls back to a safety-net board poll every 10 minutes if no pings arrive.
+
+Requires a Neon PostgreSQL database with PGMQ migrations applied — see `docs/Deployment.md` for setup.
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--neon-connection <url>` | Neon PostgreSQL connection string | *(required)* |
+| `--ping-queue <name>` | PGMQ queue name | `pings` |
+| `--max-concurrent-agents <n>` | Max parallel agent runs (0 = unlimited) | `0` |
+| `--stale-claim-minutes <n>` | Timeout for abandoned card claims | `30` |
 
 ## Command-line reference
 
@@ -60,7 +79,7 @@ Every setting can be provided via any of the following (highest priority wins):
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--mode <mode>` | `agent` or `polling` | *(required)* |
+| `--mode <mode>` | `agent`, `polling`, or `queue` | *(required)* |
 | `--card-id <id>` | Card/issue number (agent mode only) | *(required for agent)* |
 | `--config <path>` | Additional JSON config file to layer in | *(none)* |
 | `--prompt-root <path>` | Base directory for prompt files | exe directory |
@@ -70,7 +89,7 @@ Every setting can be provided via any of the following (highest priority wins):
 | `--board-id <id>` | Board identifier / project number | from config |
 | `--workspace <path>` | Agent workspace / repository path | *(required)* |
 | `--worktree-base <path>` | Base path for git worktrees | *(auto)* |
-| `--poll-interval <secs>` | Polling interval in seconds | `60` |
+| `--poll-interval <secs>` | Base polling interval in seconds (adaptive backoff) | `120` |
 | `--github-owner <owner>` | GitHub org or user | from config |
 | `--github-repo <owner/repo>` | Repository in owner/repo format | from config |
 | `--github-project <number>` | GitHub project number | from config |
@@ -237,6 +256,7 @@ Both forward slashes and backslashes work on all platforms.
 | `workflow.github.example.json` | Template — copy to `workflow.github.json` and customise |
 | `workflow.v1.json` | Legacy Trello workflow (ignore unless using Trello) |
 | `prompts/` | Default agent prompt files referenced by the workflow config |
+| `docs/` | Deployment guide, architecture docs |
 | `QUICKSTART.md` | This file |
 
 ## Troubleshooting
