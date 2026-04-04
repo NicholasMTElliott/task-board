@@ -68,7 +68,7 @@ public sealed class PollingRunner(
                         selected.Id, selected.Title, selected.ColumnId, totalCycles);
 
                     var selectedState = workflowConfig.States.GetValueOrDefault(selected.ColumnId);
-                    var result = string.Equals(selectedState?.GateType, "system_merge", StringComparison.OrdinalIgnoreCase)
+                    var result = string.Equals(selectedState?.GateType, GateTypes.SystemMerge, StringComparison.OrdinalIgnoreCase)
                         ? await mergeRunner.ExecuteAsync(selected.Id, boardId, workspacePath, cancellationToken)
                         : await agentRunner.ExecuteAsync(selected.Id, boardId, workspacePath, cancellationToken);
 

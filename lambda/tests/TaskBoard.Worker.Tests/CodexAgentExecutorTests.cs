@@ -72,7 +72,7 @@ public class CodexAgentExecutorTests
     }
 
     [Fact]
-    public void BuildArgumentList_FullAutoEnabled_ContainsFullAutoFlag()
+    public void BuildArgumentList_ContainsFullAutoFlag_WhenEnabled()
     {
         var executor = CreateExecutor(fullAuto: true);
         var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json");
@@ -81,7 +81,7 @@ public class CodexAgentExecutorTests
     }
 
     [Fact]
-    public void BuildArgumentList_FullAutoDisabled_DoesNotContainFullAutoFlag()
+    public void BuildArgumentList_OmitsFullAutoFlag_WhenDisabled()
     {
         var executor = CreateExecutor(fullAuto: false);
         var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json");
@@ -90,9 +90,33 @@ public class CodexAgentExecutorTests
     }
 
     [Fact]
+    public void BuildArgumentList_FullAutoOverrideViaProviderParams()
+    {
+        var executor = CreateExecutor(fullAuto: true);
+        var context = CreateContext(providerParams: new Dictionary<string, string>
+        {
+            ["fullAuto"] = "false"
+        });
+        var args = executor.BuildArgumentList(context, "/tmp/schema.json");
+
+        Assert.DoesNotContain("--full-auto", args);
+    }
+
+    [Fact]
+    public void BuildArgumentList_SandboxFlag_WhenConfigured()
+    {
+        var executor = CreateExecutor(sandbox: "danger-full-access");
+        var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json");
+
+        var idx = Array.IndexOf(args, "--sandbox");
+        Assert.True(idx >= 0, "Expected --sandbox flag");
+        Assert.Equal("danger-full-access", args[idx + 1]);
+    }
+
+    [Fact]
     public void BuildArgumentList_SandboxOverrideViaProviderParams()
     {
-        var executor = CreateExecutor(fullAuto: false);
+        var executor = CreateExecutor();
         var context = CreateContext(providerParams: new Dictionary<string, string>
         {
             ["sandbox"] = "workspace-write"
@@ -100,12 +124,12 @@ public class CodexAgentExecutorTests
         var args = executor.BuildArgumentList(context, "/tmp/schema.json");
 
         var idx = Array.IndexOf(args, "--sandbox");
-        Assert.True(idx >= 0, "Expected --sandbox flag");
+        Assert.True(idx >= 0);
         Assert.Equal("workspace-write", args[idx + 1]);
     }
 
     [Fact]
-    public void BuildArgumentList_StdinIndicatorIsLastArg()
+    public void BuildArgumentList_StdinMarkerIsLastArg()
     {
         var executor = CreateExecutor();
         var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json");

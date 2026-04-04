@@ -44,6 +44,12 @@ internal static class CliDefinitions
         ["--trello-api-token"] = "Trello:ApiToken",
         ["--trello-base-url"] = "Trello:BaseUrl",
         ["--trello-agent-username"] = "Trello:AgentUsername",
+
+        // PGMQ / Queue mode
+        ["--neon-connection"] = "Pgmq:ConnectionString",
+        ["--ping-queue"] = "Pgmq:PingQueueName",
+        ["--stale-claim-minutes"] = "Pgmq:StaleClaimMinutes",
+        ["--max-concurrent-agents"] = "Pgmq:MaxConcurrentAgents",
     };
 
     /// <summary>

@@ -78,7 +78,7 @@ public sealed partial class AgentRunner(
         var templateContext = await BuildTemplateContextAsync(cancellationToken);
 
         // 2b. Move card to in-progress state if defined
-        if (state.Transitions.TryGetValue("IN_PROGRESS", out var inProgressTarget))
+        if (state.Transitions.TryGetValue(TransitionKeys.InProgress, out var inProgressTarget))
         {
             await TransitionExecutor.ExecuteAsync(
                 cardId, inProgressTarget, boardClient, logger, cancellationToken, templateContext);
@@ -385,7 +385,7 @@ public sealed partial class AgentRunner(
                 var comment = $"{errorPrefix}\n\n{FormatComment(errorResult)}";
                 await boardClient.UpsertAgentCommentAsync(cardId, comment, runMarker, cancellationToken);
 
-                if (state.Transitions.TryGetValue("ERROR", out var errorTarget))
+                if (state.Transitions.TryGetValue(TransitionKeys.Error, out var errorTarget))
                 {
                     await TransitionExecutor.ExecuteAsync(
                         cardId, errorTarget, boardClient, logger, cancellationToken);
@@ -625,19 +625,21 @@ public sealed partial class AgentRunner(
         // Append optional step catalog if configured
         if (state.OptionalSteps is { Count: > 0 })
         {
-            gatePrompt += "\n\n## Available Optional Review Steps\n\n"
-                + "The following specialist review steps are available. Request any that are clearly "
-                + "warranted by the changes above. Only request steps whose trigger criteria match.\n\n"
-                + "| Step Name | Description | When to Request |\n"
-                + "|-----------|-------------|----------------|\n";
+            var sb = new StringBuilder(gatePrompt);
+            sb.AppendLine("\n\n## Available Optional Review Steps\n");
+            sb.AppendLine("The following specialist review steps are available. Request any that are clearly "
+                + "warranted by the changes above. Only request steps whose trigger criteria match.\n");
+            sb.AppendLine("| Step Name | Description | When to Request |");
+            sb.AppendLine("|-----------|-------------|----------------|");
 
             foreach (var opt in state.OptionalSteps)
             {
-                gatePrompt += $"| `{opt.Name}` | {opt.Description} | {opt.Triggers} |\n";
+                sb.AppendLine($"| `{opt.Name}` | {opt.Description} | {opt.Triggers} |");
             }
 
-            gatePrompt += "\nTo request optional steps, include a `requestedSteps` array in your output "
-                + "with the step names. You may request steps alongside a COMPLETE verdict.\n";
+            sb.AppendLine("\nTo request optional steps, include a `requestedSteps` array in your output "
+                + "with the step names. You may request steps alongside a COMPLETE verdict.");
+            gatePrompt = sb.ToString();
         }
 
         // Resolve system prompt
@@ -704,7 +706,7 @@ public sealed partial class AgentRunner(
                 await boardClient.UpsertAgentCommentAsync(cardId, comment,
                     $"<!-- gate-check:{state.Name} -->", cancellationToken);
 
-                if (state.Transitions.TryGetValue("NEEDS_INFO", out var questionsTarget))
+                if (state.Transitions.TryGetValue(TransitionKeys.NeedsInfo, out var questionsTarget))
                     await TransitionExecutor.ExecuteAsync(
                         cardId, questionsTarget, boardClient, logger, cancellationToken);
 
@@ -733,7 +735,7 @@ public sealed partial class AgentRunner(
                     await boardClient.UpsertAgentCommentAsync(cardId, escalateComment,
                         $"<!-- gate-check:{state.Name} -->", cancellationToken);
 
-                    if (state.Transitions.TryGetValue("NEEDS_INFO", out var questionsCol))
+                    if (state.Transitions.TryGetValue(TransitionKeys.NeedsInfo, out var questionsCol))
                         await TransitionExecutor.ExecuteAsync(
                             cardId, questionsCol, boardClient, logger, cancellationToken);
 
@@ -749,7 +751,7 @@ public sealed partial class AgentRunner(
                 await boardClient.UpsertAgentCommentAsync(cardId, failComment,
                     $"<!-- gate-check:{state.Name} -->", cancellationToken);
 
-                var transitionKey = state.Transitions.ContainsKey("GATE_FAIL") ? "GATE_FAIL" : "ERROR";
+                var transitionKey = state.Transitions.ContainsKey(TransitionKeys.GateFail) ? TransitionKeys.GateFail : TransitionKeys.Error;
                 if (state.Transitions.TryGetValue(transitionKey, out var gateFailTarget))
                     await TransitionExecutor.ExecuteAsync(
                         cardId, gateFailTarget, boardClient, logger, cancellationToken);
@@ -1003,7 +1005,7 @@ public sealed partial class AgentRunner(
         logger.LogInformation("Merge from origin/{Default}: status={Status}, {ChangedCount} changed, {ConflictCount} conflicts",
             defaultBranch, mergeResult.Status, mergeResult.ChangedFiles.Count, mergeResult.ConflictFiles.Count);
 
-        var hasMergeConflictTransition = state.Transitions.ContainsKey("MERGE_CONFLICT");
+        var hasMergeConflictTransition = state.Transitions.ContainsKey(TransitionKeys.MergeConflict);
 
         // 5. Handle based on stage type
         if (!hasMergeConflictTransition)
@@ -1056,7 +1058,7 @@ public sealed partial class AgentRunner(
                     logger.LogWarning(abortEx, "merge --abort failed (no merge in progress?)");
                 }
 
-                state.Transitions.TryGetValue("MERGE_CONFLICT", out var kickBackTarget);
+                state.Transitions.TryGetValue(TransitionKeys.MergeConflict, out var kickBackTarget);
                 var comment = BuildMergeKickBackComment(mergeResult, mergeAgentResult, defaultBranch, branchName);
                 return new MergeStepOutcome(MergeStepAction.KickBack, KickBackComment: comment, KickBackTarget: kickBackTarget);
             }
@@ -1343,7 +1345,7 @@ public sealed partial class AgentRunner(
 
     private static string BuildCommentPrefix(WorkflowState state, WorkflowConfig config, AgentIdentity identity)
     {
-        var activeStateName = state.Transitions.TryGetValue("IN_PROGRESS", out var inProgressTarget)
+        var activeStateName = state.Transitions.TryGetValue(TransitionKeys.InProgress, out var inProgressTarget)
             && inProgressTarget.Column is string inProgressCol
             && config.States.TryGetValue(inProgressCol, out var inProgressState)
             ? inProgressState.Name

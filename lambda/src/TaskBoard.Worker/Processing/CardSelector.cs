@@ -12,12 +12,44 @@ public sealed record SkippedCard(
     string StateName,
     IReadOnlyList<string> MissingProviders);
 
+public sealed record MultiCardSelectionResult(
+    IReadOnlyList<BoardCard> Eligible,
+    IReadOnlyList<SkippedCard> SkippedDueToProviders);
+
 public static class CardSelector
 {
     public static CardSelectionResult SelectNext(
         IReadOnlyList<BoardCard> cards,
         WorkflowConfig workflowConfig,
         IReadOnlySet<string>? availableProviders = null)
+    {
+        var (eligible, skippedCards) = FilterAndSort(cards, workflowConfig, availableProviders);
+
+        return eligible.Count == 0
+            ? new CardSelectionResult(null, skippedCards)
+            : new CardSelectionResult(eligible[0].Card, skippedCards);
+    }
+
+    /// <summary>
+    /// Returns ALL eligible cards sorted by priority (same logic as <see cref="SelectNext"/>).
+    /// Used by <see cref="QueueDrivenRunner"/> to process multiple cards concurrently.
+    /// </summary>
+    public static MultiCardSelectionResult SelectAll(
+        IReadOnlyList<BoardCard> cards,
+        WorkflowConfig workflowConfig,
+        IReadOnlySet<string>? availableProviders = null)
+    {
+        var (eligible, skippedCards) = FilterAndSort(cards, workflowConfig, availableProviders);
+        return new MultiCardSelectionResult(
+            eligible.Select(e => e.Card).ToList(),
+            skippedCards);
+    }
+
+    private static (List<(BoardCard Card, WorkflowState State, int Position)> Eligible, List<SkippedCard> Skipped)
+        FilterAndSort(
+            IReadOnlyList<BoardCard> cards,
+            WorkflowConfig workflowConfig,
+            IReadOnlySet<string>? availableProviders)
     {
         var eligible = new List<(BoardCard Card, WorkflowState State, int Position)>();
         var skippedCards = new List<SkippedCard>();
@@ -27,14 +59,11 @@ public static class CardSelector
             var card = cards[i];
             if (!workflowConfig.States.TryGetValue(card.ColumnId, out var state))
                 continue;
-            if (state.GateType is not ("agent_run" or "system_merge"))
+            if (state.GateType is not (GateTypes.AgentRun or GateTypes.SystemMerge))
                 continue;
-
-            // Apply state-level filters (AND-combined)
             if (!CardFilterEvaluator.PassesAll(card, state.Filters))
                 continue;
 
-            // Provider eligibility check
             if (availableProviders is not null)
             {
                 var required = workflowConfig.GetRequiredProviders(state);
@@ -49,33 +78,33 @@ public static class CardSelector
             eligible.Add((card, state, i));
         }
 
-        if (eligible.Count == 0)
-            return new CardSelectionResult(null, skippedCards);
-
-        var pollingConfig = workflowConfig.Polling;
-
-        eligible.Sort((a, b) =>
+        if (eligible.Count > 1)
         {
-            // 1. Pipeline order descending (later stage first)
-            var orderCmp = b.State.PipelineOrder.CompareTo(a.State.PipelineOrder);
-            if (orderCmp != 0) return orderCmp;
+            var pollingConfig = workflowConfig.Polling;
 
-            // 2. Priority rank ascending (lower rank = higher priority)
-            var priorityCmp = GetPriorityRank(a.Card, pollingConfig)
-                .CompareTo(GetPriorityRank(b.Card, pollingConfig));
-            if (priorityCmp != 0) return priorityCmp;
+            eligible.Sort((a, b) =>
+            {
+                // 1. Pipeline order descending (later stage first)
+                var orderCmp = b.State.PipelineOrder.CompareTo(a.State.PipelineOrder);
+                if (orderCmp != 0) return orderCmp;
 
-            // 3. Board position ascending (higher on board first)
-            var posCmp = a.Position.CompareTo(b.Position);
-            if (posCmp != 0) return posCmp;
+                // 2. Priority rank ascending (lower rank = higher priority)
+                var priorityCmp = GetPriorityRank(a.Card, pollingConfig)
+                    .CompareTo(GetPriorityRank(b.Card, pollingConfig));
+                if (priorityCmp != 0) return priorityCmp;
 
-            // 4. Issue number ascending (earliest created first)
-            var aNum = int.TryParse(a.Card.Id, out var an) ? an : int.MaxValue;
-            var bNum = int.TryParse(b.Card.Id, out var bn) ? bn : int.MaxValue;
-            return aNum.CompareTo(bNum);
-        });
+                // 3. Board position ascending (higher on board first)
+                var posCmp = a.Position.CompareTo(b.Position);
+                if (posCmp != 0) return posCmp;
 
-        return new CardSelectionResult(eligible[0].Card, skippedCards);
+                // 4. Issue number ascending (earliest created first)
+                var aNum = int.TryParse(a.Card.Id, out var an) ? an : int.MaxValue;
+                var bNum = int.TryParse(b.Card.Id, out var bn) ? bn : int.MaxValue;
+                return aNum.CompareTo(bNum);
+            });
+        }
+
+        return (eligible, skippedCards);
     }
 
     private static int GetPriorityRank(BoardCard card, PollingConfig? pollingConfig)

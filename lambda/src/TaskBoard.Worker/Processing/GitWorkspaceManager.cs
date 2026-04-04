@@ -3,9 +3,16 @@ using System.Text;
 
 namespace TaskBoard.Worker.Processing;
 
-public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, string? worktreeBasePath = null)
+public sealed class GitWorkspaceManager(
+    ILogger<GitWorkspaceManager> logger,
+    string? worktreeBasePath = null,
+    int gitTimeoutSeconds = 30)
 {
-    private const int DefaultTimeoutSeconds = 30;
+    /// <summary>Timeout for local git operations (worktree, merge, commit).</summary>
+    private readonly int _localTimeout = gitTimeoutSeconds;
+
+    /// <summary>Timeout for network git operations (fetch, push, pull). 2x local timeout.</summary>
+    private readonly int _networkTimeout = gitTimeoutSeconds * 2;
 
     // ── Worktree methods ──────────────────────────────────────────────
 
@@ -153,7 +160,7 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
         // Fetch latest remote refs
         try
         {
-            await RunGitAsync(repoPath, ["fetch", "origin"], cancellationToken, timeoutSeconds: 60);
+            await RunGitAsync(repoPath, ["fetch", "origin"], cancellationToken, timeoutSeconds: _networkTimeout);
         }
         catch (GitOperationException ex)
         {
@@ -220,7 +227,7 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
     public async Task FetchAsync(string repoPath, CancellationToken cancellationToken)
     {
         logger.LogInformation("Fetching from origin in {Repo}", repoPath);
-        await RunGitAsync(repoPath, ["fetch", "origin"], cancellationToken, timeoutSeconds: 60);
+        await RunGitAsync(repoPath, ["fetch", "origin"], cancellationToken, timeoutSeconds: _networkTimeout);
     }
 
     /// <summary>
@@ -232,7 +239,7 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
         try
         {
             await RunGitAsync(repoPath,
-                ["pull", "--ff-only", "origin", branchName], cancellationToken, timeoutSeconds: 60);
+                ["pull", "--ff-only", "origin", branchName], cancellationToken, timeoutSeconds: _networkTimeout);
         }
         catch (GitOperationException ex)
         {
@@ -350,6 +357,15 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
         {
             return false;
         }
+        catch (GitOperationException ex)
+        {
+            // Unexpected exit code (e.g., 128 for invalid ref, network error, corrupted repo).
+            // Safe default: treat as "not ancestor" so the caller doesn't assume the merge happened.
+            logger.LogWarning(ex,
+                "IsAncestorAsync: unexpected git exit code {ExitCode} for {Ancestor} -> {Descendant}",
+                ex.ExitCode, potentialAncestor, descendant);
+            return false;
+        }
     }
 
     public async Task DeleteRemoteBranchAsync(
@@ -357,7 +373,7 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
     {
         logger.LogInformation("Deleting remote branch {Branch}", branchName);
         await RunGitAsync(repoPath,
-            ["push", "origin", "--delete", branchName], cancellationToken, timeoutSeconds: 60);
+            ["push", "origin", "--delete", branchName], cancellationToken, timeoutSeconds: _networkTimeout);
     }
 
     public async Task<MergeStatus> MergeNoFfAsync(
@@ -392,7 +408,7 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
         try
         {
             await RunGitAsync(repoPath,
-                ["push", "origin", $"{localRef}:{remoteRef}"], cancellationToken, timeoutSeconds: 60);
+                ["push", "origin", $"{localRef}:{remoteRef}"], cancellationToken, timeoutSeconds: _networkTimeout);
             return PushStatus.Success;
         }
         catch (GitOperationException ex) when (
@@ -401,6 +417,13 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
             ex.Message.Contains("fetch first", StringComparison.OrdinalIgnoreCase))
         {
             return PushStatus.NonFastForward;
+        }
+        catch (GitOperationException ex)
+        {
+            // Non-retryable push error (auth, repo not found, network, etc.)
+            // Log and rethrow so the caller (MergeRunner) can handle it as a fatal error.
+            logger.LogError(ex, "Push failed with unexpected error for {LocalRef} -> {RemoteRef}", localRef, remoteRef);
+            throw;
         }
     }
 
@@ -540,6 +563,8 @@ public sealed class GitWorkspaceManager(ILogger<GitWorkspaceManager> logger, str
         var (_, stdout, _) = await RunGitAsync(repoPath, ["status", "--porcelain"], cancellationToken);
         return !string.IsNullOrWhiteSpace(stdout);
     }
+
+    private const int DefaultTimeoutSeconds = 30;
 
     internal static async Task<(int ExitCode, string Stdout, string Stderr)> RunGitAsync(
         string workingDirectory, string[] args, CancellationToken cancellationToken,

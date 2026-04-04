@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using TaskBoard.Worker;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
@@ -79,6 +80,14 @@ builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
     // Normalise legacy single-step states into canonical steps-based model
     config = config.Normalised();
 
+    // Re-validate after normalization to catch any issues introduced by the transform
+    var postErrors = WorkflowConfigValidator.Validate(config);
+    if (postErrors.Count > 0)
+    {
+        throw new InvalidOperationException(
+            $"Workflow config post-normalization validation failed:\n{string.Join("\n", postErrors)}");
+    }
+
     // Set prompt resolution base directory
     config.ConfigDirectory = promptBaseDir;
 
@@ -93,16 +102,24 @@ switch (boardProvider)
     case "trello":
     case "live":
         builder.Services.Configure<TrelloClientOptions>(builder.Configuration.GetSection(TrelloClientOptions.SectionName));
+        var trelloBaseUrl = builder.Configuration.GetSection("Trello")["BaseUrl"] ?? "https://api.trello.com";
+        builder.Services.AddTransient(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptions<TrelloClientOptions>>().Value;
+            return new TrelloClient.TrelloAuthHandler(opts) { InnerHandler = new HttpClientHandler() };
+        });
         builder.Services.AddHttpClient<ITaskBoardClient, TrelloClient>(client =>
         {
-            var baseUrl = builder.Configuration.GetSection("Trello")["BaseUrl"] ?? "https://api.trello.com";
-            client.BaseAddress = new Uri(baseUrl);
-        });
+            client.BaseAddress = new Uri(trelloBaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(30);
+        })
+        .AddHttpMessageHandler<TrelloClient.TrelloAuthHandler>();
         builder.Services.AddHttpClient<ICrossReferenceResolver, TrelloCrossReferenceResolver>(client =>
         {
-            var baseUrl = builder.Configuration.GetSection("Trello")["BaseUrl"] ?? "https://api.trello.com";
-            client.BaseAddress = new Uri(baseUrl);
-        });
+            client.BaseAddress = new Uri(trelloBaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(30);
+        })
+        .AddHttpMessageHandler<TrelloClient.TrelloAuthHandler>();
         break;
     case "github":
         builder.Services.Configure<GitHubProjectsOptions>(builder.Configuration.GetSection(GitHubProjectsOptions.SectionName));
@@ -179,12 +196,24 @@ builder.Services.AddSingleton<TaskFileManager>();
 
 var worktreeBaseRaw = builder.Configuration["WorktreeBasePath"];
 var worktreeBasePath = worktreeBaseRaw is not null ? CliDefinitions.ResolvePath(worktreeBaseRaw) : null;
+var gitTimeoutSeconds = int.TryParse(builder.Configuration["GitTimeoutSeconds"], out var gts) ? gts : 30;
 builder.Services.AddSingleton(sp =>
-    new GitWorkspaceManager(sp.GetRequiredService<ILogger<GitWorkspaceManager>>(), worktreeBasePath));
+    new GitWorkspaceManager(sp.GetRequiredService<ILogger<GitWorkspaceManager>>(), worktreeBasePath, gitTimeoutSeconds));
 
 builder.Services.AddSingleton<AgentRunner>();
 builder.Services.AddSingleton<MergeRunner>();
 builder.Services.AddSingleton<PollingRunner>();
+
+// ── Queue-driven mode services (registered if Pgmq connection is configured) ──
+var pgmqConnectionString = builder.Configuration.GetSection(PgmqOptions.SectionName)["ConnectionString"];
+if (!string.IsNullOrWhiteSpace(pgmqConnectionString))
+{
+    builder.Services.Configure<PgmqOptions>(builder.Configuration.GetSection(PgmqOptions.SectionName));
+    builder.Services.AddSingleton(NpgsqlDataSource.Create(pgmqConnectionString));
+    builder.Services.AddSingleton<IPingQueueClient, PgmqPingQueueClient>();
+    builder.Services.AddSingleton<ICardClaimService, CardClaimService>();
+    builder.Services.AddSingleton<QueueDrivenRunner>();
+}
 
 using var host = builder.Build();
 var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Program");
@@ -275,7 +304,7 @@ if (mode == "agent")
     AgentRunResult result;
     if (targetCard is not null
         && workflowConfigInstance.States.TryGetValue(targetCard.ColumnId, out var cardState)
-        && string.Equals(cardState.GateType, "system_merge", StringComparison.OrdinalIgnoreCase))
+        && string.Equals(cardState.GateType, GateTypes.SystemMerge, StringComparison.OrdinalIgnoreCase))
     {
         var mergeRunner = scope.ServiceProvider.GetRequiredService<MergeRunner>();
         result = await mergeRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
@@ -338,8 +367,59 @@ if (mode == "polling")
     return;
 }
 
+// ── Mode: queue (webhook-driven via PGMQ pings queue) ──────────────────────
+if (mode == "queue")
+{
+    if (string.IsNullOrWhiteSpace(boardId))
+    {
+        logger.LogError("--board-id is required for queue mode");
+        return;
+    }
+
+    if (string.IsNullOrWhiteSpace(workspacePath))
+    {
+        logger.LogError("--workspace or AgentWorkspacePath is required for queue mode");
+        return;
+    }
+
+    if (string.IsNullOrWhiteSpace(pgmqConnectionString))
+    {
+        logger.LogError("Pgmq:ConnectionString (or --neon-connection) is required for queue mode");
+        return;
+    }
+
+    // Validate polling-specific config (queue mode reuses the same validation)
+    var queueErrors = WorkflowConfigValidator.Validate(
+        host.Services.GetRequiredService<WorkflowConfig>(), validatePolling: true);
+    if (queueErrors.Count > 0)
+    {
+        logger.LogError("Workflow config validation failed:\n{Errors}",
+            string.Join("\n", queueErrors));
+        return;
+    }
+
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        cts.Cancel();
+    };
+
+    using var scope = host.Services.CreateScope();
+    var queueRunner = scope.ServiceProvider.GetRequiredService<QueueDrivenRunner>();
+
+    logger.LogInformation(
+        "Queue mode: board={BoardId} workspace={Workspace} queue={Queue}",
+        boardId, workspacePath,
+        builder.Configuration.GetSection(PgmqOptions.SectionName)["PingQueueName"] ?? "pings");
+
+    await using var sleepInhibitor = await SystemSleepInhibitor.CreateAsync(logger);
+    await queueRunner.RunAsync(boardId, workspacePath, cts.Token);
+    return;
+}
+
 // No recognized mode — show help
-logger.LogError("No valid --mode specified. Use --mode agent or --mode polling.");
+logger.LogError("No valid --mode specified. Use --mode agent, --mode polling, or --mode queue.");
 CliDefinitions.PrintHelp();
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

@@ -80,7 +80,7 @@ public sealed record WorkflowConfig(
     /// </summary>
     public IReadOnlyList<string> GetTerminalStateNames() =>
         States
-            .Where(kvp => string.Equals(kvp.Value.GateType, "terminal", StringComparison.OrdinalIgnoreCase))
+            .Where(kvp => string.Equals(kvp.Value.GateType, GateTypes.Terminal, StringComparison.OrdinalIgnoreCase))
             .Select(kvp => kvp.Key)
             .ToList();
 
