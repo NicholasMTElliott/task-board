@@ -373,8 +373,21 @@ public sealed partial class AgentRunner(
             }
             else
             {
-                // Discard stage: just clean up the worktree
-                await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
+                var preserveWorktree = !string.IsNullOrEmpty(
+                    Environment.GetEnvironmentVariable("AIBOARD_PRESERVE_WORKTREE"));
+
+                if (preserveWorktree)
+                {
+                    var worktreePath = GitWorkspaceManager.GetWorktreePath(workspacePath, branchName);
+                    logger.LogWarning(
+                        "AIBOARD_PRESERVE_WORKTREE is set — keeping worktree for inspection at: {WorktreePath}",
+                        Path.GetFullPath(worktreePath));
+                }
+                else
+                {
+                    // Discard stage: clean up the worktree
+                    await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
+                }
             }
 
             // Best effort: post error comment and move card to error state

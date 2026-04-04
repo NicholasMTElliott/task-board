@@ -160,4 +160,49 @@ internal static class AgentOutputParser
         using var doc = JsonDocument.Parse(json);
         return JsonSerializer.Serialize(doc.RootElement);
     }
+
+    /// <summary>
+    /// Writes the agent prompt to a temp file and logs a reproduction block with
+    /// the exact command, workspace path, and prompt file path. Called on agent failure
+    /// to enable local reproduction of the error.
+    /// </summary>
+    internal static void LogReproductionInfo(
+        ILogger logger,
+        string agentName,
+        string executable,
+        string[] args,
+        string? stdinData,
+        string workspacePath)
+    {
+        string? promptFile = null;
+        if (!string.IsNullOrEmpty(stdinData))
+        {
+            try
+            {
+                promptFile = Path.Combine(Path.GetTempPath(), $"aiboard-repro-{Guid.NewGuid():N}.txt");
+                File.WriteAllText(promptFile, stdinData);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to write reproduction prompt to temp file");
+                promptFile = null;
+            }
+        }
+
+        // Build the full untruncated command for copy-paste reproduction
+        var fullArgs = string.Join(" ", args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a));
+        var reproCommand = promptFile is not null
+            ? $"cat \"{promptFile}\" | {executable} {fullArgs}"
+            : $"{executable} {fullArgs}";
+
+        logger.LogError(
+            "\n=== {AgentName} REPRODUCTION INFO ===\n" +
+            "Worktree:  {WorkspacePath}\n" +
+            "Command:   {Executable} {Args}\n" +
+            (promptFile is not null ? "Prompt:    {PromptFile}\n" : "") +
+            "Repro:     {ReproCommand}\n" +
+            "===",
+            agentName, workspacePath, executable, fullArgs,
+            promptFile ?? "", reproCommand);
+    }
 }
