@@ -29,6 +29,22 @@ public static class CodexCliResolver
                 return candidate;
         }
 
+        // Fallback: well-known install locations
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        string[] wellKnown =
+        [
+            Path.Combine(home, ".local", "bin", "codex.exe"),
+            Path.Combine(appData, "npm", "codex.cmd"),
+            Path.Combine(appData, "npm", "codex.exe"),
+        ];
+
+        foreach (var path in wellKnown)
+        {
+            if (File.Exists(path))
+                return path;
+        }
+
         // Nothing found — return the default and let downstream validation report the error
         return configuredPath;
     }

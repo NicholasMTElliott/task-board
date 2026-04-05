@@ -9,10 +9,10 @@ public static class ClaudeCliResolver
     private static readonly string[] WindowsCandidates = ["claude.cmd", "claude.exe"];
 
     /// <summary>
-    /// Returns the correct Claude CLI executable name.
+    /// Returns the correct Claude CLI executable path.
     /// If <paramref name="configuredPath"/> is not the default ("claude"),
     /// it is returned as-is (explicit user override).
-    /// On Windows with the default, probes for claude.cmd then claude.exe in PATH.
+    /// On Windows with the default, probes PATH then well-known install locations.
     /// </summary>
     public static string Resolve(string configuredPath)
     {
@@ -23,10 +23,27 @@ public static class ClaudeCliResolver
         if (!OperatingSystem.IsWindows())
             return configuredPath;
 
+        // Try PATH first
         foreach (var candidate in WindowsCandidates)
         {
             if (ExistsOnPath(candidate))
                 return candidate;
+        }
+
+        // Fallback: well-known install locations
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        string[] wellKnown =
+        [
+            Path.Combine(home, ".local", "bin", "claude.exe"),
+            Path.Combine(appData, "npm", "claude.cmd"),
+            Path.Combine(appData, "npm", "claude.exe"),
+        ];
+
+        foreach (var path in wellKnown)
+        {
+            if (File.Exists(path))
+                return path;
         }
 
         // Nothing found — return the default and let downstream validation report the error

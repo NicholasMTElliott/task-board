@@ -14,15 +14,73 @@ public static class PrerequisiteValidator
     {
         var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        var claudeExe = OperatingSystem.IsWindows() ? "claude.cmd" : "claude";
-        if (await IsCliAvailableAsync(claudeExe, cancellationToken))
+        if (await IsAnyCliAvailableAsync(
+                OperatingSystem.IsWindows() ? ["claude.cmd", "claude.exe"] : ["claude"],
+                WellKnownInstallPaths("claude"),
+                cancellationToken))
             available.Add("claude-cli");
 
-        var codexExe = OperatingSystem.IsWindows() ? "codex.cmd" : "codex";
-        if (await IsCliAvailableAsync(codexExe, cancellationToken))
+        if (await IsAnyCliAvailableAsync(
+                OperatingSystem.IsWindows() ? ["codex.cmd", "codex.exe"] : ["codex"],
+                WellKnownInstallPaths("codex"),
+                cancellationToken))
             available.Add("codex");
 
         return available;
+    }
+
+    /// <summary>
+    /// Tries multiple executable names on PATH, then falls back to well-known install locations.
+    /// Returns true if any candidate is found and responds to --version.
+    /// </summary>
+    private static async Task<bool> IsAnyCliAvailableAsync(
+        string[] pathCandidates,
+        string[] directPaths,
+        CancellationToken cancellationToken)
+    {
+        // First: try PATH-based lookup (fast, covers most installs)
+        foreach (var candidate in pathCandidates)
+        {
+            if (await IsCliAvailableAsync(candidate, cancellationToken))
+                return true;
+        }
+
+        // Fallback: probe well-known install directories directly
+        foreach (var fullPath in directPaths)
+        {
+            if (File.Exists(fullPath) && await IsCliAvailableAsync(fullPath, cancellationToken))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Returns well-known install locations for a CLI tool on the current platform.
+    /// Covers npm global, user .local/bin, and nvm-for-windows paths.
+    /// </summary>
+    private static string[] WellKnownInstallPaths(string toolName)
+    {
+        var paths = new List<string>();
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        if (OperatingSystem.IsWindows())
+        {
+            // Native install (Claude Desktop / standalone installer)
+            paths.Add(Path.Combine(home, ".local", "bin", $"{toolName}.exe"));
+            // npm global (nvm-for-windows)
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            paths.Add(Path.Combine(appData, "npm", $"{toolName}.cmd"));
+            paths.Add(Path.Combine(appData, "npm", $"{toolName}.exe"));
+        }
+        else
+        {
+            // Unix: ~/.local/bin (pip/pipx), /usr/local/bin (homebrew/npm global)
+            paths.Add(Path.Combine(home, ".local", "bin", toolName));
+            paths.Add($"/usr/local/bin/{toolName}");
+        }
+
+        return paths.ToArray();
     }
 
     /// <summary>

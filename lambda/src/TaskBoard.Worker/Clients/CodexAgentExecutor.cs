@@ -59,6 +59,10 @@ public sealed class CodexAgentExecutor(
                     "Codex agent exited with code {ExitCode}. Stderr: {Stderr}. Stdout: {Stdout}",
                     exitCode, stderr, stdout[..Math.Min(500, stdout.Length)]);
 
+                AgentOutputParser.LogReproductionInfo(
+                    logger, "Codex", _options.ExecutablePath, args,
+                    combinedPrompt, context.WorkspacePath);
+
                 var stderrSnippet = stderr[..Math.Min(1000, stderr.Length)].Trim();
                 var stdoutSnippet = stdout[..Math.Min(500, stdout.Length)].Trim();
                 var detail = $"Codex CLI exited with code {exitCode}.";
@@ -73,6 +77,9 @@ public sealed class CodexAgentExecutor(
             if (string.IsNullOrWhiteSpace(stdout))
             {
                 logger.LogError("Codex agent returned empty stdout. Stderr: {Stderr}", stderr);
+                AgentOutputParser.LogReproductionInfo(
+                    logger, "Codex", _options.ExecutablePath, args,
+                    combinedPrompt, context.WorkspacePath);
                 throw new InvalidOperationException(
                     $"Codex CLI returned empty output. Stderr: {stderr[..Math.Min(500, stderr.Length)].Trim()}");
             }
