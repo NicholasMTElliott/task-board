@@ -40,11 +40,24 @@ public sealed class CodexAgentExecutor(
                 _options.ExecutablePath, ProcessRunner.FormatArgsForLogging(args));
 
             // Pipe prompt via stdin ("-" arg) to avoid Windows command-line length limits
-            var (exitCode, stdout, stderr) = await ProcessRunner.RunProcessAsync(
-                _options.ExecutablePath, args, context.WorkspacePath,
-                _options.TimeoutSeconds, cancellationToken,
-                stdinData: combinedPrompt,
-                agentName: "Codex agent");
+            int exitCode;
+            string stdout, stderr;
+            try
+            {
+                (exitCode, stdout, stderr) = await ProcessRunner.RunProcessAsync(
+                    _options.ExecutablePath, args, context.WorkspacePath,
+                    _options.TimeoutSeconds, cancellationToken,
+                    stdinData: combinedPrompt,
+                    agentName: "Codex agent");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Timeout or other process-level failure — log repro info before propagating
+                AgentOutputParser.LogReproductionInfo(
+                    logger, "Codex", _options.ExecutablePath, args,
+                    combinedPrompt, context.WorkspacePath);
+                throw;
+            }
 
             // Log stderr diagnostics regardless of exit code — Codex may emit useful info there
             if (!string.IsNullOrWhiteSpace(stderr))
