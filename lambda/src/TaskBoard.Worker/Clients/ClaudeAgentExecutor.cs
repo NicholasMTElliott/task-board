@@ -26,12 +26,24 @@ public sealed class ClaudeAgentExecutor(
         logger.LogDebug("Claude CLI command: {FileName} {Args}",
             _options.ExecutablePath, ProcessRunner.FormatArgsForLogging(args));
 
-        var (exitCode, stdout, stderr) = await ProcessRunner.RunProcessAsync(
-            _options.ExecutablePath, args, context.WorkspacePath,
-            _options.TimeoutSeconds, cancellationToken,
-            stdinData: userPrompt,
-            envVarsToRemove: ["CLAUDECODE"],
-            agentName: "Claude agent");
+        int exitCode;
+        string stdout, stderr;
+        try
+        {
+            (exitCode, stdout, stderr) = await ProcessRunner.RunProcessAsync(
+                _options.ExecutablePath, args, context.WorkspacePath,
+                _options.TimeoutSeconds, cancellationToken,
+                stdinData: userPrompt,
+                envVarsToRemove: ["CLAUDECODE"],
+                agentName: "Claude agent");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            AgentOutputParser.LogReproductionInfo(
+                logger, "Claude", _options.ExecutablePath, args,
+                userPrompt, context.WorkspacePath);
+            throw;
+        }
 
         if (exitCode != 0)
         {
