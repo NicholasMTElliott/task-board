@@ -3,6 +3,7 @@ using NSubstitute;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
+using static TaskBoard.Worker.Tests.Helpers.TestGitHelper;
 
 namespace TaskBoard.Worker.Tests.Processing;
 
@@ -349,47 +350,4 @@ public class MergeRunnerTests : IDisposable
         Directory.Delete(path, recursive: true);
     }
 
-    private static void RunGitSync(string workingDirectory, params string[] args)
-    {
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = workingDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var arg in args)
-            psi.ArgumentList.Add(arg);
-
-        using var process = System.Diagnostics.Process.Start(psi)!;
-        process.WaitForExit(30_000);
-        if (process.ExitCode != 0)
-        {
-            var stderr = process.StandardError.ReadToEnd();
-            throw new InvalidOperationException(
-                $"git {string.Join(' ', args)} failed (exit {process.ExitCode}): {stderr}");
-        }
-    }
-
-    private static string RunGitSyncWithOutput(string workingDirectory, params string[] args)
-    {
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = workingDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var arg in args)
-            psi.ArgumentList.Add(arg);
-
-        using var process = System.Diagnostics.Process.Start(psi)!;
-        var output = process.StandardOutput.ReadToEnd();
-        process.WaitForExit(30_000);
-        return output;
-    }
 }
