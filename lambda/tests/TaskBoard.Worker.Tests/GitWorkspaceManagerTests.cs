@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using TaskBoard.Worker.Processing;
+using static TaskBoard.Worker.Tests.Helpers.TestGitHelper;
 
 namespace TaskBoard.Worker.Tests;
 
@@ -19,7 +20,7 @@ public class GitWorkspaceManagerTests : IDisposable
 
         // Initialize a git repo in the temp dir
         InitGitRepo(_tempDir);
-        _defaultBranch = GetCurrentBranch(_tempDir);
+        _defaultBranch = RunGitSyncWithOutput(_tempDir, "branch", "--show-current");
     }
 
     public void Dispose()
@@ -311,44 +312,6 @@ public class GitWorkspaceManagerTests : IDisposable
         File.WriteAllText(Path.Combine(path, ".gitkeep"), "");
         RunGitSync(path, "add", ".");
         RunGitSync(path, "commit", "-m", "initial");
-    }
-
-    private static string GetCurrentBranch(string workingDirectory)
-    {
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = workingDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        psi.ArgumentList.Add("branch");
-        psi.ArgumentList.Add("--show-current");
-
-        using var process = System.Diagnostics.Process.Start(psi)!;
-        var output = process.StandardOutput.ReadToEnd().Trim();
-        process.WaitForExit();
-        return output;
-    }
-
-    private static void RunGitSync(string workingDirectory, params string[] args)
-    {
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = workingDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var arg in args)
-            psi.ArgumentList.Add(arg);
-
-        using var process = System.Diagnostics.Process.Start(psi)!;
-        process.WaitForExit();
     }
 
     private static void CleanupDirectory(string path)

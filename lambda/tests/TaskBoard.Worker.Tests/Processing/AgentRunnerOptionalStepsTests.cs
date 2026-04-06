@@ -4,6 +4,7 @@ using NSubstitute.ExceptionExtensions;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
+using static TaskBoard.Worker.Tests.Helpers.TestGitHelper;
 
 namespace TaskBoard.Worker.Tests.Processing;
 
@@ -593,24 +594,6 @@ public class AgentRunnerOptionalStepsTests : IDisposable
         File.WriteAllText(Path.Combine(path, ".gitkeep"), "");
         RunGitSync(path, "add", ".");
         RunGitSync(path, "commit", "-m", "initial");
-    }
-
-    private static void RunGitSync(string workingDirectory, params string[] args)
-    {
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = workingDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var arg in args)
-            psi.ArgumentList.Add(arg);
-
-        using var process = System.Diagnostics.Process.Start(psi)!;
-        process.WaitForExit();
     }
 
     private static void CleanupDirectory(string path)
