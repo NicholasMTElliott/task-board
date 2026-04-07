@@ -230,6 +230,11 @@ if (!string.IsNullOrWhiteSpace(pgmqConnectionString))
     builder.Services.AddSingleton<IPingQueueClient, PgmqPingQueueClient>();
     builder.Services.AddSingleton<ICardClaimService, CardClaimService>();
     builder.Services.AddSingleton<QueueDrivenRunner>();
+    builder.Services.AddSingleton<IRunStore, PgRunStore>();
+}
+else
+{
+    builder.Services.AddSingleton<IRunStore>(NullRunStore.Instance);
 }
 
 using var host = builder.Build();

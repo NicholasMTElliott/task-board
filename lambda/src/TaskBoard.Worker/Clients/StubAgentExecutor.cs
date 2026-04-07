@@ -4,10 +4,15 @@ public sealed class StubAgentExecutor(ILogger<StubAgentExecutor> logger) : IAgen
 {
     public AgentOutcome NextOutcome { get; set; } = AgentOutcome.COMPLETE;
     public string DesignContent { get; set; } = "## Technical Design\n\nStub technical design produced by agent.";
+    public AgentExecutionContext? LastContext { get; private set; }
+    public Action<AgentExecutionContext, CancellationToken>? OnExecute { get; set; }
 
     public async Task<AgentResult> ExecuteAsync(
         AgentExecutionContext context, CancellationToken cancellationToken)
     {
+        LastContext = context;
+        OnExecute?.Invoke(context, cancellationToken);
+
         logger.LogInformation("[Stub] Agent executing for card {CardId} in {Workspace}",
             context.TargetCardId, context.WorkspacePath);
 

@@ -392,6 +392,7 @@ public class AgentRunnerGateCheckTests : IDisposable
             normalisedConfig, new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_boardClient, normalisedConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullRunStore.Instance,
             NullLogger<AgentRunner>.Instance);
     }
 

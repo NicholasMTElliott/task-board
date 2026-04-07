@@ -756,6 +756,46 @@ public class UpdateFileProcessorTests : IDisposable
         Assert.False(UpdateFileProcessor.HasCreatedTicketMarker([], "any-slug"));
     }
 
+    // ── Reference file ───────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_ReferenceFile_ReturnsContent()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "42-reference.md"),
+            "# Detailed Analysis\n\nReference content here.");
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "42", "create_design", [], CancellationToken.None);
+
+        Assert.Equal("# Detailed Analysis\n\nReference content here.", result.ReferenceContent);
+        Assert.False(File.Exists(Path.Combine(updatesDir, "42-reference.md"))); // consumed
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_NoReferenceFile_ReturnsNull()
+    {
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "42", "create_design", [], CancellationToken.None);
+
+        Assert.Null(result.ReferenceContent);
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_ReferenceFile_NotCountedAsUpdate()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "42-reference.md"), "ref content");
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "42", "step", [], CancellationToken.None);
+
+        Assert.False(result.HasUpdates); // reference content is not a "board update"
+        Assert.NotNull(result.ReferenceContent);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private string CreateUpdatesDir()

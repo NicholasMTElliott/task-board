@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
@@ -48,6 +49,7 @@ public class AgentRunnerTests : IDisposable
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullRunStore.Instance,
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -195,6 +197,7 @@ public class AgentRunnerTests : IDisposable
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(throwingExecutor), _taskFileManager, _gitWorkspaceManager,
             BuildWorkflowConfig().Normalised(), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, BuildWorkflowConfig().Normalised(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullRunStore.Instance,
             NullLogger<AgentRunner>.Instance);
 
         SetupBoardCards();
@@ -545,6 +548,7 @@ public class AgentRunnerTests : IDisposable
             _trelloClient, resolver, _taskFileManager, _gitWorkspaceManager,
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullRunStore.Instance,
             NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
@@ -572,6 +576,34 @@ public class AgentRunnerTests : IDisposable
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(_agentExecutor), _taskFileManager, _gitWorkspaceManager,
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullRunStore.Instance,
+            NullLogger<AgentRunner>.Instance);
+    }
+
+    private AgentRunner CreateRunnerWithConfig(WorkflowConfig config, IRunStore runStore)
+    {
+        return new AgentRunner(
+            _trelloClient, AgentExecutorResolver.ForSingleExecutor(_agentExecutor), _taskFileManager, _gitWorkspaceManager,
+            config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            runStore,
+            NullLogger<AgentRunner>.Instance);
+    }
+
+    private AgentRunner CreateRunnerWithRunStore(IRunStore runStore)
+    {
+        return new AgentRunner(
+            _trelloClient,
+            AgentExecutorResolver.ForSingleExecutor(_agentExecutor),
+            _taskFileManager,
+            _gitWorkspaceManager,
+            _workflowConfig,
+            new StubCrossReferenceResolver(),
+            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, _workflowConfig,
+                new AgentIdentity("Test", "Agent", "TestMachine"),
+                NullLogger<UpdateFileProcessor>.Instance),
+            runStore,
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -680,6 +712,7 @@ public class AgentRunnerTests : IDisposable
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(sequencedExecutor), _taskFileManager, _gitWorkspaceManager,
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullRunStore.Instance,
             NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
@@ -710,6 +743,7 @@ public class AgentRunnerTests : IDisposable
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(errorExecutor), _taskFileManager, _gitWorkspaceManager,
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullRunStore.Instance,
             NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
@@ -804,6 +838,7 @@ public class AgentRunnerTests : IDisposable
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
             _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullRunStore.Instance,
             NullLogger<AgentRunner>.Instance);
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
@@ -850,6 +885,7 @@ public class AgentRunnerTests : IDisposable
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
             _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullRunStore.Instance,
             NullLogger<AgentRunner>.Instance);
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
@@ -874,6 +910,257 @@ public class AgentRunnerTests : IDisposable
         // CreateCardAsync never called (no update files)
         await _trelloClient.DidNotReceive().CreateCardAsync(
             Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    // ── RunStore / DB integration tests ──────────────────────────────────────
+
+    [Fact]
+    public async Task ExecuteAsync_SavesStepResultToDb()
+    {
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+        var mockRunStore = Substitute.For<IRunStore>();
+
+        var runner = CreateRunnerWithRunStore(mockRunStore);
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        await mockRunStore.Received(1).CreateRunAsync(
+            Arg.Is<RunRecord>(r => r.CardId == TargetCardId), Arg.Any<CancellationToken>());
+        await mockRunStore.Received(1).SaveStepResultAsync(
+            Arg.Is<StepResultRecord>(r => r.CardId == TargetCardId && r.Outcome == AgentOutcome.COMPLETE),
+            Arg.Any<CancellationToken>());
+        await mockRunStore.Received(1).CompleteRunAsync(
+            Arg.Any<string>(), AgentOutcome.COMPLETE, Arg.Is<string?>(s => s == null), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DbFailure_ContinuesWithoutError()
+    {
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+        var mockRunStore = Substitute.For<IRunStore>();
+        mockRunStore.SaveStepResultAsync(Arg.Any<StepResultRecord>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new Exception("DB connection lost"));
+
+        var runner = CreateRunnerWithRunStore(mockRunStore);
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome); // Run still succeeds
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithRunStore_TrimsCardBody()
+    {
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+        _agentExecutor.DesignContent = "## Approach\n\nSummary.\n\n---\n\n<details><summary>Detail</summary>\n\nFull detail here.\n\n</details>";
+        var mockRunStore = Substitute.For<IRunStore>();
+
+        var runner = CreateRunnerWithRunStore(mockRunStore);
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Verify board received trimmed content (no <details> blocks)
+        await _trelloClient.Received().UpdateCardBodyAsync(
+            TargetCardId,
+            Arg.Is<string>(body => !body.Contains("<details>") && body.Contains("## Approach")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithNullRunStore_PostsFullCardBody()
+    {
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+        _agentExecutor.DesignContent = "## Approach\n\nSummary.\n\n---\n\n<details><summary>Detail</summary>\n\nFull detail.\n\n</details>";
+
+        var result = await _runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Verify board received FULL content (NullRunStore = no trimming)
+        await _trelloClient.Received().UpdateCardBodyAsync(
+            TargetCardId,
+            Arg.Is<string>(body => body.Contains("<details>")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithRunStore_OmitsConversationLogFromComment()
+    {
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+        var mockRunStore = Substitute.For<IRunStore>();
+
+        var runner = CreateRunnerWithRunStore(mockRunStore);
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Step comments should not contain "conversation log"
+        await _trelloClient.Received().UpsertAgentCommentAsync(
+            TargetCardId,
+            Arg.Is<string>(c => !c.Contains("Agent conversation log")),
+            Arg.Any<string>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Error_RecordsRunAsError()
+    {
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.ERROR;
+        var mockRunStore = Substitute.For<IRunStore>();
+
+        var runner = CreateRunnerWithRunStore(mockRunStore);
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        await mockRunStore.Received().CompleteRunAsync(
+            Arg.Any<string>(), AgentOutcome.ERROR, Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MultiStep_SavesEachStepResult()
+    {
+        SetupBoardCards("list-multi");
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+        var mockRunStore = Substitute.For<IRunStore>();
+
+        var runner = CreateRunnerWithConfig(BuildMultiStepWorkflowConfig().Normalised(), mockRunStore);
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Should save a result for each step
+        await mockRunStore.Received(2).SaveStepResultAsync(
+            Arg.Any<StepResultRecord>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WritesPriorStepContext()
+    {
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+        var mockRunStore = Substitute.For<IRunStore>();
+        mockRunStore.GetStepResultsForCardAsync(TargetCardId, null, Arg.Any<CancellationToken>())
+            .Returns(new List<StepResultRecord>
+            {
+                new("prior-run", TargetCardId, "Ready for Design", "create_design", 1,
+                    "senior_engineer", "claude-opus-4-6", AgentOutcome.COMPLETE,
+                    "Design complete", "Full design content here", null, null, null, null,
+                    DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow)
+            });
+
+        string? capturedContextContent = null;
+        _agentExecutor.OnExecute = (ctx, _) =>
+        {
+            // Read context file during execution before worktree is discarded
+            var contextFile = Path.Combine(ctx.WorkspacePath, ".aiboard", "context", "step-history.md");
+            if (File.Exists(contextFile))
+                capturedContextContent = File.ReadAllText(contextFile);
+        };
+
+        var runner = CreateRunnerWithRunStore(mockRunStore);
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Verify GetStepResultsForCardAsync was called and context file was written
+        await mockRunStore.Received(1).GetStepResultsForCardAsync(
+            TargetCardId, null, Arg.Any<CancellationToken>());
+        Assert.NotNull(capturedContextContent);
+        Assert.Contains("create_design", capturedContextContent);
+        Assert.Contains("Full design content here", capturedContextContent);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReferenceFile_StoredInStepResult()
+    {
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+        var mockRunStore = Substitute.For<IRunStore>();
+
+        _agentExecutor.OnExecute = (ctx, _) =>
+        {
+            var updatesDir = Path.Combine(ctx.WorkspacePath, ".aiboard", "updates");
+            Directory.CreateDirectory(updatesDir);
+            File.WriteAllText(
+                Path.Combine(updatesDir, "1-reference.md"),
+                "# Detailed Analysis\n\nThis is reference content.");
+        };
+
+        var runner = CreateRunnerWithRunStore(mockRunStore);
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Verify reference content was passed to StepResultRecord
+        await mockRunStore.Received().SaveStepResultAsync(
+            Arg.Is<StepResultRecord>(r => r.ReferenceContent != null
+                && r.ReferenceContent.Contains("Detailed Analysis")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_LargeReferenceContent_IsTruncated()
+    {
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+        var mockRunStore = Substitute.For<IRunStore>();
+
+        _agentExecutor.OnExecute = (ctx, _) =>
+        {
+            var updatesDir = Path.Combine(ctx.WorkspacePath, ".aiboard", "updates");
+            Directory.CreateDirectory(updatesDir);
+            var largeContent = new string('x', 150_000); // exceeds 100k limit
+            File.WriteAllText(
+                Path.Combine(updatesDir, "1-reference.md"),
+                largeContent);
+        };
+
+        var runner = CreateRunnerWithRunStore(mockRunStore);
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        await mockRunStore.Received().SaveStepResultAsync(
+            Arg.Is<StepResultRecord>(r =>
+                r.ReferenceContent != null
+                && r.ReferenceContent.Length <= 100_001 + 20 // 100k + truncation marker
+                && r.ReferenceContent.EndsWith("[truncated]")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PriorStepContext_IncludesReferenceContent()
+    {
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+        var mockRunStore = Substitute.For<IRunStore>();
+        mockRunStore.GetStepResultsForCardAsync(TargetCardId, null, Arg.Any<CancellationToken>())
+            .Returns(new List<StepResultRecord>
+            {
+                new("prior-run", TargetCardId, "Ready for Design", "create_design", 1,
+                    "senior_engineer", "claude-opus-4-6", AgentOutcome.COMPLETE,
+                    "Summary", "Detail", "Reference analysis content", null, null, null,
+                    DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow)
+            });
+
+        string? capturedContextContent = null;
+        _agentExecutor.OnExecute = (ctx, _) =>
+        {
+            var contextFile = Path.Combine(ctx.WorkspacePath, ".aiboard", "context", "step-history.md");
+            if (File.Exists(contextFile))
+                capturedContextContent = File.ReadAllText(contextFile);
+        };
+
+        var runner = CreateRunnerWithRunStore(mockRunStore);
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.NotNull(capturedContextContent);
+        Assert.Contains("Reference Content", capturedContextContent);
+        Assert.Contains("Reference analysis content", capturedContextContent);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void FormatComment_ConversationLogControlledByFlag(bool include)
+    {
+        var result = new AgentResult(AgentOutcome.COMPLETE, "Done", ConversationLog: "long conversation");
+        var comment = AgentRunner.FormatComment(result, includeConversationLog: include);
+
+        if (include)
+            Assert.Contains("Agent conversation log", comment);
+        else
+            Assert.DoesNotContain("Agent conversation log", comment);
     }
 
 }
