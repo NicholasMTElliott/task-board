@@ -59,7 +59,19 @@ public static class FilterOperators
     public const string IsNotEmpty = "isNotEmpty";
 }
 
-// ── Workflow config ──────────────────────────────────────────────────────────
+// ── Card type / generation config ────────────────────────────────────────────
+
+public sealed record CardTypeDefinition(
+    string Name,
+    string LabelPrefix = "type",
+    List<string>? AllowedChildren = null);
+
+public sealed record GenerationConfig(
+    string TargetType,
+    string? TargetColumn = null,
+    bool LinkToParent = true);
+
+// ── Workflow config ───────────────────────────────────────────────────────────
 
 public sealed record EstimationConfig(
     string CalibrationTicketId,
@@ -72,7 +84,8 @@ public sealed record WorkflowConfig(
     Dictionary<string, WorkflowRole> Roles,
     PollingConfig? Polling = null,
     MergeResolutionConfig? MergeResolution = null,
-    EstimationConfig? Estimation = null)
+    EstimationConfig? Estimation = null,
+    Dictionary<string, CardTypeDefinition>? CardTypes = null)
 {
     /// <summary>
     /// The directory containing the workflow config file. Set after deserialization.
@@ -192,7 +205,8 @@ public sealed record WorkflowStep(
     string Name,
     string Role,
     string? TaskPrompt = null,
-    string? TaskPromptFile = null);
+    string? TaskPromptFile = null,
+    GenerationConfig? GenerationConfig = null);
 
 public sealed record WorkflowRole(
     string Model,

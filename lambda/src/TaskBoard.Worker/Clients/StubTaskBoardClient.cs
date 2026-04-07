@@ -83,18 +83,21 @@ public sealed class StubTaskBoardClient(ILogger<StubTaskBoardClient> logger) : I
         return Task.CompletedTask;
     }
 
-    private int _nextStubId = 100;
-
-    public Task<string> CreateCardAsync(string title, string body, CancellationToken cancellationToken)
-    {
-        var id = Interlocked.Increment(ref _nextStubId).ToString();
-        logger.LogInformation("[Stub] CreateCard #{Id} title={Title} ({Length} chars)", id, title, body.Length);
-        return Task.FromResult(id);
-    }
+    private int _nextStubId;
 
     public Task<string> GetCurrentUserAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("[Stub] GetCurrentUser");
         return Task.FromResult("stub-agent");
+    }
+
+    public Task<string> CreateCardAsync(CreateCardRequest request, CancellationToken cancellationToken)
+    {
+        var id = System.Threading.Interlocked.Increment(ref _nextStubId).ToString();
+        logger.LogInformation(
+            "[Stub] CreateCard #{Id} title={Title} type={Type} parent={Parent} column={Column}",
+            id, request.Title, request.CardType ?? "(none)",
+            request.ParentCardId ?? "(none)", request.TargetColumn ?? "(none)");
+        return Task.FromResult(id);
     }
 }

@@ -540,5 +540,17 @@
     "calibrationSize": 1,
     "fieldName": "Estimate",
     "scale": [1, 2, 4, 8]
+  },
+  "cardTypes": {
+    "story": {
+      "name": "User Story",
+      "labelPrefix": "type",
+      "allowedChildren": ["task"]
+    },
+    "task": {
+      "name": "Task",
+      "labelPrefix": "type",
+      "allowedChildren": []
+    }
   }
 }

@@ -47,6 +47,17 @@ public sealed class ClaudeAgentExecutor(
 
         if (exitCode != 0)
         {
+            if (IsRateLimited(stderr))
+            {
+                var snippet = stderr[..Math.Min(500, stderr.Length)].Trim();
+                logger.LogWarning(
+                    "Claude CLI rate limited for card {CardId}. Exit code {ExitCode}. Stderr: {Stderr}",
+                    context.TargetCardId, exitCode, snippet);
+                throw new RateLimitException(
+                    $"Claude CLI rate limited (exit code {exitCode}). Stderr: {snippet}",
+                    RateLimitSource.AgentCli);
+            }
+
             logger.LogError("Claude agent exited with code {ExitCode}. Stderr: {Stderr}. Stdout: {Stdout}",
                 exitCode, stderr, stdout[..Math.Min(500, stdout.Length)]);
 
@@ -67,6 +78,17 @@ public sealed class ClaudeAgentExecutor(
 
         if (string.IsNullOrWhiteSpace(stdout))
         {
+            if (IsRateLimited(stderr))
+            {
+                var snippet = stderr[..Math.Min(500, stderr.Length)].Trim();
+                logger.LogWarning(
+                    "Claude CLI rate limited for card {CardId} (exit code 0, empty output). Stderr: {Stderr}",
+                    context.TargetCardId, snippet);
+                throw new RateLimitException(
+                    $"Claude CLI rate limited (exit code 0, empty output). Stderr: {snippet}",
+                    RateLimitSource.AgentCli);
+            }
+
             logger.LogError("Claude agent returned empty output. Stderr: {Stderr}", stderr);
             AgentOutputParser.LogReproductionInfo(
                 logger, "Claude", _options.ExecutablePath, args,
@@ -153,6 +175,19 @@ public sealed class ClaudeAgentExecutor(
         args.Add("--print");
 
         return args.ToArray();
+    }
+
+    /// <summary>
+    /// Checks stderr for Claude CLI rate-limit signals.
+    /// Deliberately does NOT check stdout — agent conversation content flows through
+    /// stdout as NDJSON and may discuss rate limiting without being rate-limited.
+    /// </summary>
+    internal static bool IsRateLimited(string stderr)
+    {
+        if (string.IsNullOrEmpty(stderr)) return false;
+
+        return stderr.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+            || stderr.Contains("overloaded", StringComparison.OrdinalIgnoreCase);
     }
 
     internal static AgentResult ParseResult(string stdout)

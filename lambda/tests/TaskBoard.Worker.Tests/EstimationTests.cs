@@ -397,7 +397,7 @@ public class EstimationIntegrationTests : IDisposable
             config,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_boardClient, NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 

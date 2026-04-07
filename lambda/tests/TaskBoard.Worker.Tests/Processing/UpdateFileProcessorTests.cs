@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
 
 namespace TaskBoard.Worker.Tests.Processing;
@@ -10,6 +11,8 @@ public class UpdateFileProcessorTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly ITaskBoardClient _boardClient;
+    private readonly WorkflowConfig _config;
+    private readonly AgentIdentity _identity;
     private readonly UpdateFileProcessor _processor;
 
     private const string SourceCardId = "42";
@@ -17,15 +20,33 @@ public class UpdateFileProcessorTests : IDisposable
 
     public UpdateFileProcessorTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "ufp-tests-" + Guid.NewGuid().ToString("N")[..8]);
+        _tempDir = Path.Combine(Path.GetTempPath(), "update-processor-tests-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_tempDir);
+
         _boardClient = Substitute.For<ITaskBoardClient>();
-        _processor = new UpdateFileProcessor(_boardClient, NullLogger<UpdateFileProcessor>.Instance);
+        _boardClient.CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>())
+            .Returns(ci => Task.FromResult("42"));
+
+        _config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Backlog"] = new("Backlog", null, "manual_entry", null, new()),
+            },
+            Roles: new(),
+            CardTypes: new Dictionary<string, CardTypeDefinition>
+            {
+                ["task"] = new("Task", "type", []),
+                ["story"] = new("User Story", "type", ["task"]),
+            });
+
+        _identity = new AgentIdentity("Bot", "TestBot", "machine");
+        _processor = new UpdateFileProcessor(_boardClient, _config, _identity,
+            NullLogger<UpdateFileProcessor>.Instance);
     }
 
     public void Dispose()
     {
-        try { Directory.Delete(_tempDir, recursive: true); } catch { }
+        if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, recursive: true);
     }
 
     // ── Directory / empty cases ──────────────────────────────────────────────
@@ -41,7 +62,7 @@ public class UpdateFileProcessorTests : IDisposable
         Assert.False(result.HasUpdates);
         Assert.Empty(result.CreatedTickets);
         Assert.Empty(result.PostedComments);
-        await _boardClient.DidNotReceive().CreateCardAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _boardClient.DidNotReceive().CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -53,7 +74,7 @@ public class UpdateFileProcessorTests : IDisposable
             _tempDir, SourceCardId, StepName, [], CancellationToken.None);
 
         Assert.False(result.HasUpdates);
-        await _boardClient.DidNotReceive().CreateCardAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _boardClient.DidNotReceive().CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
     }
 
     // ── New ticket: happy path ───────────────────────────────────────────────
@@ -65,7 +86,7 @@ public class UpdateFileProcessorTests : IDisposable
         var content = "---\ntitle: Fix the auth race condition\n---\n\nDetailed description of the bug.";
         File.WriteAllText(Path.Combine(updatesDir, "new-fix-auth-race.md"), content);
 
-        _boardClient.CreateCardAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        _boardClient.CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>())
             .Returns("99");
 
         var result = await _processor.ProcessUpdatesAsync(
@@ -79,7 +100,8 @@ public class UpdateFileProcessorTests : IDisposable
 
         // Card should be created
         await _boardClient.Received(1).CreateCardAsync(
-            "Fix the auth race condition", Arg.Any<string>(), Arg.Any<CancellationToken>());
+            Arg.Is<CreateCardRequest>(r => r.Title == "Fix the auth race condition"),
+            Arg.Any<CancellationToken>());
 
         // Notification comment on source card — marker only in commentMarker param, not body
         await _boardClient.Received(1).UpsertAgentCommentAsync(
@@ -98,14 +120,16 @@ public class UpdateFileProcessorTests : IDisposable
         var updatesDir = CreateUpdatesDir();
         File.WriteAllText(Path.Combine(updatesDir, "new-empty-body.md"), "---\ntitle: Empty Body Ticket\n---\n");
 
-        _boardClient.CreateCardAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        _boardClient.CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>())
             .Returns("55");
 
         var result = await _processor.ProcessUpdatesAsync(
             _tempDir, SourceCardId, StepName, [], CancellationToken.None);
 
         Assert.Single(result.CreatedTickets);
-        await _boardClient.Received(1).CreateCardAsync("Empty Body Ticket", Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r => r.Title == "Empty Body Ticket"),
+            Arg.Any<CancellationToken>());
     }
 
     // ── New ticket: deduplication ────────────────────────────────────────────
@@ -128,7 +152,7 @@ public class UpdateFileProcessorTests : IDisposable
 
         Assert.False(result.HasUpdates);
         Assert.Empty(result.CreatedTickets);
-        await _boardClient.DidNotReceive().CreateCardAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _boardClient.DidNotReceive().CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
 
         // File should still be deleted (dedup cleanup)
         Assert.False(File.Exists(Path.Combine(updatesDir, "new-fix-auth-race.md")));
@@ -147,7 +171,7 @@ public class UpdateFileProcessorTests : IDisposable
             _tempDir, SourceCardId, StepName, [], CancellationToken.None);
 
         Assert.False(result.HasUpdates);
-        await _boardClient.DidNotReceive().CreateCardAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _boardClient.DidNotReceive().CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
 
         // File should NOT be deleted when it cannot be parsed
         Assert.True(File.Exists(filePath));
@@ -227,7 +251,7 @@ public class UpdateFileProcessorTests : IDisposable
             _tempDir, SourceCardId, StepName, [], CancellationToken.None);
 
         Assert.False(result.HasUpdates);
-        await _boardClient.DidNotReceive().CreateCardAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _boardClient.DidNotReceive().CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
         await _boardClient.DidNotReceive().UpsertAgentCommentAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         // Unrecognized files are NOT deleted
@@ -247,8 +271,12 @@ public class UpdateFileProcessorTests : IDisposable
         File.WriteAllText(Path.Combine(updatesDir, "10-comment.md"),
             "Note for card 10.");
 
-        _boardClient.CreateCardAsync("Bug One", Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns("201");
-        _boardClient.CreateCardAsync("Bug Two", Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns("202");
+        _boardClient.CreateCardAsync(
+                Arg.Is<CreateCardRequest>(r => r.Title == "Bug One"), Arg.Any<CancellationToken>())
+            .Returns("201");
+        _boardClient.CreateCardAsync(
+                Arg.Is<CreateCardRequest>(r => r.Title == "Bug Two"), Arg.Any<CancellationToken>())
+            .Returns("202");
 
         var result = await _processor.ProcessUpdatesAsync(
             _tempDir, SourceCardId, StepName, [], CancellationToken.None);
@@ -257,7 +285,7 @@ public class UpdateFileProcessorTests : IDisposable
         Assert.Equal(2, result.CreatedTickets.Count);
         Assert.Single(result.PostedComments);
 
-        await _boardClient.Received(2).CreateCardAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _boardClient.Received(2).CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
         await _boardClient.Received(1).UpsertAgentCommentAsync("10", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
@@ -272,7 +300,7 @@ public class UpdateFileProcessorTests : IDisposable
         File.WriteAllText(Path.Combine(updatesDir, "5-comment.md"),
             "This comment should still be posted.");
 
-        _boardClient.CreateCardAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        _boardClient.CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("gh CLI failed"));
 
         var result = await _processor.ProcessUpdatesAsync(
@@ -294,7 +322,7 @@ public class UpdateFileProcessorTests : IDisposable
 
         _boardClient.UpsertAgentCommentAsync("5", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("board client error"));
-        _boardClient.CreateCardAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        _boardClient.CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>())
             .Returns("300");
 
         var result = await _processor.ProcessUpdatesAsync(
@@ -307,15 +335,70 @@ public class UpdateFileProcessorTests : IDisposable
     // ── ParseNewTicketFile ───────────────────────────────────────────────────
 
     [Fact]
-    public void ParseNewTicketFile_ValidFormat_ExtractsFields()
+    public void ParseNewTicketFile_WithFrontMatter_ParsesTitleAndBody()
     {
-        var content = "---\ntitle: My Bug Fix\n---\n\nDetailed description of the bug.";
+        var content = "---\ntitle: My Task\n---\n\n## Body content\n";
 
         var result = UpdateFileProcessor.ParseNewTicketFile(content);
 
         Assert.NotNull(result);
-        Assert.Equal("My Bug Fix", result!.Value.Title);
-        Assert.Equal("Detailed description of the bug.", result.Value.Body);
+        Assert.Equal("My Task", result.Title);
+        Assert.Contains("Body content", result.Body);
+    }
+
+    [Fact]
+    public void ParseNewTicketFile_WithAllOptionalFields_ParsesTypeParentColumn()
+    {
+        var content = "---\ntitle: Fix bug\ntype: bug\nparent: 5\ntargetColumn: Backlog\n---\n\nBody here.";
+
+        var result = UpdateFileProcessor.ParseNewTicketFile(content);
+
+        Assert.NotNull(result);
+        Assert.Equal("Fix bug", result.Title);
+        Assert.Equal("bug", result.Type);
+        Assert.Equal("5", result.Parent);
+        Assert.Equal("Backlog", result.TargetColumn);
+    }
+
+    [Fact]
+    public void ParseNewTicketFile_WithH1Title_ExtractsTitleFromBody()
+    {
+        var content = "# My Title\n\nSome body text.";
+
+        var result = UpdateFileProcessor.ParseNewTicketFile(content);
+
+        Assert.NotNull(result);
+        Assert.Equal("My Title", result.Title);
+        Assert.Contains("Some body text", result.Body);
+    }
+
+    [Fact]
+    public void ParseNewTicketFile_EmptyContent_ReturnsNull()
+    {
+        Assert.Null(UpdateFileProcessor.ParseNewTicketFile(""));
+        Assert.Null(UpdateFileProcessor.ParseNewTicketFile("   "));
+    }
+
+    [Fact]
+    public void ParseNewTicketFile_FrontMatterWithoutTitle_ReturnsNull()
+    {
+        var content = "---\ntype: bug\n---\n\nBody with no title.";
+
+        Assert.Null(UpdateFileProcessor.ParseNewTicketFile(content));
+    }
+
+    [Fact]
+    public void ParseNewTicketFile_MissingOptionalFields_ReturnsNullForEach()
+    {
+        var content = "---\ntitle: Task A\n---\n\nBody.";
+
+        var result = UpdateFileProcessor.ParseNewTicketFile(content);
+
+        Assert.NotNull(result);
+        Assert.Equal("Task A", result.Title);
+        Assert.Null(result.Type);
+        Assert.Null(result.Parent);
+        Assert.Null(result.TargetColumn);
     }
 
     [Fact]
@@ -326,7 +409,7 @@ public class UpdateFileProcessorTests : IDisposable
         var result = UpdateFileProcessor.ParseNewTicketFile(content);
 
         Assert.NotNull(result);
-        Assert.Equal("My Quoted Title", result!.Value.Title);
+        Assert.Equal("My Quoted Title", result.Title);
     }
 
     [Fact]
@@ -337,47 +420,299 @@ public class UpdateFileProcessorTests : IDisposable
         var result = UpdateFileProcessor.ParseNewTicketFile(content);
 
         Assert.NotNull(result);
-        Assert.Equal("Single Quoted", result!.Value.Title);
+        Assert.Equal("Single Quoted", result.Title);
     }
 
     [Fact]
-    public void ParseNewTicketFile_NoFrontMatter_ReturnsNull()
+    public void ParseNewTicketFile_UnclosedFrontMatter_TreatsAsBodyWithH1()
     {
-        var content = "Just plain content without front matter.";
+        // No closing --- but has H1 title — HEAD version handles this case
+        var content = "# My Title\n\nBody without closing dashes.";
 
         var result = UpdateFileProcessor.ParseNewTicketFile(content);
 
-        Assert.Null(result);
+        Assert.NotNull(result);
+        Assert.Equal("My Title", result.Title);
+    }
+
+    // ── BuildTypeLabel ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void BuildTypeLabel_KnownType_UsesConfigPrefix()
+    {
+        Assert.Equal("type:task", _processor.BuildTypeLabel("task"));
     }
 
     [Fact]
-    public void ParseNewTicketFile_NoTitle_ReturnsNull()
+    public void BuildTypeLabel_UnknownType_FallsBackToDefaultPrefix()
     {
-        var content = "---\nauthor: someone\n---\n\nBody without a title.";
-
-        var result = UpdateFileProcessor.ParseNewTicketFile(content);
-
-        Assert.Null(result);
+        Assert.Equal("type:bug", _processor.BuildTypeLabel("bug"));
     }
 
     [Fact]
-    public void ParseNewTicketFile_EmptyTitle_ReturnsNull()
+    public void BuildTypeLabel_NullType_ReturnsNull()
     {
-        var content = "---\ntitle:   \n---\n\nBody.";
+        Assert.Null(_processor.BuildTypeLabel(null));
+    }
 
-        var result = UpdateFileProcessor.ParseNewTicketFile(content);
+    // ── ProcessUpdatesAsync: no files ────────────────────────────────────────
 
-        Assert.Null(result);
+    [Fact]
+    public async Task ProcessUpdatesAsync_NoUpdatesDir_ReturnsEmpty()
+    {
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "1", "step1", [], CancellationToken.None);
+
+        Assert.False(result.HasUpdates);
+        Assert.Empty(result.CreatedTickets);
     }
 
     [Fact]
-    public void ParseNewTicketFile_UnclosedFrontMatter_ReturnsNull()
+    public async Task ProcessUpdatesAsync_EmptyUpdatesDir_ReturnsEmpty()
     {
-        var content = "---\ntitle: No closing separator\n\nBody without closing dashes.";
+        Directory.CreateDirectory(Path.Combine(_tempDir, ".aiboard", "updates"));
 
-        var result = UpdateFileProcessor.ParseNewTicketFile(content);
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "1", "step1", [], CancellationToken.None);
 
-        Assert.Null(result);
+        Assert.False(result.HasUpdates);
+        Assert.Empty(result.CreatedTickets);
+    }
+
+    // ── ProcessUpdatesAsync: creation ────────────────────────────────────────
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_ValidFile_CreatesCardAndDeletesFile()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-add-login.md"),
+            "---\ntitle: Add Login\n---\n\nImplement login feature.");
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "10", "step1", [], CancellationToken.None);
+
+        Assert.True(result.HasUpdates);
+        Assert.Single(result.CreatedTickets);
+        Assert.False(File.Exists(Path.Combine(updatesDir, "new-add-login.md")),
+            "Processed file should be deleted");
+
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r => r.Title == "Add Login"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_GenerationConfig_AppliesTypeParentColumn()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-task-one.md"),
+            "---\ntitle: Task One\n---\n\nDo task one.");
+
+        var genConfig = new GenerationConfig("task", "Backlog", true);
+
+        await _processor.ProcessUpdatesAsync(
+            _tempDir, "20", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r =>
+                r.Title == "Task One"
+                && r.CardType == "type:task"
+                && r.ParentCardId == "20"
+                && r.TargetColumn == "Backlog"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_GenerationConfig_OverridesFrontMatterValues()
+    {
+        var updatesDir = CreateUpdatesDir();
+        // Front matter specifies type=bug and parent=99, but generationConfig should override
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-task-x.md"),
+            "---\ntitle: Task X\ntype: bug\nparent: 99\ntargetColumn: Error\n---\n\nBody.");
+
+        var genConfig = new GenerationConfig("task", "Backlog", true);
+
+        await _processor.ProcessUpdatesAsync(
+            _tempDir, "30", "step", [], CancellationToken.None, genConfig);
+
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r =>
+                r.CardType == "type:task"       // from generationConfig, not front matter "bug"
+                && r.ParentCardId == "30"        // from generationConfig sourceCardId, not "99"
+                && r.TargetColumn == "Backlog"), // from generationConfig, not "Error"
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_NoGenerationConfig_UsesFrontMatterValues()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-task-y.md"),
+            "---\ntitle: Task Y\ntype: task\nparent: 5\ntargetColumn: Backlog\n---\n\nBody.");
+
+        await _processor.ProcessUpdatesAsync(
+            _tempDir, "99", "step", [], CancellationToken.None, generationConfig: null);
+
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r =>
+                r.CardType == "type:task"
+                && r.ParentCardId == "5"
+                && r.TargetColumn == "Backlog"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_Dedup_SkipsAlreadyCreatedSlug()
+    {
+        var updatesDir = CreateUpdatesDir();
+        var filePath = Path.Combine(updatesDir, "new-dupe.md");
+        await File.WriteAllTextAsync(filePath, "---\ntitle: Dupe Task\n---\n\nBody.");
+
+        // Simulate already-created comment with dedup marker
+        var existingComments = new List<CardComment>
+        {
+            new("bot", "<!-- agent-created-ticket:dupe -->\nCreated #77: Dupe Task", DateTimeOffset.UtcNow)
+        };
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "1", "step", existingComments, CancellationToken.None);
+
+        // File deleted but no card created
+        Assert.False(File.Exists(filePath));
+        await _boardClient.DidNotReceive().CreateCardAsync(
+            Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_LinkToParentFalse_DoesNotSetParentId()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-no-link.md"),
+            "---\ntitle: No Link\n---\n\nBody.");
+
+        var genConfig = new GenerationConfig("task", "Backlog", LinkToParent: false);
+
+        await _processor.ProcessUpdatesAsync(
+            _tempDir, "20", "step", [], CancellationToken.None, genConfig);
+
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r => r.ParentCardId == null),
+            Arg.Any<CancellationToken>());
+    }
+
+    // ── AllowedChildren runtime enforcement ─────────────────────────────────
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_GenerationConfig_AllowedChildType_CreatesCard()
+    {
+        // story.allowedChildren = ["task"], so generating a task from a story is allowed
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-allowed-task.md"),
+            "---\ntitle: Allowed Task\n---\n\nDo the work.");
+
+        _boardClient.GetCardAsync("20", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BoardCard("20", "Parent Story", "", "Backlog",
+                Labels: ["type:story"])));
+
+        var genConfig = new GenerationConfig("task", "Backlog", true);
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "20", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        Assert.True(result.HasUpdates);
+        Assert.Single(result.CreatedTickets);
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r => r.Title == "Allowed Task"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_GenerationConfig_DisallowedChildType_SkipsCreation()
+    {
+        // task.allowedChildren = [] (empty), so generating anything from a task is blocked
+        var updatesDir = CreateUpdatesDir();
+        var filePath = Path.Combine(updatesDir, "new-disallowed-task.md");
+        await File.WriteAllTextAsync(filePath, "---\ntitle: Disallowed Task\n---\n\nBody.");
+
+        _boardClient.GetCardAsync("10", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BoardCard("10", "Parent Task", "", "Backlog",
+                Labels: ["type:task"])));
+
+        var genConfig = new GenerationConfig("task", "Backlog", true);
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "10", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        Assert.False(result.HasUpdates);
+        Assert.Empty(result.CreatedTickets);
+        await _boardClient.DidNotReceive().CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
+        Assert.False(File.Exists(filePath), "File should be deleted when creation is skipped");
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_GenerationConfig_ParentHasNoTypeLabel_CreatesCard()
+    {
+        // Parent card has no type label — enforcement is permissive, proceeds with creation
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-untyped-task.md"),
+            "---\ntitle: Untyped Parent Task\n---\n\nBody.");
+
+        _boardClient.GetCardAsync("5", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BoardCard("5", "Untyped Card", "", "Backlog",
+                Labels: [])));  // No type label
+
+        var genConfig = new GenerationConfig("task", "Backlog", true);
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "5", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        Assert.True(result.HasUpdates);
+        await _boardClient.Received(1).CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_GenerationConfig_GetCardAsyncFails_CreatesCardAnyway()
+    {
+        // If fetching parent card fails, enforcement is permissive — creation proceeds
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-fetch-fail.md"),
+            "---\ntitle: Fetch Fail Task\n---\n\nBody.");
+
+        _boardClient.GetCardAsync("99", Arg.Any<CancellationToken>())
+            .ThrowsAsync(new InvalidOperationException("Network error"));
+
+        var genConfig = new GenerationConfig("task", "Backlog", true);
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "99", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        Assert.True(result.HasUpdates);
+        await _boardClient.Received(1).CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_NoGenerationConfig_SkipsAllowedChildrenCheck()
+    {
+        // Without generationConfig, no allowedChildren check is performed at all
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-ad-hoc.md"),
+            "---\ntitle: Ad-Hoc Ticket\ntype: task\n---\n\nBody.");
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "10", "step", [], CancellationToken.None, generationConfig: null);
+
+        Assert.True(result.HasUpdates);
+        await _boardClient.DidNotReceive().GetCardAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _boardClient.Received(1).CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
     }
 
     // ── HasCreatedTicketMarker ───────────────────────────────────────────────

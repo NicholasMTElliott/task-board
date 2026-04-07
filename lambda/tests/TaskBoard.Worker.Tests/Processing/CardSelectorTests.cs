@@ -321,6 +321,57 @@ public class CardSelectorTests
         Assert.Equal("8", result.Selected!.Id); // Same stage as 7, but P0 > P1
     }
 
+    // --- children_complete eligibility ---
+
+    private static WorkflowConfig MakeConfigWithChildrenComplete()
+    {
+        var baseConfig = MakeConfig();
+        var states = new Dictionary<string, WorkflowState>(baseConfig.States)
+        {
+            ["Awaiting Children"] = new("Awaiting Children", null, "children_complete",
+                null, new Dictionary<string, TransitionTarget>
+                {
+                    ["COMPLETE"] = TransitionTarget.ForColumn("Ready for Test"),
+                    ["ERROR"]    = TransitionTarget.ForColumn("Error"),
+                },
+                PipelineOrder: 4),
+        };
+        states["Tested"] = new("Tested", null, "manual_gate",
+            null, new Dictionary<string, TransitionTarget>());
+        return new WorkflowConfig(states, baseConfig.Roles, baseConfig.Polling);
+    }
+
+    [Fact]
+    public void ChildrenCompleteCard_IsEligibleForSelection()
+    {
+        var config = MakeConfigWithChildrenComplete();
+        var cards = new List<BoardCard>
+        {
+            Card("1", "Awaiting Children"),
+        };
+
+        var result = CardSelector.SelectNext(cards, config);
+
+        Assert.NotNull(result.Selected);
+        Assert.Equal("1", result.Selected!.Id);
+    }
+
+    [Fact]
+    public void ChildrenCompleteCard_HigherPipelineOrder_SelectedOverAgentRun()
+    {
+        var config = MakeConfigWithChildrenComplete();
+        var cards = new List<BoardCard>
+        {
+            Card("5", "Ready for Test"),        // agent_run, pipelineOrder=3
+            Card("1", "Awaiting Children"),     // children_complete, pipelineOrder=4
+        };
+
+        var result = CardSelector.SelectNext(cards, config);
+
+        Assert.NotNull(result.Selected);
+        Assert.Equal("1", result.Selected!.Id); // pipelineOrder 4 > 3
+    }
+
     // --- system_merge eligibility ---
 
     [Fact]
