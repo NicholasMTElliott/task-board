@@ -483,6 +483,7 @@ public class AgentRunnerOptionalStepsTests : IDisposable
             _boardClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
             config.Normalised(), new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_boardClient, NullLogger<UpdateFileProcessor>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 

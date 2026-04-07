@@ -9,3 +9,7 @@ If a conversation history file exists for this task, read it before starting wor
 - Tests are mandatory. Code without adequate test coverage is incomplete.
 - Security matters at system boundaries. Trust internal code and framework guarantees.
 - Prefer simple, direct code over clever abstractions. Three similar lines are better than a premature helper.
+
+## Additional Tickets
+
+During code review, if you discover pre-existing bugs, code quality issues, or missing test coverage that is unrelated to the current ticket's changes, create new tickets for them rather than blocking the current review. Only block the review for issues directly caused by or related to the current changes.

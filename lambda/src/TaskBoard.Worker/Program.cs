@@ -200,6 +200,7 @@ var gitTimeoutSeconds = int.TryParse(builder.Configuration["GitTimeoutSeconds"],
 builder.Services.AddSingleton(sp =>
     new GitWorkspaceManager(sp.GetRequiredService<ILogger<GitWorkspaceManager>>(), worktreeBasePath, gitTimeoutSeconds));
 
+builder.Services.AddSingleton<UpdateFileProcessor>();
 builder.Services.AddSingleton<AgentRunner>();
 builder.Services.AddSingleton<MergeRunner>();
 builder.Services.AddSingleton<PollingRunner>();
