@@ -235,6 +235,12 @@ public sealed class TrelloClient(
             "Track as follow-up when working on the Trello provider.");
     }
 
+    public Task<string> CreateCardAsync(string title, string body, CancellationToken cancellationToken)
+    {
+        throw new NotSupportedException(
+            "CreateCardAsync is not yet implemented for Trello. Use GitHub Projects provider.");
+    }
+
     public Task<string> GetCurrentUserAsync(CancellationToken cancellationToken)
     {
         if (!string.IsNullOrWhiteSpace(_options.AgentUsername))

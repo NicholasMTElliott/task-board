@@ -56,5 +56,35 @@ internal static class PromptBuilder
         sb.AppendLine("- **ERROR**: Something went wrong that prevents you from doing the work at all (e.g. missing files, broken environment). Describe the issue in the detail field.");
         sb.AppendLine("- Always include a summary in the detail field of your structured response, regardless of outcome. This summary is posted as a comment on the ticket.");
         sb.AppendLine("- Format the detail field as GitHub-flavored markdown. Use headings, tables, bullet points, and code blocks as appropriate. This content is rendered directly on a GitHub issue.");
+        sb.AppendLine();
+        sb.AppendLine("## Creating Additional Tickets and Cross-Card Comments");
+        sb.AppendLine();
+        sb.AppendLine("You can request creation of new tickets or post comments on other tickets by creating files in the `.aiboard/updates/` directory.");
+        sb.AppendLine();
+        sb.AppendLine("### Creating a new ticket");
+        sb.AppendLine();
+        sb.AppendLine("Create a file named `new-{slug}.md` in `.aiboard/updates/` where `{slug}` is a short, descriptive, URL-safe identifier:");
+        sb.AppendLine();
+        sb.AppendLine("```markdown");
+        sb.AppendLine("---");
+        sb.AppendLine("title: Short descriptive title");
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.AppendLine("Detailed description...");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("Create new tickets for:");
+        sb.AppendLine("- Bugs discovered that are unrelated to the current work");
+        sb.AppendLine("- Bugs or defects from this work that are not blocking and will not be fixed here");
+        sb.AppendLine("- Work that could be part of this ticket but is deferred or blocked");
+        sb.AppendLine("- Additional tickets requested by human reviewers in the conversation history");
+        sb.AppendLine();
+        sb.AppendLine("### Commenting on another ticket");
+        sb.AppendLine();
+        sb.AppendLine("Create a file named `{cardId}-comment.md` in `.aiboard/updates/` where `{cardId}` is the issue number. The file content is the comment body in markdown.");
+        sb.AppendLine();
+        sb.AppendLine("### Deduplication");
+        sb.AppendLine();
+        sb.AppendLine("Before creating a `new-{slug}.md` file, check the conversation history for `agent-created-ticket:{slug}` markers. If a ticket with that slug has already been created, do not create the file again.");
     }
 }

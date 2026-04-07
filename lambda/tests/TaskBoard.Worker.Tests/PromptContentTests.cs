@@ -204,6 +204,33 @@ public class PromptContentTests
         Assert.DoesNotContain("Agent History", prompt);
     }
 
+    [Fact]
+    public void SeniorEngineerPrompt_ContainsAdditionalTicketsGuidance()
+    {
+        var content = File.ReadAllText(Path.Combine(RepoRoot, "prompts", "senior_engineer.md"));
+
+        Assert.Contains("Additional Tickets", content);
+        Assert.Contains("outside the scope", content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CodeReviewerPrompt_ContainsAdditionalTicketsGuidance()
+    {
+        var content = File.ReadAllText(Path.Combine(RepoRoot, "prompts", "code_reviewer.md"));
+
+        Assert.Contains("Additional Tickets", content);
+        Assert.Contains("pre-existing bugs", content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void QaPrompt_ContainsAdditionalTicketsGuidance()
+    {
+        var content = File.ReadAllText(Path.Combine(RepoRoot, "prompts", "qa.md"));
+
+        Assert.Contains("Additional Tickets", content);
+        Assert.Contains("not caused by the current ticket", content, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string FindRepoRoot()
     {
         var dir = AppContext.BaseDirectory;

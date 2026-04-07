@@ -281,6 +281,7 @@ public class AgentRunnerMergeStepTests : IDisposable
             config,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_boardClient, NullLogger<UpdateFileProcessor>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 
