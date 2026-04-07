@@ -1,3 +1,4 @@
+using Npgsql;
 using TaskBoard.Worker.Clients;
 
 namespace TaskBoard.Worker.Models;
@@ -142,6 +143,30 @@ public static class PrerequisiteValidator
         var errors = new List<string>();
         ValidatePromptFiles(errors, config, promptBaseDirectory);
         return errors;
+    }
+
+    /// <summary>
+    /// Attempts to connect to PostgreSQL and execute a simple query.
+    /// Returns success/failure with an error message on failure.
+    /// </summary>
+    public static async Task<(bool Success, string? Error)> ValidatePostgresAsync(
+        string connectionString, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var csb = new NpgsqlConnectionStringBuilder(connectionString) { Timeout = 5 };
+            await using var conn = new NpgsqlConnection(csb.ConnectionString);
+            await conn.OpenAsync(cancellationToken);
+            await using var cmd = new NpgsqlCommand("SELECT 1", conn);
+            await cmd.ExecuteScalarAsync(cancellationToken);
+            return (true, null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return (false,
+                $"Cannot connect to PostgreSQL. " +
+                $"Ensure the database is running (docker compose up -d). Detail: {ex.Message}");
+        }
     }
 
     // --- Private helpers ---

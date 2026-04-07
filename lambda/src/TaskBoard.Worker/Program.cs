@@ -277,6 +277,23 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
     logger.LogInformation("All prerequisites validated successfully");
     logger.LogInformation("Available AI providers: {Providers}",
         string.Join(", ", detectedProviders.Where(p => p != "stub").Order()));
+
+    if (!string.IsNullOrWhiteSpace(pgmqConnectionString))
+    {
+        var (pgOk, pgError) = await PrerequisiteValidator.ValidatePostgresAsync(
+            pgmqConnectionString);
+        if (!pgOk)
+        {
+            logger.LogError("PostgreSQL connection failed: {Error}", pgError);
+            return;
+        }
+        logger.LogInformation("PostgreSQL connection verified");
+    }
+    else
+    {
+        logger.LogWarning(
+            "Pgmq:ConnectionString not configured — run tracking disabled (using NullRunStore)");
+    }
 }
 
 logger.LogInformation("Agent identity: {AgentName}", agentIdentity.DisplayName);
