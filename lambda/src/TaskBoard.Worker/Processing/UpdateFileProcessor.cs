@@ -1,30 +1,15 @@
+using System.Text.RegularExpressions;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 
 namespace TaskBoard.Worker.Processing;
 
 /// <summary>
-/// Result returned by <see cref="UpdateFileProcessor.ProcessUpdatesAsync"/>.
-/// </summary>
-public sealed record UpdateProcessingResult(
-    int FilesProcessed,
-    IReadOnlyList<string> CreatedCardIds);
-
-/// <summary>
-/// Represents a parsed new-ticket update file.
-/// </summary>
-internal sealed record ParsedNewTicket(
-    string Title,
-    string Body,
-    string? Type = null,
-    string? Parent = null,
-    string? TargetColumn = null);
-
-/// <summary>
-/// Scans .aiboard/updates/ for new-{slug}.md files, creates cards on the board,
-/// posts notification comments, and deletes processed files.
+/// Processes update files written by agents to .aiboard/updates/.
+/// Handles two file types:
+///   new-{slug}.md      — creates a new ticket via ITaskBoardClient.CreateCardAsync
+///   {cardId}-comment.md — posts a cross-card comment via ITaskBoardClient.UpsertAgentCommentAsync
 ///
-/// This is the file-based mechanism for agents to request new tickets.
 /// For structured generation steps (generationConfig on a WorkflowStep),
 /// the orchestrator applies type/parent/column metadata from the step config.
 /// For ad-hoc creation (no generationConfig), agents can optionally specify
@@ -36,8 +21,18 @@ public sealed class UpdateFileProcessor(
     AgentIdentity agentIdentity,
     ILogger<UpdateFileProcessor> logger)
 {
-    private const string UpdatesRelativePath = ".aiboard/updates";
+    internal const string UpdatesRelativePath = ".aiboard/updates";
 
+    private static readonly Regex NewTicketPattern =
+        new(@"^new-(.+)\.md$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex CommentPattern =
+        new(@"^(\d+)-comment\.md$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// Scans the updates directory in the workspace, processes all recognized .md files,
+    /// and returns a summary of actions taken.
+    /// </summary>
     public async Task<UpdateProcessingResult> ProcessUpdatesAsync(
         string workspacePath,
         string sourceCardId,
@@ -48,44 +43,55 @@ public sealed class UpdateFileProcessor(
     {
         var updatesDir = Path.Combine(workspacePath, UpdatesRelativePath);
         if (!Directory.Exists(updatesDir))
-            return new UpdateProcessingResult(0, []);
+            return UpdateProcessingResult.Empty;
 
-        var files = Directory.GetFiles(updatesDir, "new-*.md")
-            .OrderBy(f => f)
-            .ToList();
+        var files = Directory.GetFiles(updatesDir, "*.md");
+        if (files.Length == 0)
+            return UpdateProcessingResult.Empty;
 
-        if (files.Count == 0)
-            return new UpdateProcessingResult(0, []);
-
-        logger.LogInformation(
-            "Processing {Count} update file(s) from '{Dir}' (step={Step})",
-            files.Count, updatesDir, stepName);
-
-        var createdIds = new List<string>();
+        var createdTickets = new List<CreatedTicketInfo>();
+        var postedComments = new List<CrossCardCommentInfo>();
 
         foreach (var filePath in files)
         {
-            var slug = Path.GetFileNameWithoutExtension(filePath)["new-".Length..];
             try
             {
-                var cardId = await ProcessNewTicketFileAsync(
-                    filePath, slug, sourceCardId, stepName,
-                    currentSourceComments, generationConfig, cancellationToken);
+                var fileName = Path.GetFileName(filePath);
 
-                if (cardId is not null)
-                    createdIds.Add(cardId);
+                var newTicketMatch = NewTicketPattern.Match(fileName);
+                if (newTicketMatch.Success)
+                {
+                    var result = await ProcessNewTicketFileAsync(
+                        filePath, newTicketMatch.Groups[1].Value,
+                        sourceCardId, stepName, currentSourceComments, generationConfig, cancellationToken);
+                    if (result is not null)
+                        createdTickets.Add(result);
+                    continue;
+                }
+
+                var commentMatch = CommentPattern.Match(fileName);
+                if (commentMatch.Success)
+                {
+                    var result = await ProcessCommentFileAsync(
+                        filePath, commentMatch.Groups[1].Value,
+                        sourceCardId, stepName, cancellationToken);
+                    if (result is not null)
+                        postedComments.Add(result);
+                    continue;
+                }
+
+                logger.LogWarning("Unrecognized update file (does not match new-{{slug}}.md or {{cardId}}-comment.md): {FileName}", fileName);
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex,
-                    "Failed to process update file '{File}' — skipping", filePath);
+                logger.LogWarning(ex, "Failed to process update file {File}", Path.GetFileName(filePath));
             }
         }
 
-        return new UpdateProcessingResult(files.Count, createdIds);
+        return new UpdateProcessingResult(createdTickets, postedComments);
     }
 
-    private async Task<string?> ProcessNewTicketFileAsync(
+    private async Task<CreatedTicketInfo?> ProcessNewTicketFileAsync(
         string filePath,
         string slug,
         string sourceCardId,
@@ -94,11 +100,10 @@ public sealed class UpdateFileProcessor(
         GenerationConfig? generationConfig,
         CancellationToken ct)
     {
-        // Dedup: if a comment with this slug marker already exists, card was already created
-        var dedupMarker = $"<!-- agent-created-ticket:{slug} -->";
-        if (currentComments.Any(c => c.Body.Contains(dedupMarker, StringComparison.Ordinal)))
+        // Dedup check: if a ticket with this slug was already created in a prior step, skip
+        if (HasCreatedTicketMarker(currentComments, slug))
         {
-            logger.LogDebug("Skipping '{Slug}' — already created (dedup marker found)", slug);
+            logger.LogInformation("Skipping already-created ticket with slug '{Slug}' (marker found in comments)", slug);
             File.Delete(filePath);
             return null;
         }
@@ -108,7 +113,6 @@ public sealed class UpdateFileProcessor(
         if (parsed is null)
         {
             logger.LogWarning("Could not parse new-ticket file '{File}' — skipping", filePath);
-            File.Delete(filePath);
             return null;
         }
 
@@ -132,14 +136,45 @@ public sealed class UpdateFileProcessor(
             newCardId, parsed.Title, slug,
             parentId ?? "(none)", typeLabel ?? "(none)", targetColumn ?? "(none)");
 
-        // Post notification comment on the source card
-        var commentBody = $"{dedupMarker}\n**{agentIdentity.DisplayName}** created #{newCardId}: {parsed.Title}";
+        // Post notification comment on the source card with dedup marker
+        var dedupMarker = $"<!-- agent-created-ticket:{slug} -->";
+        var commentBody = $"**{agentIdentity.DisplayName}** created #{newCardId}: {parsed.Title}";
         await boardClient.UpsertAgentCommentAsync(sourceCardId, commentBody, dedupMarker, ct);
 
         // Delete processed file
         File.Delete(filePath);
 
-        return newCardId;
+        return new CreatedTicketInfo(newCardId, parsed.Title, slug);
+    }
+
+    private async Task<CrossCardCommentInfo?> ProcessCommentFileAsync(
+        string filePath, string targetCardId, string sourceCardId, string stepName,
+        CancellationToken ct)
+    {
+        if (targetCardId == sourceCardId)
+        {
+            logger.LogWarning("Skipping cross-card comment targeting the source card #{CardId} — use the task file instead", targetCardId);
+            File.Delete(filePath);
+            return null;
+        }
+
+        var content = await File.ReadAllTextAsync(filePath, ct);
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            logger.LogWarning("Empty cross-card comment file for card #{CardId}", targetCardId);
+            File.Delete(filePath);
+            return null;
+        }
+
+        var marker = $"<!-- agent-cross-comment:{sourceCardId}:{stepName} -->";
+        var commentBody = $"**Note from card #{sourceCardId} (step: {stepName}):**\n\n{content}";
+        await boardClient.UpsertAgentCommentAsync(targetCardId, commentBody, marker, ct);
+
+        logger.LogInformation("Posted cross-card comment on #{TargetCardId} from #{SourceCardId} step {Step}",
+            targetCardId, sourceCardId, stepName);
+
+        File.Delete(filePath);
+        return new CrossCardCommentInfo(targetCardId, Path.GetFileName(filePath));
     }
 
     /// <summary>
@@ -228,4 +263,35 @@ public sealed class UpdateFileProcessor(
         }
         return null;
     }
+
+    /// <summary>
+    /// Returns true if any comment in the list contains the created-ticket marker for the given slug.
+    /// Used to prevent duplicate ticket creation across steps.
+    /// </summary>
+    internal static bool HasCreatedTicketMarker(IReadOnlyList<CardComment> comments, string slug)
+    {
+        var marker = $"<!-- agent-created-ticket:{slug} -->";
+        return comments.Any(c => c.Body.Contains(marker, StringComparison.Ordinal));
+    }
 }
+
+public sealed record UpdateProcessingResult(
+    IReadOnlyList<CreatedTicketInfo> CreatedTickets,
+    IReadOnlyList<CrossCardCommentInfo> PostedComments)
+{
+    public static readonly UpdateProcessingResult Empty = new([], []);
+    public bool HasUpdates => CreatedTickets.Count > 0 || PostedComments.Count > 0;
+}
+
+public sealed record CreatedTicketInfo(string NewCardId, string Title, string Slug);
+public sealed record CrossCardCommentInfo(string TargetCardId, string SourceFileName);
+
+/// <summary>
+/// Represents a parsed new-ticket update file.
+/// </summary>
+internal sealed record ParsedNewTicket(
+    string Title,
+    string Body,
+    string? Type = null,
+    string? Parent = null,
+    string? TargetColumn = null);

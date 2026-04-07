@@ -242,13 +242,24 @@ public sealed partial class AgentRunner(
 
                 // 6d-ii. Process update files (.aiboard/updates/) — handles both generation steps
                 //        (step.GenerationConfig set) and ad-hoc ticket creation (no config).
-                await updateFileProcessor.ProcessUpdatesAsync(
-                    worktreePath, cardId, step.Name, comments, cancellationToken,
-                    step.GenerationConfig);
+                UpdateProcessingResult updateResult;
+                try
+                {
+                    updateResult = await updateFileProcessor.ProcessUpdatesAsync(
+                        worktreePath, cardId, step.Name, comments, cancellationToken,
+                        step.GenerationConfig);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Update file processing failed for step '{StepName}' on card {CardId}", step.Name, cardId);
+                    updateResult = UpdateProcessingResult.Empty;
+                }
 
-                // 6e. Upsert step-specific comment
+                // 6e. Upsert step-specific comment (augmented with update file summary if applicable)
                 var stepMarker = $"<!-- agent-step:{step.Name} -->";
                 var stepComment = $"{commentPrefix}\n\n**Step: {step.Name}**\n\n{FormatComment(lastResult)}";
+                if (updateResult.HasUpdates)
+                    stepComment += FormatUpdateSummary(updateResult);
                 await boardClient.UpsertAgentCommentAsync(cardId, stepComment, stepMarker, cancellationToken);
 
                 // 6e-ii. Refresh comments file so the next step sees this step's output
@@ -1376,6 +1387,19 @@ public sealed partial class AgentRunner(
             ? state.Steps[0].Role
             : state.Role ?? "agent";
         return $"**{roleName} in {activeStateName} ({identity.DisplayName}):**";
+    }
+
+    internal static string FormatUpdateSummary(UpdateProcessingResult result)
+    {
+        var sb = new StringBuilder("\n\n---\n**Update file actions:**\n");
+
+        foreach (var ticket in result.CreatedTickets)
+            sb.AppendLine($"- Created #{ticket.NewCardId} — {ticket.Title}");
+
+        foreach (var comment in result.PostedComments)
+            sb.AppendLine($"- Posted cross-card comment on #{comment.TargetCardId}");
+
+        return sb.ToString();
     }
 
     internal static string FormatComment(AgentResult result, string? gitNote = null)

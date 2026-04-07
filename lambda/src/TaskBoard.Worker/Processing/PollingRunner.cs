@@ -55,7 +55,7 @@ public sealed class PollingRunner(
                 {
                     consecutiveIdleCycles++;
                     var idleDelay = ComputeIdleDelay(pollInterval, consecutiveIdleCycles);
-                    logger.LogDebug(
+                    logger.LogInformation(
                         "No eligible cards found (cycle {Cycle}, idle streak {IdleStreak}), waiting {DelaySec}s",
                         totalCycles, consecutiveIdleCycles, idleDelay.TotalSeconds);
                     await Task.Delay(idleDelay, cancellationToken);

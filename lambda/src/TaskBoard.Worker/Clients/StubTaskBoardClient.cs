@@ -83,13 +83,13 @@ public sealed class StubTaskBoardClient(ILogger<StubTaskBoardClient> logger) : I
         return Task.CompletedTask;
     }
 
+    private int _nextStubId;
+
     public Task<string> GetCurrentUserAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("[Stub] GetCurrentUser");
         return Task.FromResult("stub-agent");
     }
-
-    private int _nextStubId;
 
     public Task<string> CreateCardAsync(CreateCardRequest request, CancellationToken cancellationToken)
     {

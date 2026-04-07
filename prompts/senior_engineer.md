@@ -11,3 +11,7 @@ Untested code is incomplete code. When designing or implementing:
 - Integration tests cover end-to-end flows where components interact with external systems or each other.
 - Every requirement in the ticket must be provable by a test. If no test verifies a requirement was met, the requirement is not done.
 - Use available infrastructure rather than over-mocking: Docker for databases, SQLite alternatives, existing stub/mock helpers in the test project. Only mock at boundaries where the real dependency is impractical.
+
+## Additional Tickets
+
+When designing, if you identify work that falls outside the scope of the current ticket — such as prerequisite infrastructure changes, related refactoring, or discovered issues in adjacent systems — create new tickets for them using the update file mechanism described in the instructions. Do not expand the current ticket's scope to absorb tangential work.
