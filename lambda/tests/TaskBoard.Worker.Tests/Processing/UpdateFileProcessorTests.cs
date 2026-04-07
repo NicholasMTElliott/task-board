@@ -81,10 +81,10 @@ public class UpdateFileProcessorTests : IDisposable
         await _boardClient.Received(1).CreateCardAsync(
             "Fix the auth race condition", Arg.Any<string>(), Arg.Any<CancellationToken>());
 
-        // Notification comment on source card
+        // Notification comment on source card — marker only in commentMarker param, not body
         await _boardClient.Received(1).UpsertAgentCommentAsync(
             SourceCardId,
-            Arg.Is<string>(s => s.Contains("agent-created-ticket:fix-auth-race") && s.Contains("#99")),
+            Arg.Is<string>(s => s.Contains("#99") && !s.Contains("agent-created-ticket:fix-auth-race")),
             Arg.Is<string>(s => s.Contains("agent-created-ticket:fix-auth-race")),
             Arg.Any<CancellationToken>());
 
@@ -169,10 +169,10 @@ public class UpdateFileProcessorTests : IDisposable
         Assert.Single(result.PostedComments);
         Assert.Equal("5", result.PostedComments[0].TargetCardId);
 
-        // Comment posted on target card
+        // Comment posted on target card — marker only in commentMarker param, not body
         await _boardClient.Received(1).UpsertAgentCommentAsync(
             "5",
-            Arg.Is<string>(s => s.Contains($"agent-cross-comment:{SourceCardId}:{StepName}") && s.Contains(commentBody)),
+            Arg.Is<string>(s => s.Contains(commentBody) && !s.Contains($"agent-cross-comment:{SourceCardId}:{StepName}")),
             Arg.Is<string>(s => s.Contains($"agent-cross-comment:{SourceCardId}:{StepName}")),
             Arg.Any<CancellationToken>());
 

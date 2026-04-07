@@ -804,10 +804,10 @@ public class AgentRunnerTests : IDisposable
         await _trelloClient.Received(1).CreateCardAsync(
             "Auth Race Condition Bug", Arg.Any<string>(), Arg.Any<CancellationToken>());
 
-        // Notification comment posted on source card
+        // Notification comment posted on source card — marker only in commentMarker param, not body
         await _trelloClient.Received(1).UpsertAgentCommentAsync(
             TargetCardId,
-            Arg.Is<string>(s => s.Contains("agent-created-ticket:auth-bug") && s.Contains("#99")),
+            Arg.Is<string>(s => s.Contains("#99") && !s.Contains("agent-created-ticket:auth-bug")),
             Arg.Is<string>(s => s.Contains("agent-created-ticket:auth-bug")),
             Arg.Any<CancellationToken>());
     }

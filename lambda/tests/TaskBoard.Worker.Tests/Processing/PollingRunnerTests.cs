@@ -377,6 +377,7 @@ public class PollingRunnerTests
             TestConfig,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, NullLogger<UpdateFileProcessor>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(

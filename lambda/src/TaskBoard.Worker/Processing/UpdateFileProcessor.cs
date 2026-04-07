@@ -109,7 +109,7 @@ public sealed class UpdateFileProcessor(
 
         // Post notification comment on the original card so subsequent steps see the dedup marker
         var marker = $"<!-- agent-created-ticket:{slug} -->";
-        var notification = $"{marker}\n**New ticket created:** #{newCardId} — {title}\n\n" +
+        var notification = $"**New ticket created:** #{newCardId} — {title}\n\n" +
             $"_Created during step `{stepName}` of card #{sourceCardId}_";
         await boardClient.UpsertAgentCommentAsync(sourceCardId, notification, marker, ct);
 
@@ -138,7 +138,7 @@ public sealed class UpdateFileProcessor(
         }
 
         var marker = $"<!-- agent-cross-comment:{sourceCardId}:{stepName} -->";
-        var commentBody = $"{marker}\n**Note from card #{sourceCardId} (step: {stepName}):**\n\n{content}";
+        var commentBody = $"**Note from card #{sourceCardId} (step: {stepName}):**\n\n{content}";
         await boardClient.UpsertAgentCommentAsync(targetCardId, commentBody, marker, ct);
 
         logger.LogInformation("Posted cross-card comment on #{TargetCardId} from #{SourceCardId} step {Step}",
