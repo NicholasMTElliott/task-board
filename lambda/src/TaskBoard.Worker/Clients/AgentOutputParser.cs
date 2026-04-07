@@ -28,7 +28,13 @@ internal static class AgentOutputParser
                 var detail = structured.TryGetProperty("detail", out var d) ? d.GetString() : null;
                 var questions = ParseQuestions(structured);
                 var requestedSteps = ParseRequestedSteps(structured);
-                return new AgentResult(outcome, detail, questions, null, requestedSteps);
+                double? estimate = null;
+                if (structured.TryGetProperty("estimate", out var estEl)
+                    && estEl.ValueKind == JsonValueKind.Number)
+                {
+                    estimate = estEl.GetDouble();
+                }
+                return new AgentResult(outcome, detail, questions, null, requestedSteps, estimate);
             }
 
             // Try result field

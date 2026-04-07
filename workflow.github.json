@@ -32,6 +32,11 @@
           "name": "review_design_conflicts",
           "role": "senior_engineer",
           "taskPromptFile": "prompts/states/steps/review_design_conflicts.md"
+        },
+        {
+          "name": "estimate_ticket",
+          "role": "estimator",
+          "taskPromptFile": "prompts/states/steps/estimate_ticket.md"
         }
       ],
       "gateCheck": {
@@ -127,7 +132,10 @@
       ],
       "transitions": {
         "IN_PROGRESS": "Designing",
-        "COMPLETE": "Designed",
+        "COMPLETE": [
+          { "type": "moveToColumn", "value": "Designed" },
+          { "type": "setField", "field": "Estimate", "value": "{{estimation}}" }
+        ],
         "NEEDS_INFO": "Design Questions",
         "ERROR": "Error",
         "GATE_FAIL": "Ready for Design",
@@ -499,6 +507,11 @@
       "systemPromptFile": "prompts/gate_checker.md",
       "sections": []
     },
+    "estimator": {
+      "model": "claude-haiku-4-5-20251001",
+      "systemPromptFile": "prompts/estimator.md",
+      "sections": []
+    },
     "specialist_reviewer": {
       "model": "claude-sonnet-4-6",
       "systemPromptFile": "prompts/specialist_reviewer.md",
@@ -519,6 +532,12 @@
   "polling": {
     "priorityFieldName": "priority",
     "priorityOrder": ["P0", "P1", "P2"]
+  },
+  "estimation": {
+    "calibrationTicketId": "34",
+    "calibrationSize": 1,
+    "fieldName": "Estimate",
+    "scale": [1, 2, 4, 8]
   },
   "cardTypes": {
     "story": {

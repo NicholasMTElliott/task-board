@@ -336,6 +336,79 @@ public sealed class GitHubProjectsClient(
             .FirstOrDefault(n => n is not null) ?? "";
     }
 
+    private enum ProjectFieldType { Number, Text, Date, SingleSelect }
+
+    private sealed record ResolvedField(
+        string ProjectId,
+        string FieldId,
+        ProjectFieldType FieldType,
+        IReadOnlyList<(string Id, string Name)>? Options = null);
+
+    private async Task<ResolvedField> ResolveFieldAsync(
+        string fieldName, CancellationToken cancellationToken)
+    {
+        const string query = """
+            query($owner: String!, $projectNumber: Int!, $fieldName: String!) {
+              user(login: $owner) {
+                projectV2(number: $projectNumber) {
+                  id
+                  field(name: $fieldName) {
+                    ... on ProjectV2Field {
+                      id
+                      dataType
+                    }
+                    ... on ProjectV2SingleSelectField {
+                      id
+                      options { id name }
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        var json = await RunGhAsync(["api", "graphql",
+            "-f", $"query={query}",
+            "-f", $"owner={_options.Owner}",
+            "-F", $"projectNumber={_options.ProjectNumber}",
+            "-f", $"fieldName={fieldName}"], cancellationToken);
+        using var doc = JsonDocument.Parse(json);
+        ThrowOnGraphQlErrors(doc, $"ResolveFieldAsync({fieldName})");
+
+        var project = doc.RootElement.GetProperty("data").GetProperty("user").GetProperty("projectV2");
+        var projectId = project.GetProperty("id").GetString()
+            ?? throw new InvalidOperationException("Could not resolve project ID");
+
+        var field = project.GetProperty("field");
+        var fieldId = field.GetProperty("id").GetString()
+            ?? throw new InvalidOperationException($"Could not resolve field ID for '{fieldName}'");
+
+        // Determine field type from response shape
+        if (field.TryGetProperty("options", out var optionsEl))
+        {
+            var options = optionsEl.EnumerateArray()
+                .Select(o => (o.GetProperty("id").GetString()!, o.GetProperty("name").GetString()!))
+                .ToList();
+            return new ResolvedField(projectId, fieldId, ProjectFieldType.SingleSelect, options);
+        }
+
+        if (field.TryGetProperty("dataType", out var dataTypeProp))
+        {
+            var dataType = dataTypeProp.GetString() switch
+            {
+                "NUMBER" => ProjectFieldType.Number,
+                "TEXT" => ProjectFieldType.Text,
+                "DATE" => ProjectFieldType.Date,
+                _ => throw new NotSupportedException($"Unsupported field data type: {dataTypeProp.GetString()}")
+            };
+            return new ResolvedField(projectId, fieldId, dataType);
+        }
+
+        throw new InvalidOperationException(
+            $"Could not determine field type for '{fieldName}'. " +
+            "The field may be an unsupported type (e.g., iteration).");
+    }
+
     private async Task<(string ProjectId, string FieldId, string OptionId)> ResolveStatusFieldOption(
         string projectNumber, string statusName, CancellationToken cancellationToken)
     {
@@ -517,39 +590,72 @@ public sealed class GitHubProjectsClient(
 
     public async Task SetFieldAsync(string cardId, string fieldName, string value, CancellationToken cancellationToken)
     {
-        // Resolve the project item and field option IDs, then execute GraphQL mutation
-        var (projectId, fieldId, optionId) = await ResolveStatusFieldOption(
-            _options.ProjectNumber, value, cancellationToken);
-        var itemId = await ResolveProjectItemId(cardId, projectId, cancellationToken);
+        var field = await ResolveFieldAsync(fieldName, cancellationToken);
+        var itemId = await ResolveProjectItemId(cardId, field.ProjectId, cancellationToken);
 
-        // Reuse the same parameterized mutation as MoveCardToColumnAsync
-        const string setFieldMutation = """
-            mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-              updateProjectV2ItemFieldValue(input: {
-                projectId: $projectId
-                itemId: $itemId
-                fieldId: $fieldId
-                value: { singleSelectOptionId: $optionId }
-              }) {
-                projectV2Item { id }
-              }
+        switch (field.FieldType)
+        {
+            case ProjectFieldType.Number:
+            {
+                if (!double.TryParse(value, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out _))
+                    throw new ArgumentException($"Value '{value}' is not a valid number for field '{fieldName}'");
+
+                const string numberMutation = """
+                    mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $number: Float!) {
+                      updateProjectV2ItemFieldValue(input: {
+                        projectId: $projectId, itemId: $itemId, fieldId: $fieldId,
+                        value: { number: $number }
+                      }) { projectV2Item { id } }
+                    }
+                    """;
+                await RunGhAsync(["api", "graphql",
+                    "-f", $"query={numberMutation}",
+                    "-f", $"projectId={field.ProjectId}",
+                    "-f", $"itemId={itemId}",
+                    "-f", $"fieldId={field.FieldId}",
+                    "-F", $"number={value}"], cancellationToken);
+                break;
             }
-            """;
 
-        await RunGhAsync(["api", "graphql",
-            "-f", $"query={setFieldMutation}",
-            "-f", $"projectId={projectId}",
-            "-f", $"itemId={itemId}",
-            "-f", $"fieldId={fieldId}",
-            "-f", $"optionId={optionId}"], cancellationToken);
+            case ProjectFieldType.SingleSelect:
+            {
+                var optionId = field.Options?
+                    .Where(o => string.Equals(o.Name, value, StringComparison.OrdinalIgnoreCase))
+                    .Select(o => o.Id)
+                    .FirstOrDefault()
+                    ?? throw new InvalidOperationException(
+                        $"Option '{value}' not found in single-select field '{fieldName}'");
+
+                const string singleSelectMutation = """
+                    mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                      updateProjectV2ItemFieldValue(input: {
+                        projectId: $projectId, itemId: $itemId, fieldId: $fieldId,
+                        value: { singleSelectOptionId: $optionId }
+                      }) { projectV2Item { id } }
+                    }
+                    """;
+                await RunGhAsync(["api", "graphql",
+                    "-f", $"query={singleSelectMutation}",
+                    "-f", $"projectId={field.ProjectId}",
+                    "-f", $"itemId={itemId}",
+                    "-f", $"fieldId={field.FieldId}",
+                    "-f", $"optionId={optionId}"], cancellationToken);
+                break;
+            }
+
+            default:
+                throw new NotSupportedException(
+                    $"Setting field type '{field.FieldType}' is not yet supported for field '{fieldName}'");
+        }
+
         logger.LogInformation("Set field '{Field}' to '{Value}' on issue {IssueNumber}", fieldName, value, cardId);
     }
 
     public async Task ClearFieldAsync(string cardId, string fieldName, CancellationToken cancellationToken)
     {
-        var (projectId, fieldId, _) = await ResolveStatusFieldOption(
-            _options.ProjectNumber, fieldName, cancellationToken);
-        var itemId = await ResolveProjectItemId(cardId, projectId, cancellationToken);
+        var field = await ResolveFieldAsync(fieldName, cancellationToken);
+        var itemId = await ResolveProjectItemId(cardId, field.ProjectId, cancellationToken);
 
         const string clearMutation = """
             mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!) {
@@ -565,9 +671,9 @@ public sealed class GitHubProjectsClient(
 
         await RunGhAsync(["api", "graphql",
             "-f", $"query={clearMutation}",
-            "-f", $"projectId={projectId}",
+            "-f", $"projectId={field.ProjectId}",
             "-f", $"itemId={itemId}",
-            "-f", $"fieldId={fieldId}"], cancellationToken);
+            "-f", $"fieldId={field.FieldId}"], cancellationToken);
         logger.LogInformation("Cleared field '{Field}' on issue {IssueNumber}", fieldName, cardId);
     }
 

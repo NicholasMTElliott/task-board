@@ -73,11 +73,18 @@ public sealed record GenerationConfig(
 
 // ── Workflow config ───────────────────────────────────────────────────────────
 
+public sealed record EstimationConfig(
+    string CalibrationTicketId,
+    int CalibrationSize,
+    string FieldName = "Estimate",
+    List<int>? Scale = null);
+
 public sealed record WorkflowConfig(
     Dictionary<string, WorkflowState> States,
     Dictionary<string, WorkflowRole> Roles,
     PollingConfig? Polling = null,
     MergeResolutionConfig? MergeResolution = null,
+    EstimationConfig? Estimation = null,
     Dictionary<string, CardTypeDefinition>? CardTypes = null)
 {
     /// <summary>
