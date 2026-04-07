@@ -25,6 +25,12 @@ var promptRootArg = PreParseArg(args, "--prompt-root");
 //  We layer on top in ascending precedence:
 var builder = Host.CreateApplicationBuilder(args);
 
+builder.Logging.AddSimpleConsole(options =>
+{
+    options.SingleLine = true;
+    options.TimestampFormat = "HH:mm:ss ";
+});
+
 if (configFilePath is not null)
     builder.Configuration.AddJsonFile(CliDefinitions.ResolvePath(configFilePath), optional: false, reloadOnChange: false);
 
