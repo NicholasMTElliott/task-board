@@ -386,11 +386,12 @@ public class AgentRunnerGateCheckTests : IDisposable
 
     private AgentRunner CreateRunner(IAgentExecutor executor, WorkflowConfig config)
     {
+        var normalisedConfig = config.Normalised();
         return new AgentRunner(
             _boardClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
-            config.Normalised(), new StubCrossReferenceResolver(),
+            normalisedConfig, new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_boardClient, NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_boardClient, normalisedConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 

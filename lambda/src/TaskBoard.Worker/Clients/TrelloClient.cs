@@ -218,6 +218,16 @@ public sealed class TrelloClient(
         }
     }
 
+    public Task<string> CreateCardAsync(CreateCardRequest request, CancellationToken cancellationToken)
+    {
+        // Card creation with parent linking, type labels, and column placement requires
+        // additional Trello API work (list ID resolution, card-to-card linking via
+        // attachments or checklists). Track as follow-up when working on the Trello provider.
+        throw new NotSupportedException(
+            "CreateCardAsync with parent linking and type labels is not yet implemented for Trello. " +
+            "Track as follow-up when working on the Trello provider.");
+    }
+
     public Task SetFieldAsync(string cardId, string fieldName, string value, CancellationToken cancellationToken)
     {
         // NOTE: Trello custom field operations require the Custom Fields Power-Up
@@ -233,12 +243,6 @@ public sealed class TrelloClient(
         throw new NotSupportedException(
             "Trello custom field operations require the Custom Fields Power-Up. Not yet implemented. " +
             "Track as follow-up when working on the Trello provider.");
-    }
-
-    public Task<string> CreateCardAsync(string title, string body, CancellationToken cancellationToken)
-    {
-        throw new NotSupportedException(
-            "CreateCardAsync is not yet implemented for Trello. Use GitHub Projects provider.");
     }
 
     public Task<string> GetCurrentUserAsync(CancellationToken cancellationToken)

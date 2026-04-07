@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Models;
 
 namespace TaskBoard.Worker.Processing;
 
@@ -8,9 +9,16 @@ namespace TaskBoard.Worker.Processing;
 /// Handles two file types:
 ///   new-{slug}.md      — creates a new ticket via ITaskBoardClient.CreateCardAsync
 ///   {cardId}-comment.md — posts a cross-card comment via ITaskBoardClient.UpsertAgentCommentAsync
+///
+/// For structured generation steps (generationConfig on a WorkflowStep),
+/// the orchestrator applies type/parent/column metadata from the step config.
+/// For ad-hoc creation (no generationConfig), agents can optionally specify
+/// metadata in the YAML front matter of the update file.
 /// </summary>
 public sealed class UpdateFileProcessor(
     ITaskBoardClient boardClient,
+    WorkflowConfig workflowConfig,
+    AgentIdentity agentIdentity,
     ILogger<UpdateFileProcessor> logger)
 {
     internal const string UpdatesRelativePath = ".aiboard/updates";
@@ -30,7 +38,8 @@ public sealed class UpdateFileProcessor(
         string sourceCardId,
         string stepName,
         IReadOnlyList<CardComment> currentSourceComments,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        GenerationConfig? generationConfig = null)
     {
         var updatesDir = Path.Combine(workspacePath, UpdatesRelativePath);
         if (!Directory.Exists(updatesDir))
@@ -54,7 +63,7 @@ public sealed class UpdateFileProcessor(
                 {
                     var result = await ProcessNewTicketFileAsync(
                         filePath, newTicketMatch.Groups[1].Value,
-                        sourceCardId, stepName, currentSourceComments, cancellationToken);
+                        sourceCardId, stepName, currentSourceComments, generationConfig, cancellationToken);
                     if (result is not null)
                         createdTickets.Add(result);
                     continue;
@@ -83,8 +92,13 @@ public sealed class UpdateFileProcessor(
     }
 
     private async Task<CreatedTicketInfo?> ProcessNewTicketFileAsync(
-        string filePath, string slug, string sourceCardId, string stepName,
-        IReadOnlyList<CardComment> currentComments, CancellationToken ct)
+        string filePath,
+        string slug,
+        string sourceCardId,
+        string stepName,
+        IReadOnlyList<CardComment> currentComments,
+        GenerationConfig? generationConfig,
+        CancellationToken ct)
     {
         // Dedup check: if a ticket with this slug was already created in a prior step, skip
         if (HasCreatedTicketMarker(currentComments, slug))
@@ -98,24 +112,50 @@ public sealed class UpdateFileProcessor(
         var parsed = ParseNewTicketFile(content);
         if (parsed is null)
         {
-            logger.LogWarning("Could not parse new ticket file {File}: missing or empty title in YAML front matter", Path.GetFileName(filePath));
+            logger.LogWarning("Could not parse new-ticket file '{File}' — skipping", filePath);
             return null;
         }
 
-        var (title, body) = parsed.Value;
+        // AllowedChildren enforcement: when generationConfig is set, verify the parent card's
+        // type allows generating the target type. Skips creation with a warning if not allowed.
+        if (generationConfig is not null && workflowConfig.CardTypes is not null)
+        {
+            if (!await IsTargetTypeAllowedAsync(sourceCardId, generationConfig.TargetType, ct))
+            {
+                File.Delete(filePath);
+                return null;
+            }
+        }
 
-        var newCardId = await boardClient.CreateCardAsync(title, body, ct);
-        logger.LogInformation("Created ticket #{NewCardId} '{Title}' from update file (slug={Slug})", newCardId, title, slug);
+        // Build CreateCardRequest: generationConfig values take precedence, front matter as fallback
+        var typeLabel = BuildTypeLabel(generationConfig?.TargetType ?? parsed.Type);
+        var parentId = generationConfig?.LinkToParent == true
+            ? sourceCardId
+            : parsed.Parent;
+        var targetColumn = generationConfig?.TargetColumn ?? parsed.TargetColumn;
 
-        // Post notification comment on the original card so subsequent steps see the dedup marker
-        var marker = $"<!-- agent-created-ticket:{slug} -->";
-        var notification = $"**New ticket created:** #{newCardId} — {title}\n\n" +
-            $"_Created during step `{stepName}` of card #{sourceCardId}_";
-        await boardClient.UpsertAgentCommentAsync(sourceCardId, notification, marker, ct);
+        var request = new CreateCardRequest(
+            Title: parsed.Title,
+            Body: parsed.Body,
+            ParentCardId: parentId,
+            CardType: typeLabel,
+            TargetColumn: targetColumn);
 
+        var newCardId = await boardClient.CreateCardAsync(request, ct);
+        logger.LogInformation(
+            "Created card #{NewCardId} '{Title}' from update file '{Slug}' (parent={Parent}, type={Type}, column={Column})",
+            newCardId, parsed.Title, slug,
+            parentId ?? "(none)", typeLabel ?? "(none)", targetColumn ?? "(none)");
+
+        // Post notification comment on the source card with dedup marker
+        var dedupMarker = $"<!-- agent-created-ticket:{slug} -->";
+        var commentBody = $"**{agentIdentity.DisplayName}** created #{newCardId}: {parsed.Title}";
+        await boardClient.UpsertAgentCommentAsync(sourceCardId, commentBody, dedupMarker, ct);
+
+        // Delete processed file
         File.Delete(filePath);
 
-        return new CreatedTicketInfo(newCardId, title, slug);
+        return new CreatedTicketInfo(newCardId, parsed.Title, slug);
     }
 
     private async Task<CrossCardCommentInfo?> ProcessCommentFileAsync(
@@ -149,33 +189,144 @@ public sealed class UpdateFileProcessor(
     }
 
     /// <summary>
-    /// Parses a new-ticket file: YAML front matter for title, body after front matter.
-    /// Returns null if the file format is invalid or title is missing.
+    /// Returns false if the parent card's type explicitly restricts child types and the
+    /// requested targetType is not in the allowedChildren list.
+    /// Returns true in all other cases (no parent found, no type label, no restriction configured).
     /// </summary>
-    internal static (string Title, string Body)? ParseNewTicketFile(string content)
+    private async Task<bool> IsTargetTypeAllowedAsync(string parentCardId, string targetType, CancellationToken ct)
     {
-        if (!content.StartsWith("---"))
-            return null;
-
-        var endIdx = content.IndexOf("---", 3, StringComparison.Ordinal);
-        if (endIdx < 0)
-            return null;
-
-        var frontMatter = content[3..endIdx];
-        var body = content[(endIdx + 3)..].TrimStart('\r', '\n');
-
-        string? title = null;
-        foreach (var line in frontMatter.Split('\n'))
+        BoardCard? parentCard;
+        try
         {
-            var trimmed = line.Trim();
-            if (trimmed.StartsWith("title:", StringComparison.OrdinalIgnoreCase))
+            parentCard = await boardClient.GetCardAsync(parentCardId, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not fetch parent card #{ParentCardId} to check allowedChildren — proceeding with creation", parentCardId);
+            return true;
+        }
+
+        if (parentCard?.Labels is null || workflowConfig.CardTypes is null)
+            return true;
+
+        // Find the parent's type key by matching its labels to cardTypes label conventions
+        string? parentTypeKey = null;
+        foreach (var (typeName, typeDef) in workflowConfig.CardTypes)
+        {
+            var expectedLabel = $"{typeDef.LabelPrefix}:{typeName}";
+            if (parentCard.Labels.Contains(expectedLabel, StringComparer.OrdinalIgnoreCase))
             {
-                title = trimmed["title:".Length..].Trim().Trim('"', '\'');
+                parentTypeKey = typeName;
                 break;
             }
         }
 
-        return string.IsNullOrWhiteSpace(title) ? null : (title!, body);
+        if (parentTypeKey is null)
+            return true; // No type label found — no restriction applies
+
+        if (!workflowConfig.CardTypes.TryGetValue(parentTypeKey, out var parentTypeDef))
+            return true;
+
+        if (parentTypeDef.AllowedChildren is null)
+            return true; // Null means no restriction defined for this type
+
+        // AllowedChildren is defined (including empty list) — targetType must be explicitly listed
+        if (parentTypeDef.AllowedChildren.Contains(targetType, StringComparer.OrdinalIgnoreCase))
+            return true;
+
+        logger.LogWarning(
+            "Skipping ticket creation: parent card #{ParentCardId} has type '{ParentType}' " +
+            "which does not allow child type '{TargetType}'. AllowedChildren: [{Allowed}]",
+            parentCardId, parentTypeKey, targetType,
+            string.Join(", ", parentTypeDef.AllowedChildren));
+        return false;
+    }
+
+    /// <summary>
+    /// Formats a type label from a raw type string, using the cardTypes config for the label prefix.
+    /// Falls back to "type:{rawType}" if the type is not in the config.
+    /// </summary>
+    internal string? BuildTypeLabel(string? rawType)
+    {
+        if (rawType is null) return null;
+
+        if (workflowConfig.CardTypes is not null
+            && workflowConfig.CardTypes.TryGetValue(rawType, out var typeDef))
+        {
+            return $"{typeDef.LabelPrefix}:{rawType}";
+        }
+
+        // Fallback: use the default prefix "type"
+        return $"type:{rawType}";
+    }
+
+    /// <summary>
+    /// Parses a new-ticket update file with optional YAML front matter.
+    /// Front matter fields: title (required), type, parent, targetColumn.
+    /// Body is everything after the closing "---".
+    /// </summary>
+    internal static ParsedNewTicket? ParseNewTicketFile(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return null;
+
+        var trimmed = content.TrimStart();
+
+        string? title = null;
+        string? type = null;
+        string? parent = null;
+        string? targetColumn = null;
+        string body;
+
+        if (trimmed.StartsWith("---", StringComparison.Ordinal))
+        {
+            // Find closing ---
+            var endIdx = trimmed.IndexOf("\n---", 3, StringComparison.Ordinal);
+            if (endIdx < 0)
+            {
+                // No closing front matter — treat whole file as body, extract title from H1
+                body = trimmed;
+                title = ExtractTitleFromBody(body);
+                return string.IsNullOrWhiteSpace(title) ? null : new ParsedNewTicket(title, body);
+            }
+
+            var frontMatter = trimmed[3..endIdx];
+            body = trimmed[(endIdx + 4)..].TrimStart('\n', '\r');
+
+            foreach (var line in frontMatter.Split('\n'))
+            {
+                var l = line.Trim();
+                if (l.StartsWith("title:", StringComparison.OrdinalIgnoreCase))
+                    title = l["title:".Length..].Trim().Trim('"', '\'');
+                else if (l.StartsWith("type:", StringComparison.OrdinalIgnoreCase))
+                    type = l["type:".Length..].Trim().Trim('"', '\'');
+                else if (l.StartsWith("parent:", StringComparison.OrdinalIgnoreCase))
+                    parent = l["parent:".Length..].Trim().Trim('"', '\'');
+                else if (l.StartsWith("targetColumn:", StringComparison.OrdinalIgnoreCase))
+                    targetColumn = l["targetColumn:".Length..].Trim().Trim('"', '\'');
+            }
+        }
+        else
+        {
+            // No front matter — extract title from first H1
+            body = trimmed;
+            title = ExtractTitleFromBody(body);
+        }
+
+        return string.IsNullOrWhiteSpace(title)
+            ? null
+            : new ParsedNewTicket(title, body, type, parent, targetColumn);
+    }
+
+    private static string? ExtractTitleFromBody(string body)
+    {
+        foreach (var line in body.Split('\n'))
+        {
+            var l = line.Trim();
+            if (l.StartsWith("# ", StringComparison.Ordinal))
+                return l[2..].Trim();
+        }
+        return null;
     }
 
     /// <summary>
@@ -199,3 +350,13 @@ public sealed record UpdateProcessingResult(
 
 public sealed record CreatedTicketInfo(string NewCardId, string Title, string Slug);
 public sealed record CrossCardCommentInfo(string TargetCardId, string SourceFileName);
+
+/// <summary>
+/// Represents a parsed new-ticket update file.
+/// </summary>
+internal sealed record ParsedNewTicket(
+    string Title,
+    string Body,
+    string? Type = null,
+    string? Parent = null,
+    string? TargetColumn = null);

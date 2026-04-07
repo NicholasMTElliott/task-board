@@ -240,12 +240,14 @@ public sealed partial class AgentRunner(
                 // 6d. Update card body from task file after each step (write-after-each-step strategy)
                 await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken);
 
-                // 6d-ii. Process update files (new tickets, cross-card comments)
+                // 6d-ii. Process update files (.aiboard/updates/) — handles both generation steps
+                //        (step.GenerationConfig set) and ad-hoc ticket creation (no config).
                 UpdateProcessingResult updateResult;
                 try
                 {
                     updateResult = await updateFileProcessor.ProcessUpdatesAsync(
-                        worktreePath, cardId, step.Name, comments, cancellationToken);
+                        worktreePath, cardId, step.Name, comments, cancellationToken,
+                        step.GenerationConfig);
                 }
                 catch (Exception ex)
                 {
