@@ -9,15 +9,17 @@ Manual ticket management is repetitive: drafting technical designs, generating t
 - Pipeline stalls because a human forgot to push a card → agents drive state transitions automatically
 - AI output cannot be trusted blindly → mandatory manual review gates + automated gate checks ensure oversight
 - Cross-ticket conflicts go unnoticed → dedicated review steps assess related tickets before and after design
+- Ticket sizing is inconsistent or skipped → estimator agent produces calibration-based size estimates
+- User stories lack task decomposition → agents can generate child task tickets automatically
 
 ## How It Should Work (Operator Perspective)
 1. Operator creates an issue and adds it to the project board in **Backlog**.
 2. Operator writes requirements/scope/context and moves card to **Ready for Design**.
 3. Operator runs: `.\scripts\run_once.ps1 -CardId {N}` (or uses `--mode polling` for automatic pickup)
-4. Design runs 3 steps: review related tickets → create technical design → review for cross-ticket conflicts. Gate check validates output and may trigger optional specialist reviews (security, performance, etc.). Card moves to **Designed**.
+4. Design runs 4 steps: review related tickets → create technical design → review for cross-ticket conflicts → estimate ticket size. Gate check validates output and may trigger optional specialist reviews (security, performance, etc.). Card moves to **Designed** with estimate written to board field.
 5. Operator reviews design, approves by moving to **Ready for Implementation**.
-6. Implementation runs 2 steps: implement code (Sonnet 4.6) → code review (Opus 4.6). Gate check validates output and may trigger optional specialist reviews. Card moves to **Ready for Test**.
-7. QA agent validates implementation. Gate check validates output and may trigger optional specialist reviews. Moves to **Tested** on success.
+6. Implementation runs 2 steps: implement code (Sonnet 4.6) → code review (Sonnet 4.6). Gate check validates output and may trigger optional specialist reviews. Card moves to **Ready for Test**.
+7. Test runs 2 steps: QA agent validates implementation → documentation agent updates memory bank if implementation introduced new patterns/components. Gate check validates output (including doc updates) and may trigger optional specialist reviews. Moves to **Tested** on success.
 8. Operator approves by moving to **Approved**. System auto-merges the PR and moves to **Done**.
 
 At any agent state, if the agent needs more information:

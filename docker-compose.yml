@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: aiboard-postgres
+    environment:
+      POSTGRES_USER: aiboard
+      POSTGRES_PASSWORD: aiboard
+      POSTGRES_DB: aiboard
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiboard -d aiboard"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    image: redgate/flyway:latest
+    container_name: aiboard-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./db/migrations:/flyway/sql:ro
+    command: >-
+      -url=jdbc:postgresql://postgres:5432/aiboard
+      -user=aiboard
+      -password=aiboard
+      -locations=filesystem:/flyway/sql
+      -connectRetries=5
+      migrate
+
+volumes:
+  pgdata:

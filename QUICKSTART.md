@@ -2,9 +2,24 @@
 
 ## Prerequisites
 
+- **Docker** — installed and running (for local PostgreSQL via `docker compose`)
 - **gh CLI** — installed and authenticated (`gh auth login` with `project` + `repo` scopes)
 - **claude CLI** — installed and authenticated (`claude` must be on PATH)
 - **Git** — installed and on PATH
+
+## Database Setup (one-time)
+
+Start the local PostgreSQL database and run migrations:
+
+```
+docker compose up -d
+```
+
+This launches Postgres on `localhost:5432` and automatically runs Flyway migrations.
+The default connection string in `appsettings.json` points to this local instance — no extra config needed.
+
+To check migration status: `docker compose run --rm migrate info`
+To reset the database: `docker compose down -v && docker compose up -d`
 
 ## Setup (one-time, single project)
 
@@ -255,6 +270,8 @@ Both forward slashes and backslashes work on all platforms.
 | `appsettings.user.example.json` | Template — copy to `appsettings.user.json` and fill in your values |
 | `workflow.github.example.json` | Template — copy to `workflow.github.json` and customise |
 | `workflow.v1.json` | Legacy Trello workflow (ignore unless using Trello) |
+| `docker-compose.yml` | Local PostgreSQL + Flyway migrations |
+| `db/migrations/` | SQL migration files applied by Flyway |
 | `prompts/` | Default agent prompt files referenced by the workflow config |
 | `docs/` | Deployment guide, architecture docs |
 | `QUICKSTART.md` | This file |

@@ -6,7 +6,8 @@
 | Layer | Technology | Notes |
 |-------|------------|-------|
 | Language | C# / .NET 10 | Orchestrator and worker |
-| Agent executor | Claude CLI subprocess | Via `ClaudeAgentExecutor`; `--output-format stream-json` + `--json-schema` |
+| Agent executor (primary) | Claude CLI subprocess | Via `ClaudeAgentExecutor`; `--output-format stream-json` + `--json-schema` |
+| Agent executor (secondary) | Codex CLI subprocess | Via `CodexAgentExecutor` (legacy/secondary) |
 | Board provider (primary) | GitHub Projects v2 | Via `gh` CLI (GraphQL + REST) |
 | Board provider (legacy) | Trello | REST API |
 | Git isolation | Git worktrees | `GitWorkspaceManager` |
@@ -34,7 +35,7 @@
 | Trello | `TrelloClient` | `BOARD_PROVIDER=trello` |
 | Stub | `StubTaskBoardClient` | `BOARD_PROVIDER=stub` (default) |
 
-Agent executor selection: `AGENT_EXECUTOR` env var — `claude-cli` or `stub`.
+Agent executor selection: `AGENT_EXECUTOR` env var — `claude-cli`, `codex`, or `stub`. Multi-executor support via `AgentExecutorResolver`.
 
 ## Development Environment
 - IDE: Visual Studio Code
@@ -54,7 +55,7 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 ### Migration Tooling
 - Flyway via Docker (`redgate/flyway`) for SQL-first schema migrations
 - Scripts in `db/migrations`, applied via `scripts/migrate.ps1`
-- Migration chain: V1 (processed_events) → V2 (pgmq_core) → V3 (events_queue) → V4 (card_state) → V5 (run_log) → V6 (run_log step_name)
+- Migration chain: V1 (processed_events) → V2 (pgmq_core) → V3 (events_queue) → V4 (card_state) → V5 (run_log) → V6 (run_log step_name) → V9 (agent_run) → V10 (step_result)
 
 ## Decided Architecture Items
 - ✅ Board abstraction: `ITaskBoardClient` with GitHub Projects and Trello implementations
@@ -69,6 +70,13 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ Cross-reference resolution between cards
 - ✅ System merge (Approved → Done)
 - ✅ Merge conflict detection and resolution
+- ✅ Agent run tracking (IRunStore with PgRunStore/NullRunStore)
+- ✅ Rate limit detection and recovery (Claude CLI stderr + GitHub API 429)
+- ✅ Child task generation (cardTypes, CompletionRunner, UpdateFileProcessor)
+- ✅ Estimation pipeline (estimator role, calibration-based sizing)
+- ✅ Multi-executor support (AgentExecutorResolver: claude-cli, codex, stub)
+- ✅ Sleep inhibition during polling (Windows/Mac/Linux)
+- ✅ Startup prerequisite validation (PrerequisiteValidator)
 
 ## Open Technical Decisions
 - [ ] Webhook/event-driven triggers (currently manual CLI or polling)

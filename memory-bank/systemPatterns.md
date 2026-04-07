@@ -47,14 +47,19 @@ If any step returns non-COMPLETE, the chain halts and the card transitions based
 Legacy single-step states (top-level `role` + `taskPrompt`) are auto-normalized to a one-element steps array via `WorkflowState.Normalise()`.
 
 ### Current Multi-Step Configurations
-**Ready for Design** (3 steps, all opus 4.6 via `senior_engineer`):
+**Ready for Design** (4 steps: opus 4.6 via `senior_engineer` + haiku via `estimator`):
 1. `review_related_tickets` — scan related tickets, assess impact
 2. `create_design` — produce technical design
 3. `review_design_conflicts` — verify no cross-ticket conflicts
+4. `estimate_ticket` — calibration-based size estimation (haiku via `estimator`)
 
 **Ready for Implementation** (2 steps):
 1. `implement` — write code (sonnet 4.6 via `implementer`)
-2. `code_review` — review changes (opus 4.6 via `code_reviewer`)
+2. `code_review` — review changes (sonnet 4.6 via `code_reviewer`)
+
+**Ready for Test** (2 steps):
+1. `qa_validation` — test validation (opus 4.6 via `qa`)
+2. `update_documentation` — memory bank documentation update (sonnet 4.6 via `implementer`)
 
 ### Gate Checks
 After all steps complete for a state, a `gateCheck` runs a lightweight agent (`gate_checker` on Haiku) to validate the output before transitioning. Gate checks are configured for all three agent states: **design, implementation, and test**. On failure, card moves to `GATE_FAIL` target (typically back to the trigger column for retry).
@@ -114,6 +119,9 @@ Agent execution uses git worktrees for isolated working directories:
 ### Cross-Reference Resolution
 Task files can reference other cards (e.g., `#5`, `#12`). The `CrossReferenceResolver` parses these, fetches referenced cards, and includes them in the agent's workspace. This creates tracked relationships so dependent context flows through the pipeline.
 
+### Agent Executor Pattern
+Agent executors are registered via `AgentExecutorResolver` which resolves by provider key (`claude-cli`, `codex`, `stub`). Selection via `AGENT_EXECUTOR` env var. Multiple executors can coexist; the resolver auto-detects available providers at startup.
+
 ### Claude CLI Subprocess Pattern
 The .NET worker invokes the Claude CLI (`claude`) as a subprocess via `ClaudeAgentExecutor`.
 
@@ -150,6 +158,33 @@ When a merge conflict is detected (via `MERGE_CONFLICT` transition), a `merge_re
 ### System Merge (Approved → Done)
 The `Approved` state has `gateType: "system_merge"`. The system automatically merges the PR and moves the card to `Done`. On merge conflict, falls back to `Ready for Implementation`.
 
+### Estimation
+The design pipeline includes a calibration-based estimation step (step 4). Configuration in `workflow.github.json`:
+```json
+"estimation": { "calibrationTicketId": "34", "calibrationSize": 1, "fieldName": "Estimate", "scale": [1, 2, 4, 8] }
+```
+- `estimator` role (haiku) sizes the ticket relative to a calibration ticket
+- On COMPLETE, the design state's transition uses array format with `setField` to write the estimate to the board's `Estimate` field:
+  ```json
+  "COMPLETE": [{ "type": "moveToColumn", "value": "Designed" }, { "type": "setField", "field": "Estimate", "value": "{{estimation}}" }]
+  ```
+
+### Child Task Generation
+User stories can generate child task tickets via the `cardTypes` config:
+```json
+"cardTypes": { "story": { "name": "User Story", "labelPrefix": "type", "allowedChildren": ["task"] }, "task": { "name": "Task", "allowedChildren": [] } }
+```
+- `UpdateFileProcessor` processes `.aiboard/updates/new-{slug}.md` files to create child tickets on the board
+- `generate_children.md` prompt step guides agents to produce child task definitions
+- `CompletionRunner` handles `children_complete` gate type — polls child cards until all reach terminal state
+
+### Rate Limiting
+- `ClaudeAgentExecutor` detects rate limits via stderr analysis (checks for "rate limit" / "overloaded")
+- `GitHubProjectsClient` detects GitHub API rate limits (HTTP 429, "abuse detection", "secondary rate")
+- Both throw `RateLimitException` with `RateLimitSource` (BoardApi or AgentCli)
+- `AgentRunner` catches `RateLimitException`, restores card to trigger column for retry
+- `PollingRunner` applies aggressive backoff: board API = 2min base, agent CLI = 30min base (cap 2hr)
+
 ## Component Relationships
 
 | Component | Responsibility |
@@ -159,10 +194,21 @@ The `Approved` state has `gateType: "system_merge"`. The system automatically me
 | GitHubProjectsClient | GitHub Projects v2 via `gh` CLI (GraphQL + REST) |
 | TrelloClient | Trello REST API |
 | AgentRunner | Direct agent execution: fetch cards → worktree → steps → post-process |
+| MergeRunner | Git merge + push for `system_merge` gate type |
+| CompletionRunner | Polls child cards for `children_complete` gate type |
+| PollingRunner | Automatic card pickup via priority-sorted polling |
 | ClaudeAgentExecutor | Claude CLI subprocess with `--json-schema` structured output |
+| CodexAgentExecutor | OpenAI Codex CLI subprocess (secondary/legacy) |
+| AgentExecutorResolver | Multi-executor registry; resolves by provider key (`claude-cli`, `codex`, `stub`) |
 | GitWorkspaceManager | Git worktree lifecycle for isolated agent execution |
 | TaskFileManager | Write board cards as `.aiboard/tasks/{id}.md` files + comments files |
+| UpdateFileProcessor | Processes `.aiboard/updates/` files for child ticket creation and cross-card comments |
 | CrossReferenceResolver | Parse card references, fetch dependent cards |
+| IRunStore / PgRunStore | Agent run and step result persistence (PostgreSQL); NullRunStore for no-op |
+| PrerequisiteValidator | Startup validation of providers, board config, and prompt files |
+| CardSelector / CardFilterEvaluator | Polling card selection and filtering logic |
+| SystemSleepInhibitor | Prevents OS sleep during polling (Windows/Mac/Linux) |
+| PromptBuilder | Assembles system + task prompts for agent execution |
 | workflow.github.json | Workflow config for GitHub Projects (active) |
 | workflow.v1.json | Workflow config for Trello (legacy) |
 
@@ -175,7 +221,7 @@ Schema:
   "states": {
     "<column_name>": {
       "name": "<display_name>",
-      "gateType": "agent_run | manual_gate | manual_entry | in_progress | holding | terminal | system_merge",
+      "gateType": "agent_run | manual_gate | manual_entry | in_progress | holding | terminal | system_merge | children_complete",
       "gitBehavior": "discard | commit_only | commit_and_push",
       "providerParams": { "<key>": "<value>" },
       "includeInAgentContext": true,
@@ -192,7 +238,7 @@ Schema:
       ],
       "transitions": {
         "IN_PROGRESS": "<column>",
-        "COMPLETE": "<column>",
+        "COMPLETE": "<column> | [{ \"type\": \"moveToColumn\", \"value\": \"...\" }, { \"type\": \"setField\", \"field\": \"...\", \"value\": \"...\" }]",
         "NEEDS_INFO": "<column>",
         "ERROR": "<column>",
         "GATE_FAIL": "<column>",
@@ -208,7 +254,9 @@ Schema:
     }
   },
   "mergeResolution": { "role": "<role_key>", "providerParams": {} },
-  "polling": { "priorityFieldName": "<field>", "priorityOrder": ["P0", "P1"] }
+  "polling": { "priorityFieldName": "<field>", "priorityOrder": ["P0", "P1"] },
+  "estimation": { "calibrationTicketId": "<id>", "calibrationSize": 1, "fieldName": "<field>", "scale": [1, 2, 4, 8] },
+  "cardTypes": { "<type_key>": { "name": "<display>", "labelPrefix": "<prefix>", "allowedChildren": ["<type_key>"] } }
 }
 ```
 
@@ -225,9 +273,10 @@ Schema:
 |------|-------|---------|
 | `senior_engineer` | claude-opus-4-6 | Design and design review steps |
 | `implementer` | claude-sonnet-4-6 | Code implementation (same system prompt as senior_engineer) |
-| `code_reviewer` | claude-opus-4-6 | Post-implementation code review |
+| `code_reviewer` | claude-sonnet-4-6 | Post-implementation code review |
 | `qa` | claude-opus-4-6 | Test validation |
 | `gate_checker` | claude-haiku-4-5-20251001 | Lightweight gate checks after design, implementation, and test |
+| `estimator` | claude-haiku-4-5-20251001 | Ticket estimation (design step 4, calibration-based) |
 | `specialist_reviewer` | claude-sonnet-4-6 | On-demand specialist reviews requested by gate checks |
 | `senior_specialist_reviewer` | claude-opus-4-6 | High-stakes specialist reviews (legal, compliance, privacy) |
 | `merge_resolver` | claude-sonnet-4-6 | Merge conflict resolution |
@@ -240,13 +289,17 @@ Schema:
 | `prompts/code_reviewer.md` | code_reviewer (system prompt) |
 | `prompts/qa.md` | qa (system prompt) |
 | `prompts/gate_checker.md` | gate_checker (system prompt) |
+| `prompts/estimator.md` | estimator (system prompt) |
 | `prompts/merge_resolver.md` | merge_resolver (system prompt) |
 | `prompts/states/ready_for_design.md` | Design step 2 (create_design) |
 | `prompts/states/steps/review_related_tickets.md` | Design step 1 |
 | `prompts/states/steps/review_design_conflicts.md` | Design step 3 |
+| `prompts/states/steps/estimate_ticket.md` | Design step 4 (estimation) |
+| `prompts/states/steps/generate_children.md` | Child task generation |
 | `prompts/states/ready_for_implementation.md` | Implementation step 1 (implement) |
 | `prompts/states/steps/code_review.md` | Implementation step 2 |
-| `prompts/states/ready_for_test.md` | QA testing |
+| `prompts/states/ready_for_test.md` | Test step 1 (QA validation) |
+| `prompts/states/steps/update_documentation.md` | Test step 2 (documentation update) |
 | `prompts/gates/post_design.md` | Gate check after design |
 | `prompts/gates/post_implementation.md` | Gate check after implementation |
 | `prompts/gates/post_test.md` | Gate check after test |
@@ -254,9 +307,31 @@ Schema:
 | `prompts/optional-steps/impl/*.md` | Optional implementation specialist reviews (12 files) |
 | `prompts/optional-steps/test/*.md` | Optional test specialist reviews (10 files) |
 
-## Database Tables (Legacy Queue Path)
+## Database Tables
 
-### queue tables (PGMQ)
+### agent_run (run tracking)
+| Column | Description |
+|--------|-------------|
+| id | UUID (PK) |
+| card_id | Card ID |
+| state_name | Workflow state that triggered the run |
+| started_at_utc | Run start time |
+| completed_at_utc | Run end time (nullable) |
+| outcome | COMPLETE / NEEDS_INFO / ERROR (nullable) |
+
+### step_result (step tracking)
+| Column | Description |
+|--------|-------------|
+| id | UUID (PK) |
+| agent_run_id | FK to agent_run |
+| step_name | Step name within the run |
+| role | Agent role executed |
+| outcome | Step outcome |
+| detail | Step output detail (nullable) |
+| started_at_utc | Step start time |
+| completed_at_utc | Step end time (nullable) |
+
+### queue tables (PGMQ, legacy)
 | Table | Purpose |
 |-------|---------|
 | `pgmq.q_events` | Active event queue |

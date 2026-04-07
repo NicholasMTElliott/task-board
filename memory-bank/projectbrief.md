@@ -11,7 +11,7 @@ A single founder/operator can place a card in a "Ready for" column on their kanb
 ### In Scope
 - Full end-to-end pipeline from Backlog to Done (including automated merge)
 - Multi-step agent execution within states (e.g., implement → code review)
-- Senior Engineer, QA, Implementer, Code Reviewer, Gate Checker, and Merge Resolver roles
+- Senior Engineer, QA, Implementer, Code Reviewer, Gate Checker, Estimator, and Merge Resolver roles
 - Manual approval gates at Designed and Tested
 - Provider-agnostic board abstraction (`ITaskBoardClient`) — supports GitHub Projects and Trello
 - IN_PROGRESS transitions (card moves to "X-ing" column while agent works)
@@ -36,14 +36,14 @@ A single founder/operator can place a card in a "Ready for" column on their kanb
 | # | State | Role(s) | Gate Type |
 |---|-------|---------|-----------|
 | 1 | Backlog | — | Manual entry |
-| 2 | Ready for Design | Senior Engineer (3 steps + optional specialist reviews) | agent_run |
+| 2 | Ready for Design | Senior Engineer + Estimator (4 steps + optional specialist reviews) | agent_run |
 | 3 | Designing | — | In-progress |
 | 4 | Design Questions | — | Holding (NEEDS_INFO) |
 | 5 | Designed | — | Manual gate |
 | 6 | Ready for Implementation | Implementer + Code Reviewer (2 steps + optional specialist reviews) | agent_run |
 | 7 | Implementing | — | In-progress |
 | 8 | Implementation Questions | — | Holding (NEEDS_INFO) |
-| 9 | Ready for Test | QA (+ optional specialist reviews) | agent_run |
+| 9 | Ready for Test | QA + Doc Updater (2 steps + optional specialist reviews) | agent_run |
 | 10 | Testing | — | In-progress |
 | 11 | Tested | — | Manual gate |
 | 12 | Approved | — | system_merge |

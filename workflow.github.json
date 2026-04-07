@@ -316,15 +316,25 @@
     },
     "Ready for Test": {
       "name": "Ready for Test",
-      "role": "qa",
       "gateType": "agent_run",
       "pipelineOrder": 3,
-      "gitBehavior": "discard",
-      "taskPromptFile": "prompts/states/ready_for_test.md",
+      "gitBehavior": "commit_and_push",
       "includeInAgentContext": true,
       "providerParams": {
         "effort": "medium"
       },
+      "steps": [
+        {
+          "name": "qa_validation",
+          "role": "qa",
+          "taskPromptFile": "prompts/states/ready_for_test.md"
+        },
+        {
+          "name": "update_documentation",
+          "role": "implementer",
+          "taskPromptFile": "prompts/states/steps/update_documentation.md"
+        }
+      ],
       "gateCheck": {
         "role": "gate_checker",
         "taskPromptFile": "prompts/gates/post_test.md"

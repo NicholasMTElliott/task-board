@@ -35,6 +35,8 @@
     <Content Include="..\..\..\QUICKSTART.md" CopyToOutputDirectory="PreserveNewest" Link="QUICKSTART.md" />
     <Content Include="..\..\..\docs\**\*.md" CopyToOutputDirectory="PreserveNewest" LinkBase="docs" />
     <Content Include="..\..\..\appsettings.user.example.json" CopyToOutputDirectory="PreserveNewest" Link="appsettings.user.example.json" />
+    <Content Include="..\..\..\docker-compose.yml" CopyToOutputDirectory="PreserveNewest" Link="docker-compose.yml" />
+    <Content Include="..\..\..\db\migrations\*.sql" CopyToOutputDirectory="PreserveNewest" LinkBase="db\migrations" />
   </ItemGroup>
 
 </Project>
