@@ -178,6 +178,37 @@ public sealed partial class AgentRunner(
                     referenceContext.TargetCardId, referenceContext.References, cardIdToFilePath);
             }
 
+            // 5.4 Include calibration ticket in context cards if estimation is configured
+            if (workflowConfig.Estimation is { } estimationConfig)
+            {
+                var existingIds = contextCards.Select(c => c.Id).ToHashSet();
+                if (!existingIds.Contains(estimationConfig.CalibrationTicketId))
+                {
+                    // First check if the calibration card was already fetched in allCards
+                    var calibrationFromBoard = cards.FirstOrDefault(
+                        c => c.Id == estimationConfig.CalibrationTicketId);
+                    if (calibrationFromBoard is not null)
+                    {
+                        contextCards = [.. contextCards, calibrationFromBoard];
+                    }
+                    else
+                    {
+                        try
+                        {
+                            var calibrationCard = await boardClient.GetCardAsync(
+                                estimationConfig.CalibrationTicketId, cancellationToken);
+                            contextCards = [.. contextCards, calibrationCard];
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex,
+                                "Failed to fetch calibration ticket {TicketId} — estimation step will run without calibration context",
+                                estimationConfig.CalibrationTicketId);
+                        }
+                    }
+                }
+            }
+
             await taskFileManager.WriteAllTaskFilesAsync(
                 worktreePath, contextCards, workflowConfig, referenceContext, cancellationToken);
 
@@ -195,6 +226,21 @@ public sealed partial class AgentRunner(
             var commentPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity);
             AgentResult? lastResult = null;
 
+            // Build prompt context for estimation placeholders (null if estimation not configured)
+            Dictionary<string, string>? promptContext = null;
+            if (workflowConfig.Estimation is { } estConfig)
+            {
+                promptContext = new Dictionary<string, string>
+                {
+                    ["CalibrationTicketId"] = estConfig.CalibrationTicketId,
+                    ["CalibrationSize"] = estConfig.CalibrationSize.ToString(),
+                    ["EstimationScale"] = string.Join(", ", estConfig.Scale ?? [1, 2, 4, 8]),
+                    ["EstimationFieldName"] = estConfig.FieldName,
+                };
+            }
+
+            double? capturedEstimate = null;
+
             for (var stepIndex = 0; stepIndex < state.Steps.Count; stepIndex++)
             {
                 var step = state.Steps[stepIndex];
@@ -209,7 +255,7 @@ public sealed partial class AgentRunner(
 
                 // 6b. Resolve task prompt for this step
                 var resolvedPrompt = await ResolveStepTaskPromptAsync(
-                    step, worktreePath, targetCard, workflowConfig.ConfigDirectory, cancellationToken);
+                    step, worktreePath, targetCard, workflowConfig.ConfigDirectory, cancellationToken, promptContext);
 
                 if (isExistingBranch && stepIndex == 0)
                 {
@@ -236,6 +282,14 @@ public sealed partial class AgentRunner(
 
                 var stepExecutor = executorResolver.Resolve(stepRole.Provider);
                 lastResult = await stepExecutor.ExecuteAsync(context, cancellationToken);
+
+                // Capture estimate if this step returned one
+                if (lastResult.Estimate.HasValue)
+                {
+                    capturedEstimate = lastResult.Estimate;
+                    logger.LogInformation("Step '{StepName}' produced estimate: {Estimate} story point(s)",
+                        step.Name, capturedEstimate);
+                }
 
                 // 6d. Update card body from task file after each step (write-after-each-step strategy)
                 await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken);
@@ -297,6 +351,12 @@ public sealed partial class AgentRunner(
             }
 
             // All steps complete
+            // Add captured estimate to template context for transition actions (e.g., setField)
+            if (capturedEstimate.HasValue)
+            {
+                templateContext["estimation"] = capturedEstimate.Value.ToString("G");
+            }
+
             // 7. Run gate check if configured
             var gateCheckResult = await RunGateCheckAsync(
                 state, lastResult!, worktreePath, targetCard, cardId, cancellationToken);
@@ -1350,7 +1410,8 @@ public sealed partial class AgentRunner(
     }
 
     internal static async Task<string> ResolveStepTaskPromptAsync(
-        WorkflowStep step, string worktreePath, BoardCard card, string? configDirectory, CancellationToken cancellationToken)
+        WorkflowStep step, string worktreePath, BoardCard card, string? configDirectory, CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? extraContext = null)
     {
         string template;
 
@@ -1369,7 +1430,7 @@ public sealed partial class AgentRunner(
             template = step.TaskPrompt ?? "";
         }
 
-        return ResolvePromptPlaceholders(template, card);
+        return ResolvePromptPlaceholders(template, card, extraContext);
     }
 
     private static string BuildCommentPrefix(WorkflowState state, WorkflowConfig config, AgentIdentity identity)
@@ -1494,7 +1555,9 @@ public sealed partial class AgentRunner(
         return ResolvePromptPlaceholders(template, card);
     }
 
-    internal static string ResolvePromptPlaceholders(string template, BoardCard card)
+    internal static string ResolvePromptPlaceholders(
+        string template, BoardCard card,
+        IReadOnlyDictionary<string, string>? extraContext = null)
     {
         return PlaceholderRegex.Replace(template, match =>
         {
@@ -1503,7 +1566,9 @@ public sealed partial class AgentRunner(
             {
                 "TaskName" => card.Title,
                 "TaskId" => card.Id,
-                _ => match.Value
+                _ => extraContext is not null && extraContext.TryGetValue(key, out var value)
+                    ? value
+                    : match.Value
             };
         });
     }

@@ -37,6 +37,9 @@ internal static class AgentSchemas
             "requestedSteps": {
               "type": "array",
               "items": { "type": "string" }
+            },
+            "estimate": {
+              "type": "number"
             }
           },
           "required": ["outcome"]
@@ -80,9 +83,12 @@ internal static class AgentSchemas
             "requestedSteps": {
               "type": ["array", "null"],
               "items": { "type": "string" }
+            },
+            "estimate": {
+              "type": ["number", "null"]
             }
           },
-          "required": ["outcome", "detail", "questions", "requestedSteps"],
+          "required": ["outcome", "detail", "questions", "requestedSteps", "estimate"],
           "additionalProperties": false
         }
         """;

@@ -20,7 +20,8 @@ public sealed record AgentResult(
     string? Detail = null,
     IReadOnlyList<AgentQuestion>? Questions = null,
     string? ConversationLog = null,
-    IReadOnlyList<string>? RequestedSteps = null);
+    IReadOnlyList<string>? RequestedSteps = null,
+    double? Estimate = null);
 
 public sealed record AgentQuestion(
     string Question,
