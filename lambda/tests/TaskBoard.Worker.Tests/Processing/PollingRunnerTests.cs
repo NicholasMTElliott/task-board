@@ -77,6 +77,7 @@ public class PollingRunnerTests
             TestConfig,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -90,6 +91,7 @@ public class PollingRunnerTests
             boardClient,
             agentRunner,
             mergeRunner,
+            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
             TestConfig,
             AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             NullLogger<PollingRunner>.Instance);
@@ -123,6 +125,7 @@ public class PollingRunnerTests
             TestConfig,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -136,6 +139,7 @@ public class PollingRunnerTests
             boardClient,
             agentRunner,
             mergeRunner,
+            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
             TestConfig,
             AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             NullLogger<PollingRunner>.Instance);
@@ -175,6 +179,7 @@ public class PollingRunnerTests
             TestConfig,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -188,6 +193,7 @@ public class PollingRunnerTests
             boardClient,
             agentRunner,
             mergeRunner,
+            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
             TestConfig,
             AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             NullLogger<PollingRunner>.Instance);
@@ -246,6 +252,7 @@ public class PollingRunnerTests
             config,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -268,6 +275,7 @@ public class PollingRunnerTests
             boardClient,
             agentRunner,
             mergeRunner,
+            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
             config,
             resolverWithClaudeOnly,
             warningLogger);
@@ -326,6 +334,7 @@ public class PollingRunnerTests
             config,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -345,6 +354,7 @@ public class PollingRunnerTests
             boardClient,
             agentRunner,
             mergeRunner,
+            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
             config,
             resolverWithClaudeOnly,
             NullLogger<PollingRunner>.Instance);

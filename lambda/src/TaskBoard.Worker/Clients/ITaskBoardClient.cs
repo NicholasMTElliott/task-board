@@ -1,6 +1,19 @@
 namespace TaskBoard.Worker.Clients;
 
 /// <summary>
+/// Request object for creating a new card on the board.
+/// Used by both ad-hoc creation and structured generation (generationConfig on steps).
+/// Config-specified values take precedence over agent-specified front matter values.
+/// </summary>
+public sealed record CreateCardRequest(
+    string Title,
+    string Body,
+    string? ParentCardId = null,
+    string? CardType = null,
+    string? TargetColumn = null,
+    IReadOnlyList<string>? Labels = null);
+
+/// <summary>
 /// Provider-agnostic interface for task board operations.
 /// Implementations: TrelloClient, GitHubProjectsClient, StubTaskBoardClient.
 /// </summary>
@@ -12,6 +25,10 @@ public interface ITaskBoardClient
     Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken cancellationToken);
     Task UpsertAgentCommentAsync(string cardId, string commentBody, string commentMarker, CancellationToken cancellationToken);
     Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken);
+
+    // ── Card creation ─────────────────────────────────────────────────────────
+    /// <summary>Creates a new card on the board and returns its ID.</summary>
+    Task<string> CreateCardAsync(CreateCardRequest request, CancellationToken cancellationToken);
 
     // ── Label operations ─────────────────────────────────────────────────────
     Task AddLabelAsync(string cardId, string labelName, CancellationToken cancellationToken);

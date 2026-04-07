@@ -194,8 +194,10 @@ var gitTimeoutSeconds = int.TryParse(builder.Configuration["GitTimeoutSeconds"],
 builder.Services.AddSingleton(sp =>
     new GitWorkspaceManager(sp.GetRequiredService<ILogger<GitWorkspaceManager>>(), worktreeBasePath, gitTimeoutSeconds));
 
+builder.Services.AddSingleton<UpdateFileProcessor>();
 builder.Services.AddSingleton<AgentRunner>();
 builder.Services.AddSingleton<MergeRunner>();
+builder.Services.AddSingleton<CompletionRunner>();
 builder.Services.AddSingleton<PollingRunner>();
 
 // ── Queue-driven mode services (registered if Pgmq connection is configured) ──
@@ -296,12 +298,18 @@ if (mode == "agent")
     var targetCard = boardCards.FirstOrDefault(c => c.Id == cardId);
 
     AgentRunResult result;
-    if (targetCard is not null
-        && workflowConfigInstance.States.TryGetValue(targetCard.ColumnId, out var cardState)
+    workflowConfigInstance.States.TryGetValue(targetCard?.ColumnId ?? "", out var cardState);
+    if (cardState is not null
         && string.Equals(cardState.GateType, GateTypes.SystemMerge, StringComparison.OrdinalIgnoreCase))
     {
         var mergeRunner = scope.ServiceProvider.GetRequiredService<MergeRunner>();
         result = await mergeRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+    }
+    else if (cardState is not null
+        && string.Equals(cardState.GateType, GateTypes.ChildrenComplete, StringComparison.OrdinalIgnoreCase))
+    {
+        var completionRunnerInstance = scope.ServiceProvider.GetRequiredService<CompletionRunner>();
+        result = await completionRunnerInstance.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
     }
     else
     {

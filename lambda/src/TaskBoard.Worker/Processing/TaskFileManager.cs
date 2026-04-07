@@ -311,7 +311,9 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
         => body.Contains("<!-- agent-step:", StringComparison.Ordinal)
         || body.Contains("<!-- agent-run:", StringComparison.Ordinal)
         || body.Contains("<!-- gate-check:", StringComparison.Ordinal)
-        || body.Contains("<!-- merge-run:", StringComparison.Ordinal);
+        || body.Contains("<!-- merge-run:", StringComparison.Ordinal)
+        || body.Contains("<!-- agent-created-ticket:", StringComparison.Ordinal)
+        || body.Contains("<!-- completion-check:", StringComparison.Ordinal);
 
     internal static string EscapeYamlValue(string value)
     {

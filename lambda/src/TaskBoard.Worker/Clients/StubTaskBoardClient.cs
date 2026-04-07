@@ -88,4 +88,16 @@ public sealed class StubTaskBoardClient(ILogger<StubTaskBoardClient> logger) : I
         logger.LogInformation("[Stub] GetCurrentUser");
         return Task.FromResult("stub-agent");
     }
+
+    private int _nextStubId;
+
+    public Task<string> CreateCardAsync(CreateCardRequest request, CancellationToken cancellationToken)
+    {
+        var id = System.Threading.Interlocked.Increment(ref _nextStubId).ToString();
+        logger.LogInformation(
+            "[Stub] CreateCard #{Id} title={Title} type={Type} parent={Parent} column={Column}",
+            id, request.Title, request.CardType ?? "(none)",
+            request.ParentCardId ?? "(none)", request.TargetColumn ?? "(none)");
+        return Task.FromResult(id);
+    }
 }

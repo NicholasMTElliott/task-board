@@ -169,6 +169,42 @@ public static class WorkflowConfigValidator
                         errors.Add($"State '{stateId}' ({state.Name}) field filter requires a 'field' property.");
                 }
             }
+
+            // ── children_complete state validation ───────────────────────────
+            if (string.Equals(state.GateType, GateTypes.ChildrenComplete, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!state.Transitions.ContainsKey(TransitionKeys.Complete))
+                    errors.Add($"State '{stateId}' ({state.Name}) is children_complete but has no 'COMPLETE' transition.");
+            }
+
+            // ── generationConfig validation ──────────────────────────────────
+            if (state.Steps is { Count: > 0 })
+            {
+                foreach (var step in state.Steps)
+                {
+                    if (step.GenerationConfig is not { } genCfg) continue;
+
+                    if (string.IsNullOrWhiteSpace(genCfg.TargetType))
+                    {
+                        errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' generationConfig has empty targetType.");
+                        continue;
+                    }
+
+                    // targetType must exist in cardTypes (if cardTypes is defined)
+                    if (config.CardTypes is not null
+                        && !config.CardTypes.ContainsKey(genCfg.TargetType))
+                    {
+                        errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' generationConfig.targetType '{genCfg.TargetType}' is not defined in cardTypes.");
+                    }
+
+                    // targetColumn (if specified) must reference a known state
+                    if (genCfg.TargetColumn is not null
+                        && !config.States.ContainsKey(genCfg.TargetColumn))
+                    {
+                        errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' generationConfig.targetColumn '{genCfg.TargetColumn}' is not a known state.");
+                    }
+                }
+            }
         }
 
         // Note: Sections can be empty for roles that don't write to card body
@@ -183,7 +219,7 @@ public static class WorkflowConfigValidator
     private static void ValidatePollingConfig(WorkflowConfig config, List<string> errors)
     {
         var runnableStates = config.States
-            .Where(kvp => kvp.Value.GateType is GateTypes.AgentRun or GateTypes.SystemMerge)
+            .Where(kvp => kvp.Value.GateType is GateTypes.AgentRun or GateTypes.SystemMerge or GateTypes.ChildrenComplete)
             .ToList();
 
         foreach (var (stateId, state) in runnableStates)

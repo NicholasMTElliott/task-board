@@ -218,6 +218,157 @@ public class WorkflowConfigValidatorTests
         Assert.Contains(errors, e => e.Contains("systemPrompt") && e.Contains("systemPromptFile"));
     }
 
+    // ── children_complete validation ─────────────────────────────────────────
+
+    [Fact]
+    public void ChildrenCompleteState_MissingCompleteTransition_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Awaiting Children"] = new("Awaiting Children", null, "children_complete", null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        // Missing COMPLETE transition
+                        ["ERROR"] = TransitionTarget.ForColumn("Error"),
+                    }),
+                ["Error"] = new("Error", null, "holding", null, new()),
+            },
+            Roles: new());
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("children_complete") && e.Contains("COMPLETE"));
+    }
+
+    [Fact]
+    public void ChildrenCompleteState_WithCompleteTransition_PassesValidation()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Awaiting Children"] = new("Awaiting Children", null, "children_complete", null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("Ready for Test"),
+                        ["ERROR"]    = TransitionTarget.ForColumn("Error"),
+                    }),
+                ["Ready for Test"] = new("Ready for Test", "qa", "agent_run", "Test it.",
+                    new Dictionary<string, TransitionTarget>()),
+                ["Error"] = new("Error", null, "holding", null, new()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["qa"] = new("model", "prompt", [])
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("children_complete"));
+    }
+
+    // ── generationConfig validation ───────────────────────────────────────────
+
+    [Fact]
+    public void GenerationConfig_TargetTypeNotInCardTypes_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Ready for Design"] = new("Ready for Design", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>(),
+                    Steps: [new WorkflowStep("gen", "role1", TaskPrompt: "x",
+                        GenerationConfig: new GenerationConfig("bug"))]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["role1"] = new("model", "prompt", [])
+            },
+            CardTypes: new Dictionary<string, CardTypeDefinition>
+            {
+                ["task"] = new("Task"),   // "bug" not defined
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("bug") && e.Contains("not defined in cardTypes"));
+    }
+
+    [Fact]
+    public void GenerationConfig_TargetTypeInCardTypes_PassesValidation()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Ready for Design"] = new("Ready for Design", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>(),
+                    Steps: [new WorkflowStep("gen", "role1", TaskPrompt: "x",
+                        GenerationConfig: new GenerationConfig("task", "Backlog"))]),
+                ["Backlog"] = new("Backlog", null, "manual_entry", null, new()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["role1"] = new("model", "prompt", [])
+            },
+            CardTypes: new Dictionary<string, CardTypeDefinition>
+            {
+                ["task"] = new("Task"),
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("not defined in cardTypes"));
+    }
+
+    [Fact]
+    public void GenerationConfig_UnknownTargetColumn_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Ready for Design"] = new("Ready for Design", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>(),
+                    Steps: [new WorkflowStep("gen", "role1", TaskPrompt: "x",
+                        GenerationConfig: new GenerationConfig("task", "NonExistentColumn"))]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["role1"] = new("model", "prompt", [])
+            },
+            CardTypes: new Dictionary<string, CardTypeDefinition>
+            {
+                ["task"] = new("Task"),
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("NonExistentColumn") && e.Contains("not a known state"));
+    }
+
+    [Fact]
+    public void GenerationConfig_WithNullCardTypes_PassesTargetTypeCheck()
+    {
+        // When CardTypes is null, no type validation can occur — should pass
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Ready for Design"] = new("Ready for Design", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>(),
+                    Steps: [new WorkflowStep("gen", "role1", TaskPrompt: "x",
+                        GenerationConfig: new GenerationConfig("task"))]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["role1"] = new("model", "prompt", [])
+            }
+            // CardTypes is null
+        );
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("not defined in cardTypes"));
+    }
+
     [Fact]
     public void MultiStepState_ValidSteps_PassesValidation()
     {

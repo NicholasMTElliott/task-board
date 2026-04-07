@@ -7,6 +7,7 @@ public sealed class PollingRunner(
     ITaskBoardClient boardClient,
     AgentRunner agentRunner,
     MergeRunner mergeRunner,
+    CompletionRunner completionRunner,
     WorkflowConfig workflowConfig,
     IAgentExecutorResolver executorResolver,
     ILogger<PollingRunner> logger)
@@ -68,9 +69,15 @@ public sealed class PollingRunner(
                         selected.Id, selected.Title, selected.ColumnId, totalCycles);
 
                     var selectedState = workflowConfig.States.GetValueOrDefault(selected.ColumnId);
-                    var result = string.Equals(selectedState?.GateType, GateTypes.SystemMerge, StringComparison.OrdinalIgnoreCase)
-                        ? await mergeRunner.ExecuteAsync(selected.Id, boardId, workspacePath, cancellationToken)
-                        : await agentRunner.ExecuteAsync(selected.Id, boardId, workspacePath, cancellationToken);
+                    var result = selectedState?.GateType switch
+                    {
+                        GateTypes.SystemMerge => await mergeRunner.ExecuteAsync(
+                            selected.Id, boardId, workspacePath, cancellationToken),
+                        GateTypes.ChildrenComplete => await completionRunner.ExecuteAsync(
+                            selected.Id, boardId, workspacePath, cancellationToken),
+                        _ => await agentRunner.ExecuteAsync(
+                            selected.Id, boardId, workspacePath, cancellationToken),
+                    };
 
                     logger.LogInformation(
                         "Card {CardId} completed: {Outcome}",

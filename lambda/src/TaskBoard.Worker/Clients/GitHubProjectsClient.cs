@@ -580,6 +580,158 @@ public sealed class GitHubProjectsClient(
         return json.Trim().Trim('"');
     }
 
+    public async Task<string> CreateCardAsync(CreateCardRequest request, CancellationToken ct)
+    {
+        // 1. Create issue via temp body file (avoids command-line length limits)
+        var tmpFile = Path.GetTempFileName();
+        string issueNumber;
+        try
+        {
+            await File.WriteAllTextAsync(tmpFile, request.Body, ct);
+            var result = await RunGhAsync(
+                ["issue", "create", "--repo", _options.Repo,
+                 "--title", request.Title, "--body-file", tmpFile],
+                ct);
+            var issueUrl = result.Trim();
+            issueNumber = issueUrl.Split('/').Last();
+        }
+        finally
+        {
+            File.Delete(tmpFile);
+        }
+
+        logger.LogInformation("Created issue #{IssueNumber} title='{Title}'", issueNumber, request.Title);
+
+        // 2. Best-effort: add to project
+        try
+        {
+            var issueUrl = $"https://github.com/{_options.Repo}/issues/{issueNumber}";
+            await RunGhAsync(
+                ["project", "item-add", _options.ProjectNumber.ToString(),
+                 "--owner", _options.Owner, "--url", issueUrl], ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to add issue #{IssueNumber} to project", issueNumber);
+        }
+
+        // 3. Best-effort: apply labels (type label + any explicit labels)
+        var allLabels = new List<string>();
+        if (request.CardType is not null)
+            allLabels.Add(request.CardType);
+        if (request.Labels is not null)
+            allLabels.AddRange(request.Labels);
+
+        foreach (var label in allLabels)
+        {
+            try
+            {
+                await RunGhAsync(
+                    ["issue", "edit", issueNumber, "--repo", _options.Repo, "--add-label", label], ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to add label '{Label}' to #{IssueNumber}", label, issueNumber);
+            }
+        }
+
+        // 4. Best-effort: link to parent via task list in parent body
+        if (request.ParentCardId is not null)
+        {
+            try
+            {
+                await LinkChildToParentAsync(request.ParentCardId, issueNumber, request.Title, ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to link #{Child} to parent #{Parent}", issueNumber, request.ParentCardId);
+            }
+        }
+
+        // 5. Best-effort: place in target column
+        if (request.TargetColumn is not null)
+        {
+            try
+            {
+                await MoveCardToColumnAsync(issueNumber, request.TargetColumn, ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to move #{IssueNumber} to column '{Column}'", issueNumber, request.TargetColumn);
+            }
+        }
+
+        return issueNumber;
+    }
+
+    private const string ChildrenSectionMarker = "<!-- aiboard:generated-children -->";
+
+    internal async Task LinkChildToParentAsync(
+        string parentCardId, string childCardId, string childTitle, CancellationToken ct)
+    {
+        var parentJson = await RunGhAsync(
+            ["issue", "view", parentCardId, "--repo", _options.Repo, "--json", "body"], ct);
+        using var doc = JsonDocument.Parse(parentJson);
+        var currentBody = doc.RootElement.GetProperty("body").GetString() ?? "";
+
+        var taskListEntry = $"- [ ] #{childCardId}";
+
+        // Deduplicate: skip if child already referenced
+        if (currentBody.Contains($"#{childCardId}", StringComparison.Ordinal))
+        {
+            logger.LogDebug("Child #{ChildCardId} already linked to parent #{ParentCardId}", childCardId, parentCardId);
+            return;
+        }
+
+        string newBody;
+        if (currentBody.Contains(ChildrenSectionMarker, StringComparison.Ordinal))
+        {
+            // Append to existing section — insert after the last task list entry
+            var markerIdx = currentBody.IndexOf(ChildrenSectionMarker, StringComparison.Ordinal);
+            var afterMarker = currentBody.IndexOf('\n', markerIdx);
+            if (afterMarker < 0) afterMarker = currentBody.Length;
+
+            var sectionStart = afterMarker;
+            var lines = currentBody[sectionStart..].Split('\n');
+            var insertAfterLine = 0;
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (lines[i].TrimStart().StartsWith("- ["))
+                    insertAfterLine = i + 1;
+                else if (!string.IsNullOrWhiteSpace(lines[i]) && insertAfterLine > 0)
+                    break;
+            }
+
+            var insertIdx = sectionStart;
+            for (var i = 0; i < insertAfterLine && insertIdx < currentBody.Length; i++)
+            {
+                var nextNewline = currentBody.IndexOf('\n', insertIdx + 1);
+                insertIdx = nextNewline >= 0 ? nextNewline : currentBody.Length;
+            }
+
+            newBody = currentBody.Insert(insertIdx, $"\n{taskListEntry}");
+        }
+        else
+        {
+            // Create new section at end of body
+            newBody = currentBody.TrimEnd()
+                + $"\n\n{ChildrenSectionMarker}\n## Generated Children\n{taskListEntry}";
+        }
+
+        var tmpFile = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(tmpFile, newBody, ct);
+            await RunGhAsync(
+                ["issue", "edit", parentCardId, "--repo", _options.Repo, "--body-file", tmpFile], ct);
+            logger.LogInformation("Linked #{ChildCardId} to parent #{ParentCardId}", childCardId, parentCardId);
+        }
+        finally
+        {
+            File.Delete(tmpFile);
+        }
+    }
+
     internal static string? ExtractCommentIdFromUrl(string url)
     {
         // https://github.com/{owner}/{repo}/issues/{number}#issuecomment-{id}
