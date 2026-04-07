@@ -59,7 +59,7 @@ public static class CardSelector
             var card = cards[i];
             if (!workflowConfig.States.TryGetValue(card.ColumnId, out var state))
                 continue;
-            if (state.GateType is not (GateTypes.AgentRun or GateTypes.SystemMerge))
+            if (state.GateType is not (GateTypes.AgentRun or GateTypes.SystemMerge or GateTypes.ChildrenComplete))
                 continue;
             if (!CardFilterEvaluator.PassesAll(card, state.Filters))
                 continue;

@@ -651,4 +651,42 @@ public class ClaudeAgentExecutorTests
         Assert.Contains("exit code 1", enriched.Message);
         Assert.Same(ex, enriched.InnerException);
     }
+
+    // ── IsRateLimited tests ──────────────────────────────────────────────────
+
+    [Fact]
+    public void IsRateLimited_StderrContainsApiErrorRateLimitReached_ReturnsTrue()
+        => Assert.True(ClaudeAgentExecutor.IsRateLimited("API Error: Rate limit reached"));
+
+    [Fact]
+    public void IsRateLimited_StderrContainsRateLimit_ReturnsTrue()
+        => Assert.True(ClaudeAgentExecutor.IsRateLimited("some text with rate limit in it"));
+
+    [Fact]
+    public void IsRateLimited_StderrContainsOverloaded_ReturnsTrue()
+        => Assert.True(ClaudeAgentExecutor.IsRateLimited("server overloaded"));
+
+    [Fact]
+    public void IsRateLimited_CaseInsensitive_ReturnsTrue()
+        => Assert.True(ClaudeAgentExecutor.IsRateLimited("Rate Limit Reached"));
+
+    [Fact]
+    public void IsRateLimited_NoRateLimitSignals_ReturnsFalse()
+        => Assert.False(ClaudeAgentExecutor.IsRateLimited("some other error"));
+
+    [Fact]
+    public void IsRateLimited_EmptyString_ReturnsFalse()
+        => Assert.False(ClaudeAgentExecutor.IsRateLimited(""));
+
+    [Fact]
+    public void IsRateLimited_NullStderr_ReturnsFalse()
+        => Assert.False(ClaudeAgentExecutor.IsRateLimited(null!));
+
+    [Fact]
+    public void IsRateLimited_GenericError_ReturnsFalse()
+        => Assert.False(ClaudeAgentExecutor.IsRateLimited("Connection refused"));
+
+    [Fact]
+    public void IsRateLimited_OverloadedCaseInsensitive_ReturnsTrue()
+        => Assert.True(ClaudeAgentExecutor.IsRateLimited("The system is OVERLOADED right now"));
 }

@@ -47,7 +47,7 @@ public class AgentRunnerTests : IDisposable
             _workflowConfig,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -193,7 +193,9 @@ public class AgentRunnerTests : IDisposable
 
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(throwingExecutor), _taskFileManager, _gitWorkspaceManager,
-            BuildWorkflowConfig().Normalised(), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), new UpdateFileProcessor(_trelloClient, NullLogger<UpdateFileProcessor>.Instance), NullLogger<AgentRunner>.Instance);
+            BuildWorkflowConfig().Normalised(), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, BuildWorkflowConfig().Normalised(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullLogger<AgentRunner>.Instance);
 
         SetupBoardCards();
 
@@ -541,7 +543,9 @@ public class AgentRunnerTests : IDisposable
 
         var runner = new AgentRunner(
             _trelloClient, resolver, _taskFileManager, _gitWorkspaceManager,
-            config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), new UpdateFileProcessor(_trelloClient, NullLogger<UpdateFileProcessor>.Instance), NullLogger<AgentRunner>.Instance);
+            config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
@@ -566,7 +570,9 @@ public class AgentRunnerTests : IDisposable
     {
         return new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(_agentExecutor), _taskFileManager, _gitWorkspaceManager,
-            config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), new UpdateFileProcessor(_trelloClient, NullLogger<UpdateFileProcessor>.Instance), NullLogger<AgentRunner>.Instance);
+            config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullLogger<AgentRunner>.Instance);
     }
 
     private static WorkflowConfig BuildWorkflowConfig()
@@ -672,7 +678,9 @@ public class AgentRunnerTests : IDisposable
         var config = BuildMultiStepWorkflowConfig().Normalised();
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(sequencedExecutor), _taskFileManager, _gitWorkspaceManager,
-            config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), new UpdateFileProcessor(_trelloClient, NullLogger<UpdateFileProcessor>.Instance), NullLogger<AgentRunner>.Instance);
+            config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
@@ -700,7 +708,9 @@ public class AgentRunnerTests : IDisposable
         var config = BuildMultiStepWorkflowConfig().Normalised();
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(errorExecutor), _taskFileManager, _gitWorkspaceManager,
-            config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), new UpdateFileProcessor(_trelloClient, NullLogger<UpdateFileProcessor>.Instance), NullLogger<AgentRunner>.Instance);
+            config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
@@ -773,7 +783,7 @@ public class AgentRunnerTests : IDisposable
         SetupBoardCards();
         _trelloClient.GetCardCommentsAsync(TargetCardId, Arg.Any<CancellationToken>())
             .Returns(new List<CardComment>());
-        _trelloClient.CreateCardAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        _trelloClient.CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>())
             .Returns("99");
 
         // Use a custom executor that writes an update file to the worktree
@@ -793,7 +803,7 @@ public class AgentRunnerTests : IDisposable
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
             _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
@@ -802,7 +812,8 @@ public class AgentRunnerTests : IDisposable
 
         // CreateCardAsync was called for the new ticket
         await _trelloClient.Received(1).CreateCardAsync(
-            "Auth Race Condition Bug", Arg.Any<string>(), Arg.Any<CancellationToken>());
+            Arg.Is<CreateCardRequest>(r => r.Title == "Auth Race Condition Bug"),
+            Arg.Any<CancellationToken>());
 
         // Notification comment posted on source card — marker only in commentMarker param, not body
         await _trelloClient.Received(1).UpsertAgentCommentAsync(
@@ -818,7 +829,7 @@ public class AgentRunnerTests : IDisposable
         SetupBoardCards();
         _trelloClient.GetCardCommentsAsync(TargetCardId, Arg.Any<CancellationToken>())
             .Returns(new List<CardComment>());
-        _trelloClient.CreateCardAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        _trelloClient.CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>())
             .Returns("50");
 
         var executor = Substitute.For<IAgentExecutor>();
@@ -838,7 +849,7 @@ public class AgentRunnerTests : IDisposable
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
             _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
@@ -847,7 +858,8 @@ public class AgentRunnerTests : IDisposable
 
         // Update files processed even though step returned NEEDS_INFO
         await _trelloClient.Received(1).CreateCardAsync(
-            "Discovered Issue", Arg.Any<string>(), Arg.Any<CancellationToken>());
+            Arg.Is<CreateCardRequest>(r => r.Title == "Discovered Issue"),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -861,7 +873,7 @@ public class AgentRunnerTests : IDisposable
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
         // CreateCardAsync never called (no update files)
         await _trelloClient.DidNotReceive().CreateCardAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
     }
 
 }

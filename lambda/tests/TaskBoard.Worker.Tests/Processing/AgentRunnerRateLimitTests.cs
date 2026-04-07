@@ -1,0 +1,210 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
+using NSubstitute.ExceptionExtensions;
+using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Models;
+using TaskBoard.Worker.Processing;
+using static TaskBoard.Worker.Tests.Helpers.TestGitHelper;
+
+namespace TaskBoard.Worker.Tests.Processing;
+
+/// <summary>
+/// Tests for AgentRunner's rate-limit catch-restore-rethrow behavior.
+/// </summary>
+public class AgentRunnerRateLimitTests : IDisposable
+{
+    private readonly string _tempDir;
+    private readonly string _worktreeBase;
+    private readonly ITaskBoardClient _boardClient;
+    private readonly IAgentExecutor _throwingExecutor;
+
+    private const string TriggerColumn = "Ready for Design";
+    private const string CardId = "card-42";
+    private const string CardTitle = "Auth Feature";
+    private const string BoardId = "board-1";
+
+    public AgentRunnerRateLimitTests()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), "rl-tests-" + Guid.NewGuid().ToString("N")[..8]);
+        _worktreeBase = _tempDir + "-worktrees";
+        Directory.CreateDirectory(_tempDir);
+        InitTestGitRepo(_tempDir);
+
+        _boardClient = Substitute.For<ITaskBoardClient>();
+        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Returns(new List<BoardCard>
+            {
+                new(CardId, CardTitle, "Description", TriggerColumn),
+            });
+        _boardClient.GetCardCommentsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<CardComment>>(new List<CardComment>()));
+
+        _throwingExecutor = Substitute.For<IAgentExecutor>();
+        _throwingExecutor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Throws(new RateLimitException("Claude CLI rate limited", RateLimitSource.AgentCli));
+    }
+
+    public void Dispose()
+    {
+        CleanupDirectory(_worktreeBase);
+        try { RunGitSync(_tempDir, "worktree", "prune"); } catch { }
+        CleanupDirectory(_tempDir);
+    }
+
+    private static void CleanupDirectory(string path)
+    {
+        if (!Directory.Exists(path)) return;
+        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+        {
+            var attrs = File.GetAttributes(file);
+            if ((attrs & FileAttributes.ReadOnly) != 0)
+                File.SetAttributes(file, attrs & ~FileAttributes.ReadOnly);
+        }
+        Directory.Delete(path, recursive: true);
+    }
+
+    private static void InitTestGitRepo(string path)
+    {
+        RunGitSync(path, "init");
+        RunGitSync(path, "config", "user.email", "test@test.com");
+        RunGitSync(path, "config", "user.name", "Test");
+        File.WriteAllText(Path.Combine(path, ".gitignore"), ".aiboard/\n");
+        File.WriteAllText(Path.Combine(path, ".gitkeep"), "");
+        RunGitSync(path, "add", ".");
+        RunGitSync(path, "commit", "-m", "initial");
+    }
+
+    private AgentRunner CreateRunner(string gitBehavior = "discard")
+    {
+        var config = BuildWorkflowConfig(gitBehavior).Normalised();
+        return new AgentRunner(
+            _boardClient,
+            AgentExecutorResolver.ForSingleExecutor(_throwingExecutor),
+            new TaskFileManager(NullLogger<TaskFileManager>.Instance),
+            new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
+            config,
+            new StubCrossReferenceResolver(),
+            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullLogger<AgentRunner>.Instance);
+    }
+
+    private static WorkflowConfig BuildWorkflowConfig(string gitBehavior = "discard")
+    {
+        return new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                [TriggerColumn] = new("Ready for Design", "senior_engineer", "agent_run",
+                    "Design task {TaskName} ({TaskId})",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["IN_PROGRESS"] = TransitionTarget.ForColumn("Designing"),
+                        ["COMPLETE"] = TransitionTarget.ForColumn("Designed"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("Design Questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("Error"),
+                    },
+                    GitBehavior: gitBehavior),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = new("claude-opus-4-6", "You are a Senior Engineer.",
+                    new List<string> { "Technical Design" }),
+            });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RateLimit_RethrowsRateLimitException()
+    {
+        var runner = CreateRunner();
+
+        await Assert.ThrowsAsync<RateLimitException>(
+            () => runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RateLimit_RestoresCardToTriggerColumn()
+    {
+        var runner = CreateRunner();
+
+        await Assert.ThrowsAsync<RateLimitException>(
+            () => runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None));
+
+        await _boardClient.Received(1).MoveCardToColumnAsync(
+            CardId, TriggerColumn, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RateLimit_PostsInformationalComment()
+    {
+        var runner = CreateRunner();
+
+        await Assert.ThrowsAsync<RateLimitException>(
+            () => runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None));
+
+        await _boardClient.Received(1).UpsertAgentCommentAsync(
+            CardId,
+            Arg.Is<string>(s => s.Contains("Rate limited")),
+            Arg.Is<string>(m => m.Contains("agent-rate-limit:")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RateLimit_CommentMarkerContainsCardId()
+    {
+        var runner = CreateRunner();
+
+        await Assert.ThrowsAsync<RateLimitException>(
+            () => runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None));
+
+        await _boardClient.Received(1).UpsertAgentCommentAsync(
+            CardId,
+            Arg.Any<string>(),
+            Arg.Is<string>(m => m == $"<!-- agent-rate-limit:{CardId} -->"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RateLimit_DoesNotMoveToErrorColumn()
+    {
+        var runner = CreateRunner();
+
+        await Assert.ThrowsAsync<RateLimitException>(
+            () => runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None));
+
+        // Error column should NOT be called
+        await _boardClient.DidNotReceive().MoveCardToColumnAsync(
+            CardId, "Error", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RateLimit_CardRestorationFails_StillRethrows()
+    {
+        var runner = CreateRunner();
+
+        // Make the board client throw on restore
+        _boardClient.MoveCardToColumnAsync(CardId, TriggerColumn, Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("board down")));
+
+        // Still rethrows the rate limit exception (not the board failure)
+        await Assert.ThrowsAsync<RateLimitException>(
+            () => runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RateLimit_DiscardStage_WorktreeIsCleanedUp()
+    {
+        var runner = CreateRunner(gitBehavior: "discard");
+
+        await Assert.ThrowsAsync<RateLimitException>(
+            () => runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None));
+
+        // After cleanup, the leaf worktree directory should not exist.
+        // The parent aiboard/ directory may remain (git worktree remove only removes the leaf).
+        var worktreesBase = _tempDir + "-worktrees";
+        var aiboardDir = Path.Combine(worktreesBase, "aiboard");
+        var hasLeafWorktree = Directory.Exists(aiboardDir)
+            && Directory.EnumerateDirectories(aiboardDir).Any();
+        Assert.False(hasLeafWorktree,
+            "Leaf worktree directory should have been cleaned up but child directories remain under aiboard/");
+    }
+}

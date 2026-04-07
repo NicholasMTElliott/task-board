@@ -240,12 +240,14 @@ public sealed partial class AgentRunner(
                 // 6d. Update card body from task file after each step (write-after-each-step strategy)
                 await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken);
 
-                // 6d-ii. Process update files (new tickets, cross-card comments)
+                // 6d-ii. Process update files (.aiboard/updates/) — handles both generation steps
+                //        (step.GenerationConfig set) and ad-hoc ticket creation (no config).
                 UpdateProcessingResult updateResult;
                 try
                 {
                     updateResult = await updateFileProcessor.ProcessUpdatesAsync(
-                        worktreePath, cardId, step.Name, comments, cancellationToken);
+                        worktreePath, cardId, step.Name, comments, cancellationToken,
+                        step.GenerationConfig);
                 }
                 catch (Exception ex)
                 {
@@ -360,6 +362,49 @@ public sealed partial class AgentRunner(
             logger.LogInformation("Agent run complete for card {CardId}: outcome={Outcome}, detail={Detail}",
                 cardId, lastResult.Outcome, lastResult.Detail ?? "(none)");
             return new AgentRunResult(lastResult.Outcome, lastResult.Detail, lastResult.Questions);
+        }
+        catch (RateLimitException rateLimitEx)
+        {
+            logger.LogWarning(rateLimitEx,
+                "Rate limit hit during agent run for card {CardId} — restoring to trigger column {TriggerColumn}",
+                cardId, targetCard.ColumnId);
+
+            // Cleanup worktree for discard stages only (best effort)
+            if (gitBehavior == "discard")
+            {
+                try
+                {
+                    await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
+                }
+                catch (Exception cleanupEx)
+                {
+                    logger.LogWarning(cleanupEx,
+                        "Failed to cleanup worktree after rate limit for card {CardId}", cardId);
+                }
+            }
+
+            // Restore card to original trigger column and post informational comment (best effort)
+            try
+            {
+                await boardClient.MoveCardToColumnAsync(cardId, targetCard.ColumnId, cancellationToken);
+
+                var rateLimitPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity);
+                var rateLimitComment = $"{rateLimitPrefix}\n\n" +
+                    $"**Rate limited** — card returned to **{targetCard.ColumnId}** for re-processing.\n\n" +
+                    $"This is not a problem with the ticket — the agent's usage limit was reached. " +
+                    $"The card can be picked up again when the limit resets, or by another agent.";
+                await boardClient.UpsertAgentCommentAsync(
+                    cardId, rateLimitComment, $"<!-- agent-rate-limit:{cardId} -->", cancellationToken);
+            }
+            catch (Exception restoreEx)
+            {
+                logger.LogWarning(restoreEx,
+                    "Failed to restore card {CardId} to trigger column after rate limit — card may be stuck in IN_PROGRESS",
+                    cardId);
+            }
+
+            // Rethrow so PollingRunner can back off, or Program.cs can handle cleanly
+            throw;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

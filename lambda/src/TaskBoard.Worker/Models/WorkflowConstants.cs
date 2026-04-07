@@ -21,6 +21,7 @@ internal static class GateTypes
 {
     public const string AgentRun = "agent_run";
     public const string SystemMerge = "system_merge";
+    public const string ChildrenComplete = "children_complete";
     public const string InProgress = "in_progress";
     public const string ManualGate = "manual_gate";
     public const string ManualEntry = "manual_entry";

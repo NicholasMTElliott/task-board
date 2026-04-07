@@ -519,5 +519,17 @@
   "polling": {
     "priorityFieldName": "priority",
     "priorityOrder": ["P0", "P1", "P2"]
+  },
+  "cardTypes": {
+    "story": {
+      "name": "User Story",
+      "labelPrefix": "type",
+      "allowedChildren": ["task"]
+    },
+    "task": {
+      "name": "Task",
+      "labelPrefix": "type",
+      "allowedChildren": []
+    }
   }
 }

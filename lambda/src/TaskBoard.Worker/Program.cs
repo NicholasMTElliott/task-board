@@ -218,6 +218,7 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<UpdateFileProcessor>();
 builder.Services.AddSingleton<AgentRunner>();
 builder.Services.AddSingleton<MergeRunner>();
+builder.Services.AddSingleton<CompletionRunner>();
 builder.Services.AddSingleton<PollingRunner>();
 
 // ── Queue-driven mode services (registered if Pgmq connection is configured) ──
@@ -331,17 +332,34 @@ if (mode == "agent")
     var targetCard = boardCards.FirstOrDefault(c => c.Id == cardId);
 
     AgentRunResult result;
-    if (targetCard is not null
-        && workflowConfigInstance.States.TryGetValue(targetCard.ColumnId, out var cardState)
-        && string.Equals(cardState.GateType, GateTypes.SystemMerge, StringComparison.OrdinalIgnoreCase))
+    workflowConfigInstance.States.TryGetValue(targetCard?.ColumnId ?? "", out var cardState);
+    try
     {
-        var mergeRunner = scope.ServiceProvider.GetRequiredService<MergeRunner>();
-        result = await mergeRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+        if (cardState is not null
+            && string.Equals(cardState.GateType, GateTypes.SystemMerge, StringComparison.OrdinalIgnoreCase))
+        {
+            var mergeRunner = scope.ServiceProvider.GetRequiredService<MergeRunner>();
+            result = await mergeRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+        }
+        else if (cardState is not null
+            && string.Equals(cardState.GateType, GateTypes.ChildrenComplete, StringComparison.OrdinalIgnoreCase))
+        {
+            var completionRunnerInstance = scope.ServiceProvider.GetRequiredService<CompletionRunner>();
+            result = await completionRunnerInstance.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+        }
+        else
+        {
+            var agentRunner = scope.ServiceProvider.GetRequiredService<AgentRunner>();
+            result = await agentRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+        }
     }
-    else
+    catch (RateLimitException rateLimitEx)
     {
-        var agentRunner = scope.ServiceProvider.GetRequiredService<AgentRunner>();
-        result = await agentRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+        logger.LogWarning(rateLimitEx,
+            "Agent rate limited for card {CardId}. Card has been restored to its trigger column. " +
+            "Retry when the rate-limit window resets.",
+            cardId);
+        return;
     }
 
     logger.LogInformation("Agent run complete: outcome={Outcome}, error={ErrorDetail}",
