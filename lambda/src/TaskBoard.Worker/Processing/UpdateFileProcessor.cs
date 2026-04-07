@@ -116,6 +116,17 @@ public sealed class UpdateFileProcessor(
             return null;
         }
 
+        // AllowedChildren enforcement: when generationConfig is set, verify the parent card's
+        // type allows generating the target type. Skips creation with a warning if not allowed.
+        if (generationConfig is not null && workflowConfig.CardTypes is not null)
+        {
+            if (!await IsTargetTypeAllowedAsync(sourceCardId, generationConfig.TargetType, ct))
+            {
+                File.Delete(filePath);
+                return null;
+            }
+        }
+
         // Build CreateCardRequest: generationConfig values take precedence, front matter as fallback
         var typeLabel = BuildTypeLabel(generationConfig?.TargetType ?? parsed.Type);
         var parentId = generationConfig?.LinkToParent == true
@@ -175,6 +186,60 @@ public sealed class UpdateFileProcessor(
 
         File.Delete(filePath);
         return new CrossCardCommentInfo(targetCardId, Path.GetFileName(filePath));
+    }
+
+    /// <summary>
+    /// Returns false if the parent card's type explicitly restricts child types and the
+    /// requested targetType is not in the allowedChildren list.
+    /// Returns true in all other cases (no parent found, no type label, no restriction configured).
+    /// </summary>
+    private async Task<bool> IsTargetTypeAllowedAsync(string parentCardId, string targetType, CancellationToken ct)
+    {
+        BoardCard? parentCard;
+        try
+        {
+            parentCard = await boardClient.GetCardAsync(parentCardId, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not fetch parent card #{ParentCardId} to check allowedChildren — proceeding with creation", parentCardId);
+            return true;
+        }
+
+        if (parentCard?.Labels is null || workflowConfig.CardTypes is null)
+            return true;
+
+        // Find the parent's type key by matching its labels to cardTypes label conventions
+        string? parentTypeKey = null;
+        foreach (var (typeName, typeDef) in workflowConfig.CardTypes)
+        {
+            var expectedLabel = $"{typeDef.LabelPrefix}:{typeName}";
+            if (parentCard.Labels.Contains(expectedLabel, StringComparer.OrdinalIgnoreCase))
+            {
+                parentTypeKey = typeName;
+                break;
+            }
+        }
+
+        if (parentTypeKey is null)
+            return true; // No type label found — no restriction applies
+
+        if (!workflowConfig.CardTypes.TryGetValue(parentTypeKey, out var parentTypeDef))
+            return true;
+
+        if (parentTypeDef.AllowedChildren is null)
+            return true; // Null means no restriction defined for this type
+
+        // AllowedChildren is defined (including empty list) — targetType must be explicitly listed
+        if (parentTypeDef.AllowedChildren.Contains(targetType, StringComparer.OrdinalIgnoreCase))
+            return true;
+
+        logger.LogWarning(
+            "Skipping ticket creation: parent card #{ParentCardId} has type '{ParentType}' " +
+            "which does not allow child type '{TargetType}'. AllowedChildren: [{Allowed}]",
+            parentCardId, parentTypeKey, targetType,
+            string.Join(", ", parentTypeDef.AllowedChildren));
+        return false;
     }
 
     /// <summary>

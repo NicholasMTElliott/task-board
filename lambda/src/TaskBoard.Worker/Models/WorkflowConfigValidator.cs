@@ -207,6 +207,21 @@ public static class WorkflowConfigValidator
             }
         }
 
+        // ── cardTypes allowedChildren cross-check ────────────────────────────
+        if (config.CardTypes is not null)
+        {
+            foreach (var (typeName, typeDef) in config.CardTypes)
+            {
+                if (typeDef.AllowedChildren is not { Count: > 0 }) continue;
+
+                foreach (var childType in typeDef.AllowedChildren)
+                {
+                    if (!config.CardTypes.ContainsKey(childType))
+                        errors.Add($"cardTypes['{typeName}'].allowedChildren contains '{childType}' which is not a defined card type.");
+                }
+            }
+        }
+
         // Note: Sections can be empty for roles that don't write to card body
         // (e.g., gate_checker, code_reviewer — they produce comments only)
 

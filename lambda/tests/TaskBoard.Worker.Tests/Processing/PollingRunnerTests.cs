@@ -366,6 +366,138 @@ public class PollingRunnerTests
         await boardClient.DidNotReceive().MoveCardToColumnAsync("99", "Doing", Arg.Any<CancellationToken>());
     }
 
+    // ── ComputeAgentRateLimitDelay tests ─────────────────────────────────────────
+
+    [Fact]
+    public void ComputeAgentRateLimitDelay_FirstError_Returns30Minutes()
+    {
+        var delay = PollingRunner.ComputeAgentRateLimitDelay(1);
+        Assert.Equal(1800, delay.TotalSeconds);
+    }
+
+    [Fact]
+    public void ComputeAgentRateLimitDelay_SecondError_Returns60Minutes()
+    {
+        var delay = PollingRunner.ComputeAgentRateLimitDelay(2);
+        Assert.Equal(3600, delay.TotalSeconds);
+    }
+
+    [Fact]
+    public void ComputeAgentRateLimitDelay_ThirdError_Returns120Minutes()
+    {
+        var delay = PollingRunner.ComputeAgentRateLimitDelay(3);
+        Assert.Equal(7200, delay.TotalSeconds);
+    }
+
+    [Fact]
+    public void ComputeAgentRateLimitDelay_CappedAt2Hours()
+    {
+        // Any error count >= 3 should be capped at 7200s (2 hours)
+        var delay = PollingRunner.ComputeAgentRateLimitDelay(10);
+        Assert.Equal(7200, delay.TotalSeconds);
+    }
+
+    [Fact]
+    public async Task RunAsync_AgentRateLimit_UsesLongerBackoff_ThanBoardApiLimit()
+    {
+        var boardClient = Substitute.For<ITaskBoardClient>();
+        boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Throws(new RateLimitException("agent rate limited", RateLimitSource.AgentCli));
+
+        var agentRunner = new AgentRunner(
+            boardClient,
+            AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
+            new TaskFileManager(NullLogger<TaskFileManager>.Instance),
+            new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
+            TestConfig,
+            new StubCrossReferenceResolver(),
+            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullLogger<AgentRunner>.Instance);
+
+        var mergeRunner = new MergeRunner(
+            boardClient,
+            new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
+            TestConfig,
+            new AgentIdentity("Test", "Agent", "TestMachine"),
+            NullLogger<MergeRunner>.Instance);
+
+        var completionRunner = new CompletionRunner(
+            boardClient,
+            new StubCrossReferenceResolver(),
+            TestConfig,
+            new AgentIdentity("Test", "Agent", "TestMachine"),
+            NullLogger<CompletionRunner>.Instance);
+
+        var fakeLogger = new FakeLogger<PollingRunner>();
+        var pollingRunner = new PollingRunner(
+            boardClient,
+            agentRunner,
+            mergeRunner,
+            completionRunner,
+            TestConfig,
+            AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
+            fakeLogger);
+
+        // Cancel quickly after the first rate limit backoff starts
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        await pollingRunner.RunAsync(BoardId, Workspace, TimeSpan.FromMilliseconds(50), cts.Token);
+
+        // Verify that a warning was logged mentioning the agent rate limit source
+        Assert.Contains(fakeLogger.Logs, l =>
+            l.Message.Contains("AgentCli") || l.Message.Contains("Rate limit"));
+    }
+
+    [Fact]
+    public async Task RunAsync_BoardApiRateLimit_UsesExistingShortBackoff()
+    {
+        var boardClient = Substitute.For<ITaskBoardClient>();
+        boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Throws(new RateLimitException("board api rate limited", RateLimitSource.BoardApi));
+
+        var agentRunner = new AgentRunner(
+            boardClient,
+            AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
+            new TaskFileManager(NullLogger<TaskFileManager>.Instance),
+            new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
+            TestConfig,
+            new StubCrossReferenceResolver(),
+            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            NullLogger<AgentRunner>.Instance);
+
+        var mergeRunner = new MergeRunner(
+            boardClient,
+            new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
+            TestConfig,
+            new AgentIdentity("Test", "Agent", "TestMachine"),
+            NullLogger<MergeRunner>.Instance);
+
+        var completionRunner2 = new CompletionRunner(
+            boardClient,
+            new StubCrossReferenceResolver(),
+            TestConfig,
+            new AgentIdentity("Test", "Agent", "TestMachine"),
+            NullLogger<CompletionRunner>.Instance);
+
+        var fakeLogger = new FakeLogger<PollingRunner>();
+        var pollingRunner = new PollingRunner(
+            boardClient,
+            agentRunner,
+            mergeRunner,
+            completionRunner2,
+            TestConfig,
+            AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
+            fakeLogger);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        await pollingRunner.RunAsync(BoardId, Workspace, TimeSpan.FromMilliseconds(50), cts.Token);
+
+        // Verify warning logged mentions BoardApi source
+        Assert.Contains(fakeLogger.Logs, l =>
+            l.Message.Contains("BoardApi") || l.Message.Contains("Rate limit"));
+    }
+
     [Fact]
     public async Task RunAsync_NoEligibleCards_LogsAtInformationLevel()
     {

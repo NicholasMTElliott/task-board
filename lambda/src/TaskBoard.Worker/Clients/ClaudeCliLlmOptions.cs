@@ -6,9 +6,9 @@ public sealed class ClaudeCliLlmOptions
 
     public string ExecutablePath { get; set; } = "claude";
 
-    public int MaxTurns { get; init; } = 5;
+    public int MaxTurns { get; set; } = 5;
 
-    public decimal MaxBudgetUsd { get; init; } = 10.00m;
+    public decimal MaxBudgetUsd { get; set; } = 10.00m;
 
-    public int TimeoutSeconds { get; init; } = 900;
+    public int TimeoutSeconds { get; set; } = 900;
 }

@@ -17,7 +17,9 @@ public sealed class PollingRunner(
     private const double IdleBackoffMultiplier = 1.5;  // each idle cycle multiplies delay
     private const int MaxIdleDelaySeconds = 600;       // cap: 10 minutes
     private const int MaxErrorDelaySeconds = 300;      // cap: 5 minutes
-    private const int RateLimitDelaySeconds = 120;     // base rate-limit backoff: 2 minutes
+    private const int RateLimitDelaySeconds = 120;     // base board-API rate-limit backoff: 2 minutes
+    private const int AgentRateLimitDelaySeconds = 1800;    // base agent rate-limit backoff: 30 minutes
+    private const int MaxAgentRateLimitDelaySeconds = 7200; // cap: 2 hours
 
     public async Task RunAsync(
         string boardId,
@@ -99,11 +101,13 @@ public sealed class PollingRunner(
             catch (RateLimitException ex)
             {
                 consecutiveErrors++;
-                var rateLimitDelay = ComputeRateLimitDelay(consecutiveErrors);
+                var rateLimitDelay = ex.Source == RateLimitSource.AgentCli
+                    ? ComputeAgentRateLimitDelay(consecutiveErrors)
+                    : ComputeRateLimitDelay(consecutiveErrors);
                 logger.LogWarning(ex,
-                    "Rate limit hit (cycle {Cycle}, consecutive errors: {ConsecutiveErrors}). " +
+                    "Rate limit hit — source={Source} (cycle {Cycle}, consecutive errors: {ConsecutiveErrors}). " +
                     "Backing off for {DelaySec}s",
-                    totalCycles, consecutiveErrors, rateLimitDelay.TotalSeconds);
+                    ex.Source, totalCycles, consecutiveErrors, rateLimitDelay.TotalSeconds);
 
                 try { await Task.Delay(rateLimitDelay, cancellationToken); }
                 catch (OperationCanceledException) { break; }
@@ -146,12 +150,22 @@ public sealed class PollingRunner(
     }
 
     /// <summary>
-    /// Rate limit backoff: 2 minutes * 2^(errors-1), capped at 5 minutes.
+    /// Board-API rate limit backoff: 2 minutes * 2^(errors-1), capped at 5 minutes.
     /// More aggressive than generic errors since rate limits need time to reset.
     /// </summary>
     private static TimeSpan ComputeRateLimitDelay(int consecutiveErrors)
     {
         var seconds = RateLimitDelaySeconds * Math.Pow(2, Math.Min(consecutiveErrors - 1, 3));
         return TimeSpan.FromSeconds(Math.Min(seconds, MaxErrorDelaySeconds));
+    }
+
+    /// <summary>
+    /// Agent (Claude) rate limit backoff: 30 minutes * 2^(errors-1), capped at 2 hours.
+    /// Subscription rate-limit windows are 5-hour/7-day/monthly, so short retries are wasteful.
+    /// </summary>
+    internal static TimeSpan ComputeAgentRateLimitDelay(int consecutiveErrors)
+    {
+        var seconds = AgentRateLimitDelaySeconds * Math.Pow(2, Math.Min(consecutiveErrors - 1, 3));
+        return TimeSpan.FromSeconds(Math.Min(seconds, MaxAgentRateLimitDelaySeconds));
     }
 }

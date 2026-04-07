@@ -305,22 +305,33 @@ if (mode == "agent")
 
     AgentRunResult result;
     workflowConfigInstance.States.TryGetValue(targetCard?.ColumnId ?? "", out var cardState);
-    if (cardState is not null
-        && string.Equals(cardState.GateType, GateTypes.SystemMerge, StringComparison.OrdinalIgnoreCase))
+    try
     {
-        var mergeRunner = scope.ServiceProvider.GetRequiredService<MergeRunner>();
-        result = await mergeRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+        if (cardState is not null
+            && string.Equals(cardState.GateType, GateTypes.SystemMerge, StringComparison.OrdinalIgnoreCase))
+        {
+            var mergeRunner = scope.ServiceProvider.GetRequiredService<MergeRunner>();
+            result = await mergeRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+        }
+        else if (cardState is not null
+            && string.Equals(cardState.GateType, GateTypes.ChildrenComplete, StringComparison.OrdinalIgnoreCase))
+        {
+            var completionRunnerInstance = scope.ServiceProvider.GetRequiredService<CompletionRunner>();
+            result = await completionRunnerInstance.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+        }
+        else
+        {
+            var agentRunner = scope.ServiceProvider.GetRequiredService<AgentRunner>();
+            result = await agentRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+        }
     }
-    else if (cardState is not null
-        && string.Equals(cardState.GateType, GateTypes.ChildrenComplete, StringComparison.OrdinalIgnoreCase))
+    catch (RateLimitException rateLimitEx)
     {
-        var completionRunnerInstance = scope.ServiceProvider.GetRequiredService<CompletionRunner>();
-        result = await completionRunnerInstance.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
-    }
-    else
-    {
-        var agentRunner = scope.ServiceProvider.GetRequiredService<AgentRunner>();
-        result = await agentRunner.ExecuteAsync(cardId, boardId, workspacePath, CancellationToken.None);
+        logger.LogWarning(rateLimitEx,
+            "Agent rate limited for card {CardId}. Card has been restored to its trigger column. " +
+            "Retry when the rate-limit window resets.",
+            cardId);
+        return;
     }
 
     logger.LogInformation("Agent run complete: outcome={Outcome}, error={ErrorDetail}",

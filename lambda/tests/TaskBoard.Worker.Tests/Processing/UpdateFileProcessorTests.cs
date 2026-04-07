@@ -605,6 +605,116 @@ public class UpdateFileProcessorTests : IDisposable
             Arg.Any<CancellationToken>());
     }
 
+    // ── AllowedChildren runtime enforcement ─────────────────────────────────
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_GenerationConfig_AllowedChildType_CreatesCard()
+    {
+        // story.allowedChildren = ["task"], so generating a task from a story is allowed
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-allowed-task.md"),
+            "---\ntitle: Allowed Task\n---\n\nDo the work.");
+
+        _boardClient.GetCardAsync("20", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BoardCard("20", "Parent Story", "", "Backlog",
+                Labels: ["type:story"])));
+
+        var genConfig = new GenerationConfig("task", "Backlog", true);
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "20", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        Assert.True(result.HasUpdates);
+        Assert.Single(result.CreatedTickets);
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r => r.Title == "Allowed Task"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_GenerationConfig_DisallowedChildType_SkipsCreation()
+    {
+        // task.allowedChildren = [] (empty), so generating anything from a task is blocked
+        var updatesDir = CreateUpdatesDir();
+        var filePath = Path.Combine(updatesDir, "new-disallowed-task.md");
+        await File.WriteAllTextAsync(filePath, "---\ntitle: Disallowed Task\n---\n\nBody.");
+
+        _boardClient.GetCardAsync("10", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BoardCard("10", "Parent Task", "", "Backlog",
+                Labels: ["type:task"])));
+
+        var genConfig = new GenerationConfig("task", "Backlog", true);
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "10", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        Assert.False(result.HasUpdates);
+        Assert.Empty(result.CreatedTickets);
+        await _boardClient.DidNotReceive().CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
+        Assert.False(File.Exists(filePath), "File should be deleted when creation is skipped");
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_GenerationConfig_ParentHasNoTypeLabel_CreatesCard()
+    {
+        // Parent card has no type label — enforcement is permissive, proceeds with creation
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-untyped-task.md"),
+            "---\ntitle: Untyped Parent Task\n---\n\nBody.");
+
+        _boardClient.GetCardAsync("5", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BoardCard("5", "Untyped Card", "", "Backlog",
+                Labels: [])));  // No type label
+
+        var genConfig = new GenerationConfig("task", "Backlog", true);
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "5", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        Assert.True(result.HasUpdates);
+        await _boardClient.Received(1).CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_GenerationConfig_GetCardAsyncFails_CreatesCardAnyway()
+    {
+        // If fetching parent card fails, enforcement is permissive — creation proceeds
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-fetch-fail.md"),
+            "---\ntitle: Fetch Fail Task\n---\n\nBody.");
+
+        _boardClient.GetCardAsync("99", Arg.Any<CancellationToken>())
+            .ThrowsAsync(new InvalidOperationException("Network error"));
+
+        var genConfig = new GenerationConfig("task", "Backlog", true);
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "99", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        Assert.True(result.HasUpdates);
+        await _boardClient.Received(1).CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_NoGenerationConfig_SkipsAllowedChildrenCheck()
+    {
+        // Without generationConfig, no allowedChildren check is performed at all
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-ad-hoc.md"),
+            "---\ntitle: Ad-Hoc Ticket\ntype: task\n---\n\nBody.");
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "10", "step", [], CancellationToken.None, generationConfig: null);
+
+        Assert.True(result.HasUpdates);
+        await _boardClient.DidNotReceive().GetCardAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _boardClient.Received(1).CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
+    }
+
     // ── HasCreatedTicketMarker ───────────────────────────────────────────────
 
     [Fact]

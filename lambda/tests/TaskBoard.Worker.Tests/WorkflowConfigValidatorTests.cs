@@ -1289,3 +1289,108 @@ public class WorkflowConfigValidatorTests
             $"Could not find repo root (no .git directory) starting from {AppContext.BaseDirectory}");
     }
 }
+
+// ── AllowedChildren cross-check tests ──────────────────────────────────────────
+
+public class WorkflowConfigValidatorAllowedChildrenTests
+{
+    private static WorkflowConfig MakeConfigWithCardTypes(
+        Dictionary<string, CardTypeDefinition> cardTypes)
+    {
+        return new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Backlog"] = new("Backlog", null, "manual_entry", null, new())
+            },
+            Roles: new(),
+            CardTypes: cardTypes);
+    }
+
+    [Fact]
+    public void AllowedChildren_AllValuesAreValidTypes_PassesValidation()
+    {
+        var config = MakeConfigWithCardTypes(new Dictionary<string, CardTypeDefinition>
+        {
+            ["story"] = new("User Story", "type", ["task"]),
+            ["task"]  = new("Task",       "type", []),
+        });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("allowedChildren"));
+    }
+
+    [Fact]
+    public void AllowedChildren_ContainsUnknownType_ReportsError()
+    {
+        var config = MakeConfigWithCardTypes(new Dictionary<string, CardTypeDefinition>
+        {
+            ["story"] = new("User Story", "type", ["task", "typo_type"]),
+            ["task"]  = new("Task",       "type", []),
+        });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("typo_type") && e.Contains("allowedChildren") && e.Contains("story"));
+    }
+
+    [Fact]
+    public void AllowedChildren_EmptyList_PassesValidation()
+    {
+        var config = MakeConfigWithCardTypes(new Dictionary<string, CardTypeDefinition>
+        {
+            ["task"] = new("Task", "type", []),
+        });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("allowedChildren"));
+    }
+
+    [Fact]
+    public void AllowedChildren_NullList_PassesValidation()
+    {
+        var config = MakeConfigWithCardTypes(new Dictionary<string, CardTypeDefinition>
+        {
+            ["task"] = new("Task"),  // AllowedChildren defaults to null
+        });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("allowedChildren"));
+    }
+
+    [Fact]
+    public void AllowedChildren_NullCardTypes_PassesValidation()
+    {
+        // When CardTypes is null entirely, no allowedChildren validation occurs
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Backlog"] = new("Backlog", null, "manual_entry", null, new())
+            },
+            Roles: new()
+            // CardTypes is null
+        );
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("allowedChildren"));
+    }
+
+    [Fact]
+    public void AllowedChildren_MultipleTypesWithErrors_ReportsAllErrors()
+    {
+        var config = MakeConfigWithCardTypes(new Dictionary<string, CardTypeDefinition>
+        {
+            ["story"]   = new("User Story", "type", ["task", "invalid_a"]),
+            ["feature"] = new("Feature",    "type", ["story", "invalid_b"]),
+            ["task"]    = new("Task",       "type", []),
+        });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("invalid_a") && e.Contains("story"));
+        Assert.Contains(errors, e => e.Contains("invalid_b") && e.Contains("feature"));
+    }
+}
