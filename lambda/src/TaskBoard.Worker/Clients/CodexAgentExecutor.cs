@@ -190,13 +190,22 @@ public sealed class CodexAgentExecutor(
         // Schema file for structured output validation
         args.AddRange(["--output-schema", schemaFilePath]);
 
+        var useYolo = context.ProviderParams?.TryGetValue("yolo", out var yolo) == true
+            ? string.Equals(yolo, "true", StringComparison.OrdinalIgnoreCase)
+            : _options.Yolo;
+
+        if (useYolo)
+        {
+            args.Add("--yolo");
+        }
+
         // Automation preset: --full-auto enables workspace-write sandbox + on-request approvals.
         // providerParams can override via "fullAuto" (truthy string) or "sandbox" (explicit policy).
         var useFullAuto = context.ProviderParams?.TryGetValue("fullAuto", out var fa) == true
             ? string.Equals(fa, "true", StringComparison.OrdinalIgnoreCase)
             : _options.FullAuto;
 
-        if (useFullAuto)
+        if (!useYolo && useFullAuto)
         {
             args.Add("--full-auto");
         }
@@ -206,7 +215,7 @@ public sealed class CodexAgentExecutor(
             ? sb
             : _options.Sandbox;
 
-        if (!string.IsNullOrWhiteSpace(sandbox))
+        if (!useYolo && !string.IsNullOrWhiteSpace(sandbox))
         {
             args.AddRange(["--sandbox", sandbox]);
         }
