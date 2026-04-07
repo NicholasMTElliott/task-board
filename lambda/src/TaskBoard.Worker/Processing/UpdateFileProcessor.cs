@@ -29,6 +29,9 @@ public sealed class UpdateFileProcessor(
     private static readonly Regex CommentPattern =
         new(@"^(\d+)-comment\.md$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private static readonly Regex ReferencePattern =
+        new(@"^(\d+)-reference\.md$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     /// <summary>
     /// Scans the updates directory in the workspace, processes all recognized .md files,
     /// and returns a summary of actions taken.
@@ -51,6 +54,7 @@ public sealed class UpdateFileProcessor(
 
         var createdTickets = new List<CreatedTicketInfo>();
         var postedComments = new List<CrossCardCommentInfo>();
+        string? referenceContent = null;
 
         foreach (var filePath in files)
         {
@@ -80,7 +84,18 @@ public sealed class UpdateFileProcessor(
                     continue;
                 }
 
-                logger.LogWarning("Unrecognized update file (does not match new-{{slug}}.md or {{cardId}}-comment.md): {FileName}", fileName);
+                var referenceMatch = ReferencePattern.Match(fileName);
+                if (referenceMatch.Success)
+                {
+                    var content = await File.ReadAllTextAsync(filePath, cancellationToken);
+                    File.Delete(filePath);
+                    logger.LogInformation("Read reference content from {File} ({Length} chars)",
+                        fileName, content.Length);
+                    referenceContent = content;
+                    continue;
+                }
+
+                logger.LogWarning("Unrecognized update file (does not match new-{{slug}}.md, {{cardId}}-comment.md, or {{cardId}}-reference.md): {FileName}", fileName);
             }
             catch (Exception ex)
             {
@@ -88,7 +103,7 @@ public sealed class UpdateFileProcessor(
             }
         }
 
-        return new UpdateProcessingResult(createdTickets, postedComments);
+        return new UpdateProcessingResult(createdTickets, postedComments, referenceContent);
     }
 
     private async Task<CreatedTicketInfo?> ProcessNewTicketFileAsync(
@@ -342,7 +357,8 @@ public sealed class UpdateFileProcessor(
 
 public sealed record UpdateProcessingResult(
     IReadOnlyList<CreatedTicketInfo> CreatedTickets,
-    IReadOnlyList<CrossCardCommentInfo> PostedComments)
+    IReadOnlyList<CrossCardCommentInfo> PostedComments,
+    string? ReferenceContent = null)
 {
     public static readonly UpdateProcessingResult Empty = new([], []);
     public bool HasUpdates => CreatedTickets.Count > 0 || PostedComments.Count > 0;

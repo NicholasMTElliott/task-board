@@ -5,7 +5,7 @@ using TaskBoard.Worker.Models;
 
 namespace TaskBoard.Worker.Processing;
 
-public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
+public sealed partial class TaskFileManager(ILogger<TaskFileManager> logger)
 {
     private const string TasksRelativePath = ".aiboard/tasks";
 
@@ -332,4 +332,26 @@ public sealed class TaskFileManager(ILogger<TaskFileManager> logger)
 
         return value;
     }
+
+    /// <summary>
+    /// Strips all &lt;details&gt;...&lt;/details&gt; blocks and the trailing horizontal rule separator,
+    /// leaving only the summary sections for board display.
+    /// </summary>
+    internal static string TrimToSummary(string body)
+    {
+        // Remove all <details>...</details> blocks (including multiline)
+        var result = DetailsBlockRegex().Replace(body, "");
+
+        // Remove trailing horizontal rule that was used as separator
+        // (only if it's now at the end after details removal)
+        result = TrailingHrRegex().Replace(result, "");
+
+        return result.TrimEnd();
+    }
+
+    [GeneratedRegex(@"<details>.*?</details>", RegexOptions.Singleline)]
+    private static partial Regex DetailsBlockRegex();
+
+    [GeneratedRegex(@"\n---\s*$")]
+    private static partial Regex TrailingHrRegex();
 }

@@ -15,6 +15,7 @@ public sealed partial class AgentRunner(
     ICrossReferenceResolver crossReferenceResolver,
     AgentIdentity agentIdentity,
     UpdateFileProcessor updateFileProcessor,
+    IRunStore runStore,
     ILogger<AgentRunner> logger)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
@@ -23,6 +24,13 @@ public sealed partial class AgentRunner(
     private static partial Regex PlaceholderPattern();
 
     private const string CommitFilePath = ".aiboard/commit.md";
+
+    /// <summary>
+    /// Maximum length for reference content before truncation.
+    /// Matches the pattern used for conversation log truncation (50k) but with a higher limit
+    /// for richer audit content.
+    /// </summary>
+    private const int MaxReferenceContentLength = 100_000;
 
     public async Task<AgentRunResult> ExecuteAsync(
         string cardId, string boardId, string workspacePath, CancellationToken cancellationToken)
@@ -223,6 +231,18 @@ public sealed partial class AgentRunner(
                     worktreePath, targetCard.Id, targetCard.Title);
             }
 
+            // 5.4 Create run record in DB and write prior step context
+            var runRecord = new RunRecord(
+                RunId: runId,
+                CardId: cardId,
+                StateName: state.Name,
+                AgentIdentity: agentIdentity.DisplayName,
+                GitBranch: branchName,
+                TotalSteps: state.Steps.Count,
+                StartedAtUtc: DateTimeOffset.UtcNow);
+            await SafeDbCallAsync(() => runStore.CreateRunAsync(runRecord, cancellationToken));
+            await WritePriorStepContextAsync(worktreePath, cardId, state.Name, cancellationToken);
+
             // 6. Execute steps sequentially
             var commentPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity);
             AgentResult? lastResult = null;
@@ -249,6 +269,8 @@ public sealed partial class AgentRunner(
 
                 logger.LogInformation("Executing step {StepIndex}/{StepCount} '{StepName}' (role={Role}, provider={Provider}) for card {CardId}",
                     stepIndex + 1, state.Steps.Count, step.Name, step.Role, stepRole.Provider, cardId);
+
+                var stepStartedAt = DateTimeOffset.UtcNow;
 
                 // 6a. Resolve system prompt file path for this step's role
                 var systemPromptFilePath = await ResolveSystemPromptFileAsync(
@@ -293,7 +315,8 @@ public sealed partial class AgentRunner(
                 }
 
                 // 6d. Update card body from task file after each step (write-after-each-step strategy)
-                await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken);
+                await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken,
+                    trimForBoard: runStore is not NullRunStore);
 
                 // 6d-ii. Process update files (.aiboard/updates/) — handles both generation steps
                 //        (step.GenerationConfig set) and ad-hoc ticket creation (no config).
@@ -310,9 +333,50 @@ public sealed partial class AgentRunner(
                     updateResult = UpdateProcessingResult.Empty;
                 }
 
+                // 6d-iii. Save step result to DB
+                {
+                    var stepCompletedAt = DateTimeOffset.UtcNow;
+
+                    string? taskFileSnapshot = null;
+                    var taskFilePath = TaskFileManager.GetTaskFilePath(worktreePath, cardId, targetCard.Title);
+                    if (File.Exists(taskFilePath))
+                    {
+                        var rawContent = await File.ReadAllTextAsync(taskFilePath, cancellationToken);
+                        taskFileSnapshot = TaskFileManager.ExtractBodyFromTaskFile(rawContent);
+                    }
+
+                    var referenceContent = updateResult.ReferenceContent;
+                    if (referenceContent is not null && referenceContent.Length > MaxReferenceContentLength)
+                    {
+                        logger.LogWarning("Truncating reference content from {Original} to {Max} chars for card {CardId}",
+                            referenceContent.Length, MaxReferenceContentLength, cardId);
+                        referenceContent = referenceContent[..MaxReferenceContentLength] + "\n...[truncated]";
+                    }
+
+                    var stepRecord = new StepResultRecord(
+                        RunId: runId,
+                        CardId: cardId,
+                        StateName: state.Name,
+                        StepName: step.Name,
+                        StepIndex: stepIndex,
+                        Role: step.Role,
+                        Model: stepRole.Model,
+                        Outcome: lastResult.Outcome,
+                        Summary: lastResult.Detail,
+                        Detail: taskFileSnapshot,
+                        ReferenceContent: referenceContent,
+                        ConversationLog: lastResult.ConversationLog,
+                        Questions: lastResult.Questions,
+                        RequestedSteps: lastResult.RequestedSteps,
+                        StartedAtUtc: stepStartedAt,
+                        CompletedAtUtc: stepCompletedAt);
+                    await SafeDbCallAsync(() => runStore.SaveStepResultAsync(stepRecord, cancellationToken));
+                    await SafeDbCallAsync(() => runStore.UpdateRunProgressAsync(runId, stepIndex + 1, cancellationToken));
+                }
+
                 // 6e. Upsert step-specific comment (augmented with update file summary if applicable)
                 var stepMarker = $"<!-- agent-step:{step.Name} -->";
-                var stepComment = $"{commentPrefix}\n\n**Step: {step.Name}**\n\n{FormatComment(lastResult)}";
+                var stepComment = $"{commentPrefix}\n\n**Step: {step.Name}**\n\n{FormatComment(lastResult, includeConversationLog: runStore is NullRunStore)}";
                 if (updateResult.HasUpdates)
                     stepComment += FormatUpdateSummary(updateResult);
                 await boardClient.UpsertAgentCommentAsync(cardId, stepComment, stepMarker, cancellationToken);
@@ -349,6 +413,7 @@ public sealed partial class AgentRunner(
                     if (gitBehavior == "discard")
                         await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
 
+                    await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, lastResult.Outcome, lastResult.Detail, cancellationToken));
                     return new AgentRunResult(lastResult.Outcome, lastResult.Detail, lastResult.Questions);
                 }
             }
@@ -362,7 +427,7 @@ public sealed partial class AgentRunner(
 
             // 7. Run gate check if configured
             var gateCheckResult = await RunGateCheckAsync(
-                state, lastResult!, worktreePath, targetCard, cardId, cancellationToken);
+                state, lastResult!, worktreePath, targetCard, cardId, runId, cancellationToken);
 
             if (gateCheckResult.BlockingResult is not null)
             {
@@ -381,7 +446,7 @@ public sealed partial class AgentRunner(
             {
                 var optionalResult = await ExecuteOptionalStepsAsync(
                     gateCheckResult.RequestedSteps, state, worktreePath, targetCard, cardId,
-                    commentPrefix, commentsFilePath, cancellationToken);
+                    runId, commentPrefix, commentsFilePath, cancellationToken);
 
                 if (optionalResult is not null)
                 {
@@ -403,8 +468,10 @@ public sealed partial class AgentRunner(
                 gitBehavior, worktreePath, branchName, targetCard, state, lastResult!, cancellationToken);
 
             // 9. Post-process: upsert run-level comment, move card to next state
-            var runComment = $"{commentPrefix}\n\n{FormatComment(lastResult!, gitNote)}";
+            var runComment = $"{commentPrefix}\n\n{FormatComment(lastResult!, gitNote, includeConversationLog: runStore is NullRunStore)}";
             await boardClient.UpsertAgentCommentAsync(cardId, runComment, runMarker, cancellationToken);
+
+            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, lastResult!.Outcome, null, cancellationToken));
 
             var completeKey = lastResult!.Outcome.ToString();
             if (state.Transitions.TryGetValue(completeKey, out var completeTarget))
@@ -463,6 +530,8 @@ public sealed partial class AgentRunner(
                     "Failed to restore card {CardId} to trigger column after rate limit — card may be stuck in IN_PROGRESS",
                     cardId);
             }
+
+            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, AgentOutcome.ERROR, rateLimitEx.Message, cancellationToken));
 
             // Rethrow so PollingRunner can back off, or Program.cs can handle cleanly
             throw;
@@ -531,6 +600,7 @@ public sealed partial class AgentRunner(
                 logger.LogWarning(postEx, "Failed to post error feedback to board for card {CardId}", cardId);
             }
 
+            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, AgentOutcome.ERROR, ex.Message, cancellationToken));
             return new AgentRunResult(AgentOutcome.ERROR, ex.Message);
         }
         } // using logger scope
@@ -692,6 +762,7 @@ public sealed partial class AgentRunner(
         string worktreePath,
         BoardCard targetCard,
         string cardId,
+        string runId,
         CancellationToken cancellationToken)
     {
         if (state.GateCheck is null)
@@ -809,8 +880,29 @@ public sealed partial class AgentRunner(
 
             logger.LogInformation("Running gate check for card {CardId} in state {State}", cardId, state.Name);
             var gateExecutor = executorResolver.Resolve(gateRole.Provider);
+            var gateStartedAt = DateTimeOffset.UtcNow;
             gateResult = await gateExecutor.ExecuteAsync(gateContext, cancellationToken);
             logger.LogInformation("Gate check result for card {CardId}: {Outcome}", cardId, gateResult.Outcome);
+
+            // Save gate check result to DB
+            var gateRecord = new StepResultRecord(
+                RunId: runId,
+                CardId: cardId,
+                StateName: state.Name,
+                StepName: "gate_check",
+                StepIndex: state.Steps.Count,
+                Role: gateCheck.Role,
+                Model: gateRole.Model,
+                Outcome: gateResult.Outcome,
+                Summary: gateResult.Detail,
+                Detail: null,
+                ReferenceContent: null,
+                ConversationLog: gateResult.ConversationLog,
+                Questions: gateResult.Questions,
+                RequestedSteps: gateResult.RequestedSteps,
+                StartedAtUtc: gateStartedAt,
+                CompletedAtUtc: DateTimeOffset.UtcNow);
+            await SafeDbCallAsync(() => runStore.SaveStepResultAsync(gateRecord, cancellationToken));
         }
         catch (Exception ex)
         {
@@ -907,6 +999,7 @@ public sealed partial class AgentRunner(
         string worktreePath,
         BoardCard targetCard,
         string cardId,
+        string runId,
         string commentPrefix,
         string? commentsFilePath,
         CancellationToken cancellationToken)
@@ -976,15 +1069,37 @@ public sealed partial class AgentRunner(
                 ProviderParams: effectiveParams,
                 CommentsFilePath: commentsFilePath);
 
+            var optionalStepStartedAt = DateTimeOffset.UtcNow;
             var optionalExecutor = executorResolver.Resolve(stepRole.Provider);
             var result = await optionalExecutor.ExecuteAsync(context, cancellationToken);
 
+            // Save optional step result to DB
+            var optionalStepRecord = new StepResultRecord(
+                RunId: runId,
+                CardId: cardId,
+                StateName: state.Name,
+                StepName: $"optional:{step.Name}",
+                StepIndex: state.Steps.Count + 1 + i,
+                Role: step.Role,
+                Model: stepRole.Model,
+                Outcome: result.Outcome,
+                Summary: result.Detail,
+                Detail: null,
+                ReferenceContent: null,
+                ConversationLog: result.ConversationLog,
+                Questions: result.Questions,
+                RequestedSteps: result.RequestedSteps,
+                StartedAtUtc: optionalStepStartedAt,
+                CompletedAtUtc: DateTimeOffset.UtcNow);
+            await SafeDbCallAsync(() => runStore.SaveStepResultAsync(optionalStepRecord, cancellationToken));
+
             // Update card body
-            await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken);
+            await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken,
+                trimForBoard: runStore is not NullRunStore);
 
             // Post step-specific comment with optional: prefix to avoid marker collision
             var stepMarker = $"<!-- agent-step:optional:{step.Name} -->";
-            var stepComment = $"{commentPrefix}\n\n**Optional Step: {step.Name}**\n\n{FormatComment(result)}";
+            var stepComment = $"{commentPrefix}\n\n**Optional Step: {step.Name}**\n\n{FormatComment(result, includeConversationLog: runStore is NullRunStore)}";
             await boardClient.UpsertAgentCommentAsync(cardId, stepComment, stepMarker, cancellationToken);
 
             // Refresh comments file for the next step
@@ -1344,7 +1459,7 @@ public sealed partial class AgentRunner(
         }
 
         // 9b. Format and post comment (with optional git note and role/state prefix)
-        var comment = $"{commentPrefix}\n\n{FormatComment(agentResult, gitNote)}";
+        var comment = $"{commentPrefix}\n\n{FormatComment(agentResult, gitNote, includeConversationLog: runStore is NullRunStore)}";
         await boardClient.UpsertAgentCommentAsync(originalCard.Id, comment, runMarker, cancellationToken);
         logger.LogInformation("Posted agent comment for {CardId}", originalCard.Id);
 
@@ -1438,7 +1553,8 @@ public sealed partial class AgentRunner(
     }
 
     private async Task UpdateCardBodyFromTaskFileAsync(
-        BoardCard originalCard, string worktreePath, CancellationToken cancellationToken)
+        BoardCard originalCard, string worktreePath, CancellationToken cancellationToken,
+        bool trimForBoard = false)
     {
         var taskFilePath = TaskFileManager.GetTaskFilePath(worktreePath, originalCard.Id, originalCard.Title);
         if (!File.Exists(taskFilePath))
@@ -1448,11 +1564,99 @@ public sealed partial class AgentRunner(
         var bodyFromFile = TaskFileManager.ExtractBodyFromTaskFile(taskFileContent);
         var cleanBody = TaskFileManager.StripAnnotations(bodyFromFile);
 
+        if (trimForBoard)
+            cleanBody = TaskFileManager.TrimToSummary(cleanBody);
+
         if (!string.Equals(cleanBody, originalCard.Body, StringComparison.Ordinal))
         {
             await boardClient.UpdateCardBodyAsync(originalCard.Id, cleanBody, cancellationToken);
-            logger.LogInformation("Updated card body for {CardId}", originalCard.Id);
+            logger.LogInformation("Updated card body for {CardId}{Trimmed}",
+                originalCard.Id, trimForBoard ? " (trimmed for board)" : "");
         }
+    }
+
+    /// <summary>
+    /// Wraps a DB call so that any exception is logged as a warning and the run continues.
+    /// A DB failure must never interrupt an agent run.
+    /// </summary>
+    private async Task SafeDbCallAsync(Func<Task> action)
+    {
+        try
+        {
+            await action();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Database operation failed - continuing without DB persistence");
+        }
+    }
+
+    /// <summary>
+    /// Queries the DB for prior step results for this card and writes them to
+    /// .aiboard/context/step-history.md in the worktree so agents have cross-run context.
+    /// Skips silently when using NullRunStore or when no prior results exist.
+    /// </summary>
+    private async Task WritePriorStepContextAsync(
+        string worktreePath, string cardId, string currentStateName, CancellationToken cancellationToken)
+    {
+        if (runStore is NullRunStore)
+            return;
+
+        IReadOnlyList<StepResultRecord> priorResults;
+        try
+        {
+            priorResults = await runStore.GetStepResultsForCardAsync(cardId, null, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to read prior step results from DB for card {CardId}", cardId);
+            return;
+        }
+
+        if (priorResults.Count == 0)
+            return;
+
+        var contextDir = Path.Combine(worktreePath, ".aiboard", "context");
+        Directory.CreateDirectory(contextDir);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("# Prior Step Results");
+        sb.AppendLine();
+        sb.AppendLine("These are results from prior agent runs on this card. Use them for context.");
+        sb.AppendLine();
+
+        foreach (var result in priorResults)
+        {
+            sb.AppendLine($"## {result.StateName} / {result.StepName} ({result.Outcome})");
+            sb.AppendLine($"*Run: {result.RunId} | Role: {result.Role} | {result.CompletedAtUtc:u}*");
+            sb.AppendLine();
+
+            if (result.Detail is not null)
+            {
+                sb.AppendLine(result.Detail);
+                sb.AppendLine();
+            }
+            else if (result.Summary is not null)
+            {
+                sb.AppendLine(result.Summary);
+                sb.AppendLine();
+            }
+
+            if (result.ReferenceContent is not null)
+            {
+                sb.AppendLine("### Reference Content");
+                sb.AppendLine(result.ReferenceContent);
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("---");
+            sb.AppendLine();
+        }
+
+        await File.WriteAllTextAsync(
+            Path.Combine(contextDir, "step-history.md"), sb.ToString(), cancellationToken);
+
+        logger.LogInformation("Wrote prior step context for card {CardId} ({Count} results)", cardId, priorResults.Count);
     }
 
     internal static async Task<string> ResolveStepTaskPromptAsync(
@@ -1507,7 +1711,7 @@ public sealed partial class AgentRunner(
         return sb.ToString();
     }
 
-    internal static string FormatComment(AgentResult result, string? gitNote = null)
+    internal static string FormatComment(AgentResult result, string? gitNote = null, bool includeConversationLog = true)
     {
         var comment = result.Outcome switch
         {
@@ -1520,7 +1724,8 @@ public sealed partial class AgentRunner(
         if (!string.IsNullOrEmpty(gitNote))
             comment += $"\n\n---\n{gitNote}";
 
-        if (!string.IsNullOrEmpty(result.ConversationLog))
+        // Conversation log: include in comment only when no DB is available (includeConversationLog = true)
+        if (includeConversationLog && !string.IsNullOrEmpty(result.ConversationLog))
         {
             var log = result.ConversationLog.Length > 50_000
                 ? result.ConversationLog[..50_000] + "\n...[truncated]"

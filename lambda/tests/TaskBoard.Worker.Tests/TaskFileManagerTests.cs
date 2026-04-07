@@ -435,6 +435,58 @@ public class TaskFileManagerTests : IDisposable
         Assert.DoesNotContain("<details>", content);
     }
 
+    // ── TrimToSummary ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void TrimToSummary_RemovesDetailsBlocks()
+    {
+        var input = "## Approach\n\nSummary here.\n\n---\n\n<details><summary>Full design</summary>\n\nDetailed content.\n\n</details>";
+        var result = TaskFileManager.TrimToSummary(input);
+
+        Assert.Contains("## Approach", result);
+        Assert.Contains("Summary here.", result);
+        Assert.DoesNotContain("<details>", result);
+        Assert.DoesNotContain("Detailed content.", result);
+    }
+
+    [Fact]
+    public void TrimToSummary_PreservesContentWithoutDetails()
+    {
+        var input = "## Requirements\n\nBuild the thing.\n\n## Approach\n\nDo it simply.";
+        var result = TaskFileManager.TrimToSummary(input);
+
+        Assert.Equal(input, result);
+    }
+
+    [Fact]
+    public void TrimToSummary_RemovesMultipleDetailsBlocks()
+    {
+        var input = "Summary\n\n<details><summary>A</summary>\nA content\n</details>\n\n<details><summary>B</summary>\nB content\n</details>";
+        var result = TaskFileManager.TrimToSummary(input);
+
+        Assert.DoesNotContain("<details>", result);
+        Assert.Contains("Summary", result);
+    }
+
+    [Fact]
+    public void TrimToSummary_RemovesTrailingHorizontalRule()
+    {
+        var input = "Summary\n\n---\n\n<details><summary>X</summary>\nContent\n</details>";
+        var result = TaskFileManager.TrimToSummary(input);
+
+        Assert.DoesNotContain("---", result);
+        Assert.Contains("Summary", result);
+    }
+
+    [Fact]
+    public void TrimToSummary_PreservesHorizontalRuleNotAtEnd()
+    {
+        var input = "Section A\n\n---\n\nSection B";
+        var result = TaskFileManager.TrimToSummary(input);
+
+        Assert.Contains("---", result); // HR in the middle is preserved
+    }
+
     private static WorkflowConfig BuildWorkflowConfig()
     {
         return new WorkflowConfig(

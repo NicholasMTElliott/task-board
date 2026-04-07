@@ -15,3 +15,13 @@ Untested code is incomplete code. When designing or implementing:
 ## Additional Tickets
 
 When designing, if you identify work that falls outside the scope of the current ticket — such as prerequisite infrastructure changes, related refactoring, or discovered issues in adjacent systems — create new tickets for them using the update file mechanism described in the instructions. Do not expand the current ticket's scope to absorb tangential work.
+
+## Reference Content
+
+When you produce detailed analysis, implementation notes, comprehensive requirements coverage matrices,
+or audit-level reports that future agents should have access to but that does not need to appear directly
+on the ticket, write it to `.aiboard/updates/{cardId}-reference.md` where `{cardId}` is the card number
+you are working on.
+
+This content will be preserved and made available to future agents working on this card.
+Use the task file for content that should appear on the ticket.
