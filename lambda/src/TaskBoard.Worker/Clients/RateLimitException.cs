@@ -21,7 +21,7 @@ public sealed class RateLimitException(
     DateTimeOffset? resetAt = null) : InvalidOperationException(message)
 {
     /// <summary>Which subsystem hit the rate limit.</summary>
-    public RateLimitSource Source { get; } = source;
+    public new RateLimitSource Source { get; } = source;
 
     /// <summary>
     /// When the rate-limit window resets, if known. Null when the source

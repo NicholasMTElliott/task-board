@@ -25,6 +25,12 @@ var promptRootArg = PreParseArg(args, "--prompt-root");
 //  We layer on top in ascending precedence:
 var builder = Host.CreateApplicationBuilder(args);
 
+builder.Logging.AddSimpleConsole(options =>
+{
+    options.SingleLine = true;
+    options.TimestampFormat = "HH:mm:ss ";
+});
+
 if (configFilePath is not null)
     builder.Configuration.AddJsonFile(CliDefinitions.ResolvePath(configFilePath), optional: false, reloadOnChange: false);
 
@@ -194,6 +200,7 @@ var gitTimeoutSeconds = int.TryParse(builder.Configuration["GitTimeoutSeconds"],
 builder.Services.AddSingleton(sp =>
     new GitWorkspaceManager(sp.GetRequiredService<ILogger<GitWorkspaceManager>>(), worktreeBasePath, gitTimeoutSeconds));
 
+builder.Services.AddSingleton<UpdateFileProcessor>();
 builder.Services.AddSingleton<AgentRunner>();
 builder.Services.AddSingleton<MergeRunner>();
 builder.Services.AddSingleton<PollingRunner>();

@@ -160,7 +160,7 @@ public class AgentRunnerDesignTests : IDisposable
     {
         return new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
-            _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<AgentRunner>.Instance);
+            _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"), new UpdateFileProcessor(_trelloClient, NullLogger<UpdateFileProcessor>.Instance), NullLogger<AgentRunner>.Instance);
     }
 
     private void SetupBoardCards(string targetDescription)

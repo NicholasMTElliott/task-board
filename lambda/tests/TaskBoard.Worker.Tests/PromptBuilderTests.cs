@@ -119,4 +119,42 @@ public class PromptBuilderTests
         Assert.StartsWith("existing content", result);
         Assert.Contains("## Instructions", result);
     }
+
+    [Fact]
+    public void AppendSharedSections_ContainsUpdateFileInstructions()
+    {
+        var sb = new StringBuilder();
+        PromptBuilder.AppendSharedSections(sb, CreateContext(), "/tmp/task.md");
+
+        var result = sb.ToString();
+        Assert.Contains("## Creating Additional Tickets", result);
+        Assert.Contains(".aiboard/updates/", result);
+        Assert.Contains("new-{slug}.md", result);
+        Assert.Contains("{cardId}-comment.md", result);
+    }
+
+    [Fact]
+    public void AppendSharedSections_ContainsDeduplicationGuidance()
+    {
+        var sb = new StringBuilder();
+        PromptBuilder.AppendSharedSections(sb, CreateContext(), "/tmp/task.md");
+
+        var result = sb.ToString();
+        Assert.Contains("agent-created-ticket:", result);
+        Assert.Contains("Deduplication", result);
+    }
+
+    [Fact]
+    public void AppendSharedSections_UpdateFileInstructionsAfterOutcomeRules()
+    {
+        var sb = new StringBuilder();
+        PromptBuilder.AppendSharedSections(sb, CreateContext(), "/tmp/task.md");
+
+        var result = sb.ToString();
+        var outcomeIdx = result.IndexOf("## Outcome Rules", StringComparison.Ordinal);
+        var updateIdx = result.IndexOf("## Creating Additional Tickets", StringComparison.Ordinal);
+
+        Assert.True(outcomeIdx >= 0, "Outcome Rules section must be present");
+        Assert.True(updateIdx > outcomeIdx, "Update file instructions must come after Outcome Rules");
+    }
 }

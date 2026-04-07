@@ -26,6 +26,13 @@ public interface ITaskBoardClient
     Task SetFieldAsync(string cardId, string fieldName, string value, CancellationToken cancellationToken);
     Task ClearFieldAsync(string cardId, string fieldName, CancellationToken cancellationToken);
 
+    // ── Card creation ────────────────────────────────────────────────────────
+    /// <summary>
+    /// Creates a new card (GitHub issue / Trello card) with the given title and body.
+    /// Returns the new card's ID (issue number for GitHub, card ID for Trello).
+    /// </summary>
+    Task<string> CreateCardAsync(string title, string body, CancellationToken cancellationToken);
+
     // ── Identity ─────────────────────────────────────────────────────────────
     /// <summary>
     /// Returns the username of the currently authenticated agent for this board provider.

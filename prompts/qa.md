@@ -45,3 +45,7 @@ When evaluating test coverage, distinguish between two levels:
 - Trivial code paths where the behavior is obvious from the implementation (e.g., simple property getters, direct pass-through methods).
 
 When recommending enhancements, be specific: name the scenario, the expected behavior, and why it matters. Include these as recommendations in your questions array so the implementing agent can incorporate them on re-run. Do not block a ticket solely for enhancement-level test gaps — enhance with value, do not block out of routine.
+
+## Additional Tickets
+
+During testing, if you discover bugs or defects that are not caused by the current ticket's changes and do not block acceptance, create new tickets for them. Only block the current ticket for issues that are directly related to the requirements being validated.

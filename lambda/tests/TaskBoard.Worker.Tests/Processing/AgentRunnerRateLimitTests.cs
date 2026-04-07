@@ -85,6 +85,7 @@ public class AgentRunnerRateLimitTests : IDisposable
             config,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_boardClient, NullLogger<UpdateFileProcessor>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -197,11 +198,13 @@ public class AgentRunnerRateLimitTests : IDisposable
         await Assert.ThrowsAsync<RateLimitException>(
             () => runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None));
 
-        // After cleanup, no worktree directories should exist under the worktrees base
+        // After cleanup, the leaf worktree directory should not exist.
+        // The parent aiboard/ directory may remain (git worktree remove only removes the leaf).
         var worktreesBase = _tempDir + "-worktrees";
-        var hasRemainingWorktrees = Directory.Exists(worktreesBase)
-            && Directory.EnumerateDirectories(worktreesBase, "*", SearchOption.AllDirectories).Any();
-        Assert.False(hasRemainingWorktrees,
-            "Worktree should have been cleaned up but directories remain under worktree base");
+        var aiboardDir = Path.Combine(worktreesBase, "aiboard");
+        var hasLeafWorktree = Directory.Exists(aiboardDir)
+            && Directory.EnumerateDirectories(aiboardDir).Any();
+        Assert.False(hasLeafWorktree,
+            "Leaf worktree directory should have been cleaned up but child directories remain under aiboard/");
     }
 }

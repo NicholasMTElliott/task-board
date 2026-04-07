@@ -83,6 +83,15 @@ public sealed class StubTaskBoardClient(ILogger<StubTaskBoardClient> logger) : I
         return Task.CompletedTask;
     }
 
+    private int _nextStubId = 100;
+
+    public Task<string> CreateCardAsync(string title, string body, CancellationToken cancellationToken)
+    {
+        var id = Interlocked.Increment(ref _nextStubId).ToString();
+        logger.LogInformation("[Stub] CreateCard #{Id} title={Title} ({Length} chars)", id, title, body.Length);
+        return Task.FromResult(id);
+    }
+
     public Task<string> GetCurrentUserAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("[Stub] GetCurrentUser");

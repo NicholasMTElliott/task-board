@@ -160,7 +160,7 @@ public sealed class GitHubProjectsClient(
             cards.Add(new BoardCard(id, title, body, columnId, metadata, labels, assignees));
         }
 
-        logger.LogInformation("Fetched {Count} cards from GitHub project {ProjectNumber}", cards.Count, boardId);
+        logger.LogDebug("Fetched {Count} cards from GitHub project {ProjectNumber}", cards.Count, boardId);
 
         if (cards.Count >= fetchLimit)
             logger.LogWarning(
@@ -187,6 +187,44 @@ public sealed class GitHubProjectsClient(
         {
             File.Delete(tempFile);
         }
+    }
+
+    public async Task<string> CreateCardAsync(string title, string body, CancellationToken cancellationToken)
+    {
+        // Write body to a temp file to avoid shell escaping issues with large content
+        var tempFile = Path.GetTempFileName();
+        string issueUrl;
+        try
+        {
+            await File.WriteAllTextAsync(tempFile, body, cancellationToken);
+            issueUrl = await RunGhAsync(
+                ["issue", "create", "--repo", _options.Repo, "--title", title, "--body-file", tempFile],
+                cancellationToken);
+            issueUrl = issueUrl.Trim();
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+
+        // Parse issue number from URL: "https://github.com/owner/repo/issues/42"
+        var issueNumber = issueUrl.Split('/').Last();
+        logger.LogInformation("Created issue #{IssueNumber} '{Title}'", issueNumber, title);
+
+        // Best-effort: add to project board
+        try
+        {
+            await RunGhAsync(
+                ["project", "item-add", _options.ProjectNumber.ToString(),
+                 "--owner", _options.Owner, "--url", issueUrl],
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to add issue #{IssueNumber} to project — issue exists but is not on the board", issueNumber);
+        }
+
+        return issueNumber;
     }
 
     public async Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken cancellationToken)
