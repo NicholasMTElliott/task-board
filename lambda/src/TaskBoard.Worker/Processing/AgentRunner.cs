@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using TaskBoard.Worker.Clients;
@@ -356,7 +357,7 @@ public sealed partial class AgentRunner(
             // Add captured estimate to template context for transition actions (e.g., setField)
             if (capturedEstimate.HasValue)
             {
-                templateContext["estimation"] = capturedEstimate.Value.ToString("G");
+                templateContext["estimation"] = capturedEstimate.Value.ToString("G", CultureInfo.InvariantCulture);
             }
 
             // 7. Run gate check if configured
