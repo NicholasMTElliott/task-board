@@ -1,0 +1,10 @@
+Using launch settings from .\lambda\src\TaskBoard.Worker\Properties\launchSettings.json...
+Building...
+10:17:01 warn: Program[0] AGENT_EXECUTOR is set to 'claude-cli' but this value is no longer used for provider selection — real providers are now auto-detected. Only 'stub' retains special meaning.
+10:17:01 info: WorkflowConfig[0] Loading workflow config from C:\Users\Nicho\Documents\task-board\workflow.github.json
+10:17:02 info: Program[0] All prerequisites validated successfully
+10:17:02 info: Program[0] Available AI providers: claude-cli, codex
+10:17:02 info: Program[0] Agent identity: Mira Quinn on BAELFIRE
+10:17:02 info: Program[0] Polling mode: board=1 workspace=C:\Users\Nicho\Documents\task-board-worktrees\aiboard\34-refine-basic-console-output interval=120s
+10:17:02 info: Program[0] System sleep inhibited (Windows)
+10:17:02 info: TaskBoard.Worker.Processing.PollingRunner[0] Polling started, base interval=120s (adaptive backoff enabled)
