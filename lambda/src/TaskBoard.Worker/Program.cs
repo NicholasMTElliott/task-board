@@ -25,6 +25,20 @@ var promptRootArg = PreParseArg(args, "--prompt-root");
 //  We layer on top in ascending precedence:
 var builder = Host.CreateApplicationBuilder(args);
 
+// When launched via `dotnet run` the content root is the caller's working directory,
+// which typically does NOT contain appsettings.json. The compiled copy lives next to
+// the executable in AppContext.BaseDirectory, so add it explicitly as a fallback.
+if (!string.Equals(Path.GetFullPath(builder.Environment.ContentRootPath),
+        Path.GetFullPath(AppContext.BaseDirectory), StringComparison.OrdinalIgnoreCase))
+{
+    builder.Configuration.AddJsonFile(
+        Path.Combine(AppContext.BaseDirectory, "appsettings.json"), optional: true, reloadOnChange: false);
+
+    var env = builder.Environment.EnvironmentName;
+    builder.Configuration.AddJsonFile(
+        Path.Combine(AppContext.BaseDirectory, $"appsettings.{env}.json"), optional: true, reloadOnChange: false);
+}
+
 builder.Logging.AddSimpleConsole(options =>
 {
     options.SingleLine = true;
@@ -34,7 +48,8 @@ builder.Logging.AddSimpleConsole(options =>
 if (configFilePath is not null)
     builder.Configuration.AddJsonFile(CliDefinitions.ResolvePath(configFilePath), optional: false, reloadOnChange: false);
 
-builder.Configuration.AddJsonFile("appsettings.user.json", optional: true, reloadOnChange: false);
+builder.Configuration.AddJsonFile(
+    Path.Combine(AppContext.BaseDirectory, "appsettings.user.json"), optional: true, reloadOnChange: false);
 
 // Re-add env vars so they beat --config and appsettings.user.json
 builder.Configuration.AddEnvironmentVariables();
@@ -259,6 +274,19 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
 }
 
 logger.LogInformation("Agent identity: {AgentName}", agentIdentity.DisplayName);
+
+// ── Diagnostic: dump resolved configuration values ──────────────────────────
+logger.LogInformation("Content root: {ContentRoot}", builder.Environment.ContentRootPath);
+logger.LogInformation("AppContext.BaseDirectory: {BaseDir}", AppContext.BaseDirectory);
+logger.LogInformation("Raw config ClaudeCli:TimeoutSeconds = {RawTimeout}",
+    builder.Configuration["ClaudeCli:TimeoutSeconds"] ?? "(not set)");
+if (detectedProviders.Contains("claude-cli") && agentExecutorMode != "stub")
+{
+    var claudeOpts = host.Services.GetRequiredService<IOptions<ClaudeCliLlmOptions>>().Value;
+    logger.LogInformation(
+        "ClaudeCliLlmOptions: ExecutablePath={Exe}, TimeoutSeconds={Timeout}, MaxBudgetUsd={Budget}, MaxTurns={Turns}",
+        claudeOpts.ExecutablePath, claudeOpts.TimeoutSeconds, claudeOpts.MaxBudgetUsd, claudeOpts.MaxTurns);
+}
 
 // ── 8. Resolve shared runtime parameters from merged configuration ───────────
 var boardId = builder.Configuration["BoardId"]

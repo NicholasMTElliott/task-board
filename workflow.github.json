@@ -166,7 +166,7 @@
       "includeInAgentContext": true,
       "providerParams": {
         "effort": "medium",
-        "sandbox": "danger-full-access"
+        "yolo": "true"
       },
       "steps": [
         {
@@ -475,8 +475,7 @@
       "sections": ["Design Review Summary", "Technical Design", "Decisions", "Implementation"]
     },
     "qa": {
-      "provider": "codex",
-      "model": "gpt-5.4",
+      "model": "claude-opus-4-6",
       "systemPromptFile": "prompts/qa.md",
       "sections": ["Test Plan", "Test Results"]
     },
@@ -486,10 +485,9 @@
       "sections": ["Technical Design", "Decisions", "Implementation"]
     },
     "code_reviewer": {
-      "model": "gpt-5.4",
+      "model": "claude-sonnet-4-6",
       "systemPromptFile": "prompts/code_reviewer.md",
-      "sections": [],
-      "provider": "codex"
+      "sections": []
     },
     "merge_resolver": {
       "model": "claude-sonnet-4-6",
