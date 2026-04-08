@@ -80,6 +80,7 @@ public class PollingRunnerTests
             new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             NullImageUploader.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -130,6 +131,7 @@ public class PollingRunnerTests
             new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             NullImageUploader.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -186,6 +188,7 @@ public class PollingRunnerTests
             new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             NullImageUploader.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -261,6 +264,7 @@ public class PollingRunnerTests
             new UpdateFileProcessor(boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             NullImageUploader.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -345,6 +349,7 @@ public class PollingRunnerTests
             new UpdateFileProcessor(boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             NullImageUploader.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -425,6 +430,7 @@ public class PollingRunnerTests
             new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             NullImageUploader.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -478,6 +484,7 @@ public class PollingRunnerTests
             new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             NullImageUploader.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -531,6 +538,7 @@ public class PollingRunnerTests
             new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             NullImageUploader.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -609,6 +617,7 @@ public class PollingRunnerTests
             new UpdateFileProcessor(boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             NullImageUploader.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(

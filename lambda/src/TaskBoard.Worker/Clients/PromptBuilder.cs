@@ -20,6 +20,11 @@ internal static class PromptBuilder
         sb.AppendLine();
         sb.AppendLine($"- The target task file is at: {taskFilePath}");
         sb.AppendLine("- All project tasks are in the .aiboard/tasks/ directory for context.");
+        sb.AppendLine("- If the task file contains `( local image: path )` markers next to image references, "
+            + "those images have been downloaded to the workspace for your viewing. "
+            + "Use the Read tool on each local image path to view it — images may contain screenshots, "
+            + "mockups, or diagrams that are critical to understanding requirements. "
+            + "Always view referenced images before starting work.");
 
         if (context.CommentsFilePath is not null)
         {

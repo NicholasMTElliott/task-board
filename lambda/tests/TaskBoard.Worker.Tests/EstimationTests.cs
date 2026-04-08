@@ -360,6 +360,64 @@ public class EstimationIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteAsync_DiscardBehavior_NoRunLevelComment()
+    {
+        // Arrange: discard state (gitNote will be null after HandleGitBehaviorAsync)
+        var boardCards = new List<BoardCard>
+        {
+            new(TargetCardId, "Estimate Tickets", "Design content here", DesignListId),
+            new(CalibrationCardId, "Calibration Ticket", "Small task body", "Done"),
+        };
+        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Returns(boardCards);
+        _boardClient.GetCardCommentsAsync(TargetCardId, Arg.Any<CancellationToken>())
+            .Returns(new List<CardComment>());
+
+        var stub = new EstimateCapturingExecutor(estimate: 4.0);
+        var runner = CreateRunner(stub, withEstimation: true);
+
+        // Act
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Assert: only step-level comments — no run-level comment (gitNote is null for discard)
+        var commentCalls = _boardClient.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == "UpsertAgentCommentAsync")
+            .ToList();
+        // Each step gets one comment; no extra run-level comment
+        Assert.DoesNotContain(commentCalls, c =>
+        {
+            var marker = (string)c.GetArguments()[2]!;
+            return marker.Contains("agent-run:");
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_EstimationConfigured_AgentReturnsNoEstimate_SetFieldNotCalled()
+    {
+        // Arrange: executor returns no structured estimate
+        var boardCards = new List<BoardCard>
+        {
+            new(TargetCardId, "Estimate Tickets", "Design content here", DesignListId),
+            new(CalibrationCardId, "Calibration Ticket", "Small task body", "Done"),
+        };
+        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Returns(boardCards);
+        _boardClient.GetCardCommentsAsync(TargetCardId, Arg.Any<CancellationToken>())
+            .Returns(new List<CardComment>());
+
+        // No estimate returned — {{estimation}} stays unresolved
+        var stub = new EstimateCapturingExecutor(estimate: null);
+        var runner = CreateRunner(stub, withEstimation: true);
+
+        // Act
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Assert: SetFieldAsync should NOT be called because the template was unresolved
+        await _boardClient.DidNotReceive().SetFieldAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task ExecuteAsync_EstimationStep_PromptIncludesCalibrationPlaceholders()
     {
         // Use a capturing executor to verify the prompt includes estimation context
@@ -400,6 +458,7 @@ public class EstimationIntegrationTests : IDisposable
             new UpdateFileProcessor(_boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             NullImageUploader.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 

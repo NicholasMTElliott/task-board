@@ -394,6 +394,7 @@ public class AgentRunnerGateCheckTests : IDisposable
             new UpdateFileProcessor(_boardClient, normalisedConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             NullImageUploader.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 

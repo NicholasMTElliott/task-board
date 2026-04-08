@@ -17,6 +17,7 @@ public sealed partial class AgentRunner(
     UpdateFileProcessor updateFileProcessor,
     IRunStore runStore,
     IImageUploader imageUploader,
+    ImageDownloader imageDownloader,
     ILogger<AgentRunner> logger)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
@@ -219,8 +220,15 @@ public sealed partial class AgentRunner(
                 }
             }
 
+            // 5.2a Download images referenced in the target card body
+            var imageMapping = await imageDownloader.DownloadImagesAsync(
+                cardId, targetCard.Body, worktreePath, cancellationToken);
+
             await taskFileManager.WriteAllTaskFilesAsync(
-                worktreePath, contextCards, workflowConfig, referenceContext, cancellationToken);
+                worktreePath, contextCards, workflowConfig, referenceContext,
+                imageMapping.Count > 0 ? imageMapping : null,
+                imageMapping.Count > 0 ? cardId : null,
+                cancellationToken);
 
             // 5.3 Write comments file for the active card
             string? commentsFilePath = null;
@@ -307,12 +315,14 @@ public sealed partial class AgentRunner(
                 var stepExecutor = executorResolver.Resolve(stepRole.Provider);
                 lastResult = await stepExecutor.ExecuteAsync(context, cancellationToken);
 
-                // Capture estimate if this step returned one
+                // Capture estimate if this step returned one and persist it to DB
                 if (lastResult.Estimate.HasValue)
                 {
                     capturedEstimate = lastResult.Estimate;
                     logger.LogInformation("Step '{StepName}' produced estimate: {Estimate} story point(s)",
                         step.Name, capturedEstimate);
+                    await SafeDbCallAsync(() =>
+                        runStore.UpdateRunEstimateAsync(runId, capturedEstimate.Value, cancellationToken));
                 }
 
                 // 6d. Update card body from task file after each step (write-after-each-step strategy)
@@ -425,6 +435,14 @@ public sealed partial class AgentRunner(
             {
                 templateContext["estimation"] = capturedEstimate.Value.ToString("G", CultureInfo.InvariantCulture);
             }
+            else if (workflowConfig.Estimation is not null)
+            {
+                logger.LogWarning(
+                    "Estimation is configured but no step returned a structured estimate for card {CardId}. " +
+                    "The estimator agent may have described the estimate in the detail text without setting " +
+                    "the 'estimate' field in its JSON output.",
+                    cardId);
+            }
 
             // 7. Run gate check if configured
             var gateCheckResult = await RunGateCheckAsync(
@@ -468,9 +486,12 @@ public sealed partial class AgentRunner(
             var gitNote = await HandleGitBehaviorAsync(
                 gitBehavior, worktreePath, branchName, targetCard, state, lastResult!, cancellationToken);
 
-            // 9. Post-process: upsert run-level comment, move card to next state
-            var runComment = $"{commentPrefix}\n\n{FormatComment(lastResult!, gitNote, includeConversationLog: runStore is NullRunStore)}";
-            await boardClient.UpsertAgentCommentAsync(cardId, runComment, runMarker, cancellationToken);
+            // 9. Post-process: upsert run-level comment (only when git note is present), move card to next state
+            if (!string.IsNullOrEmpty(gitNote))
+            {
+                var runComment = $"{commentPrefix}\n\n---\n{gitNote}";
+                await boardClient.UpsertAgentCommentAsync(cardId, runComment, runMarker, cancellationToken);
+            }
 
             await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, lastResult!.Outcome, null, cancellationToken));
 
