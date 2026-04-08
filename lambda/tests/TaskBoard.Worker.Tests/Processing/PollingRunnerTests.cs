@@ -77,8 +77,9 @@ public class PollingRunnerTests
             TestConfig,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -126,8 +127,9 @@ public class PollingRunnerTests
             TestConfig,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -181,8 +183,9 @@ public class PollingRunnerTests
             TestConfig,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -255,8 +258,9 @@ public class PollingRunnerTests
             config,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -338,8 +342,9 @@ public class PollingRunnerTests
             config,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -417,8 +422,9 @@ public class PollingRunnerTests
             TestConfig,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -469,8 +475,9 @@ public class PollingRunnerTests
             TestConfig,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -521,8 +528,9 @@ public class PollingRunnerTests
             TestConfig,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(
@@ -598,8 +606,9 @@ public class PollingRunnerTests
             config,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
 
         var mergeRunner = new MergeRunner(

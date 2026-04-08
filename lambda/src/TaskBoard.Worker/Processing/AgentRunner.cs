@@ -16,6 +16,7 @@ public sealed partial class AgentRunner(
     AgentIdentity agentIdentity,
     UpdateFileProcessor updateFileProcessor,
     IRunStore runStore,
+    IImageUploader imageUploader,
     ILogger<AgentRunner> logger)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
@@ -1566,6 +1567,9 @@ public sealed partial class AgentRunner(
 
         if (trimForBoard)
             cleanBody = TaskFileManager.TrimToSummary(cleanBody);
+
+        cleanBody = await ImageReferenceProcessor.ProcessLocalImagesAsync(
+            cleanBody, worktreePath, imageUploader, originalCard.Id, logger, cancellationToken);
 
         if (!string.Equals(cleanBody, originalCard.Body, StringComparison.Ordinal))
         {

@@ -48,8 +48,9 @@ public class AgentRunnerTests : IDisposable
             _workflowConfig,
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -196,8 +197,9 @@ public class AgentRunnerTests : IDisposable
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(throwingExecutor), _taskFileManager, _gitWorkspaceManager,
             BuildWorkflowConfig().Normalised(), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, BuildWorkflowConfig().Normalised(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_trelloClient, BuildWorkflowConfig().Normalised(), new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
 
         SetupBoardCards();
@@ -547,8 +549,9 @@ public class AgentRunnerTests : IDisposable
         var runner = new AgentRunner(
             _trelloClient, resolver, _taskFileManager, _gitWorkspaceManager,
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
@@ -575,8 +578,9 @@ public class AgentRunnerTests : IDisposable
         return new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(_agentExecutor), _taskFileManager, _gitWorkspaceManager,
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -585,8 +589,9 @@ public class AgentRunnerTests : IDisposable
         return new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(_agentExecutor), _taskFileManager, _gitWorkspaceManager,
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             runStore,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -602,8 +607,9 @@ public class AgentRunnerTests : IDisposable
             new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, _workflowConfig,
                 new AgentIdentity("Test", "Agent", "TestMachine"),
-                NullLogger<UpdateFileProcessor>.Instance),
+                NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             runStore,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -711,8 +717,9 @@ public class AgentRunnerTests : IDisposable
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(sequencedExecutor), _taskFileManager, _gitWorkspaceManager,
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
@@ -742,8 +749,9 @@ public class AgentRunnerTests : IDisposable
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(errorExecutor), _taskFileManager, _gitWorkspaceManager,
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
@@ -837,8 +845,9 @@ public class AgentRunnerTests : IDisposable
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
             _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
@@ -884,8 +893,9 @@ public class AgentRunnerTests : IDisposable
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
             _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            NullImageUploader.Instance,
             NullLogger<AgentRunner>.Instance);
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);

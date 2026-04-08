@@ -86,5 +86,18 @@ internal static class PromptBuilder
         sb.AppendLine("### Deduplication");
         sb.AppendLine();
         sb.AppendLine("Before creating a `new-{slug}.md` file, check the conversation history for `agent-created-ticket:{slug}` markers. If a ticket with that slug has already been created, do not create the file again.");
+        sb.AppendLine();
+        sb.AppendLine("## Generating Images");
+        sb.AppendLine();
+        sb.AppendLine("To include images in a ticket body, new ticket, or cross-card comment:");
+        sb.AppendLine();
+        sb.AppendLine("1. Write the image file to `.aiboard/images/output/` in the workspace.");
+        sb.AppendLine("2. Reference it using standard markdown: `![alt text](.aiboard/images/output/filename.ext)`");
+        sb.AppendLine();
+        sb.AppendLine("The harness automatically uploads the image and replaces the local path with a hosted URL before posting to GitHub. Supported formats: PNG, JPG/JPEG, GIF, SVG, WebP, BMP (max 10 MB per file).");
+        sb.AppendLine();
+        sb.AppendLine("**Other image use cases (no upload needed):**");
+        sb.AppendLine("- Copy an image URL from another ticket: include the URL directly in markdown.");
+        sb.AppendLine("- Reference an image already in the repository: use its `raw.githubusercontent.com` URL.");
     }
 }

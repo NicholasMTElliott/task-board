@@ -41,7 +41,7 @@ public class UpdateFileProcessorTests : IDisposable
 
         _identity = new AgentIdentity("Bot", "TestBot", "machine");
         _processor = new UpdateFileProcessor(_boardClient, _config, _identity,
-            NullLogger<UpdateFileProcessor>.Instance);
+            NullImageUploader.Instance, NullLogger<UpdateFileProcessor>.Instance);
     }
 
     public void Dispose()

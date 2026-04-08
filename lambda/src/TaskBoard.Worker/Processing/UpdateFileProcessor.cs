@@ -19,6 +19,7 @@ public sealed class UpdateFileProcessor(
     ITaskBoardClient boardClient,
     WorkflowConfig workflowConfig,
     AgentIdentity agentIdentity,
+    IImageUploader imageUploader,
     ILogger<UpdateFileProcessor> logger)
 {
     internal const string UpdatesRelativePath = ".aiboard/updates";
@@ -66,7 +67,7 @@ public sealed class UpdateFileProcessor(
                 if (newTicketMatch.Success)
                 {
                     var result = await ProcessNewTicketFileAsync(
-                        filePath, newTicketMatch.Groups[1].Value,
+                        filePath, newTicketMatch.Groups[1].Value, workspacePath,
                         sourceCardId, stepName, currentSourceComments, generationConfig, cancellationToken);
                     if (result is not null)
                         createdTickets.Add(result);
@@ -77,7 +78,7 @@ public sealed class UpdateFileProcessor(
                 if (commentMatch.Success)
                 {
                     var result = await ProcessCommentFileAsync(
-                        filePath, commentMatch.Groups[1].Value,
+                        filePath, commentMatch.Groups[1].Value, workspacePath,
                         sourceCardId, stepName, cancellationToken);
                     if (result is not null)
                         postedComments.Add(result);
@@ -109,6 +110,7 @@ public sealed class UpdateFileProcessor(
     private async Task<CreatedTicketInfo?> ProcessNewTicketFileAsync(
         string filePath,
         string slug,
+        string workspacePath,
         string sourceCardId,
         string stepName,
         IReadOnlyList<CardComment> currentComments,
@@ -142,6 +144,10 @@ public sealed class UpdateFileProcessor(
             }
         }
 
+        // Process any local image references in the ticket body before creating the card
+        var processedBody = await ImageReferenceProcessor.ProcessLocalImagesAsync(
+            parsed.Body, workspacePath, imageUploader, sourceCardId, logger, ct);
+
         // Build CreateCardRequest: generationConfig values take precedence, front matter as fallback
         var typeLabel = BuildTypeLabel(generationConfig?.TargetType ?? parsed.Type);
         var parentId = generationConfig?.LinkToParent == true
@@ -151,7 +157,7 @@ public sealed class UpdateFileProcessor(
 
         var request = new CreateCardRequest(
             Title: parsed.Title,
-            Body: parsed.Body,
+            Body: processedBody,
             ParentCardId: parentId,
             CardType: typeLabel,
             TargetColumn: targetColumn);
@@ -174,7 +180,7 @@ public sealed class UpdateFileProcessor(
     }
 
     private async Task<CrossCardCommentInfo?> ProcessCommentFileAsync(
-        string filePath, string targetCardId, string sourceCardId, string stepName,
+        string filePath, string targetCardId, string workspacePath, string sourceCardId, string stepName,
         CancellationToken ct)
     {
         if (targetCardId == sourceCardId)
@@ -192,8 +198,11 @@ public sealed class UpdateFileProcessor(
             return null;
         }
 
+        var processedContent = await ImageReferenceProcessor.ProcessLocalImagesAsync(
+            content, workspacePath, imageUploader, sourceCardId, logger, ct);
+
         var marker = $"<!-- agent-cross-comment:{sourceCardId}:{stepName} -->";
-        var commentBody = $"**Note from card #{sourceCardId} (step: {stepName}):**\n\n{content}";
+        var commentBody = $"**Note from card #{sourceCardId} (step: {stepName}):**\n\n{processedContent}";
         await boardClient.UpsertAgentCommentAsync(targetCardId, commentBody, marker, ct);
 
         logger.LogInformation("Posted cross-card comment on #{TargetCardId} from #{SourceCardId} step {Step}",

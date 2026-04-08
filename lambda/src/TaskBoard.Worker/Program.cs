@@ -116,6 +116,7 @@ switch (boardProvider)
 {
     case "trello":
     case "live":
+        builder.Services.AddSingleton<IImageUploader>(NullImageUploader.Instance);
         builder.Services.Configure<TrelloClientOptions>(builder.Configuration.GetSection(TrelloClientOptions.SectionName));
         var trelloBaseUrl = builder.Configuration.GetSection("Trello")["BaseUrl"] ?? "https://api.trello.com";
         builder.Services.AddTransient(sp =>
@@ -140,10 +141,12 @@ switch (boardProvider)
         builder.Services.Configure<GitHubProjectsOptions>(builder.Configuration.GetSection(GitHubProjectsOptions.SectionName));
         builder.Services.AddSingleton<ITaskBoardClient, GitHubProjectsClient>();
         builder.Services.AddSingleton<ICrossReferenceResolver, GitHubCrossReferenceResolver>();
+        builder.Services.AddSingleton<IImageUploader, GitHubImageUploader>();
         break;
     default:
         builder.Services.AddSingleton<ITaskBoardClient, StubTaskBoardClient>();
         builder.Services.AddSingleton<ICrossReferenceResolver, StubCrossReferenceResolver>();
+        builder.Services.AddSingleton<IImageUploader>(NullImageUploader.Instance);
         break;
 }
 
