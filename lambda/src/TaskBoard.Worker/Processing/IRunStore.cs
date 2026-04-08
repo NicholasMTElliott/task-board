@@ -20,4 +20,7 @@ public interface IRunStore
 
     /// <summary>Persists the story-point estimate for an agent run.</summary>
     Task UpdateRunEstimateAsync(string runId, double estimate, CancellationToken ct);
+
+    /// <summary>Persists the container session startup time in milliseconds for an agent run.</summary>
+    Task UpdateRunSessionStartupMsAsync(string runId, int startupMs, CancellationToken ct);
 }
