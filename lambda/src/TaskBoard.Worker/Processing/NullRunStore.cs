@@ -33,4 +33,7 @@ public sealed class NullRunStore : IRunStore
     public Task<IReadOnlyList<StepResultRecord>> GetLatestRunStepResultsAsync(
         string cardId, string stateName, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<StepResultRecord>>([]);
+
+    public Task UpdateRunEstimateAsync(string runId, double estimate, CancellationToken ct)
+        => Task.CompletedTask;
 }

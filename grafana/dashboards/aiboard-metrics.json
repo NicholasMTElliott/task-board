@@ -1,0 +1,116 @@
+{
+  "title": "aiboard Metrics",
+  "uid": "aiboard-metrics",
+  "version": 1,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": { "from": "now-30d", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Run Outcomes",
+      "type": "piechart",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 8 },
+      "targets": [
+        {
+          "datasource": "aiboard-postgres",
+          "rawSql": "SELECT outcome, COUNT(*) AS count FROM agent_run WHERE completed_at_utc IS NOT NULL AND $__timeFilter(started_at_utc) GROUP BY outcome ORDER BY count DESC",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Success Rate (%)",
+      "type": "stat",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 8 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "datasource": "aiboard-postgres",
+          "rawSql": "SELECT NOW() AS time, ROUND(100.0 * COUNT(*) FILTER (WHERE outcome = 'COMPLETE') / NULLIF(COUNT(*), 0), 1) AS \"Success Rate\" FROM agent_run WHERE completed_at_utc IS NOT NULL AND $__timeFilter(started_at_utc)",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Rate Limit Events Over Time",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "datasource": "aiboard-postgres",
+          "rawSql": "SELECT date_trunc('day', started_at_utc) AS time, COUNT(*) AS \"Rate Limits\" FROM v_run_metrics WHERE is_rate_limited = true AND $__timeFilter(started_at_utc) GROUP BY 1 ORDER BY 1",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Card Cycle Time (hours)",
+      "type": "barchart",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "datasource": "aiboard-postgres",
+          "rawSql": "SELECT card_id, ROUND((cycle_time_seconds / 3600)::numeric, 2) AS \"Cycle Time (h)\", ROUND((working_time_seconds / 3600)::numeric, 2) AS \"Working (h)\", ROUND((waiting_time_seconds / 3600)::numeric, 2) AS \"Waiting (h)\" FROM v_card_metrics ORDER BY cycle_time_seconds DESC LIMIT 20",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Step Durations (minutes)",
+      "type": "barchart",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "datasource": "aiboard-postgres",
+          "rawSql": "SELECT step_name, role, ROUND(AVG(duration_seconds / 60)::numeric, 2) AS \"Avg Duration (min)\" FROM v_step_duration WHERE $__timeFilter(started_at_utc) GROUP BY step_name, role ORDER BY \"Avg Duration (min)\" DESC LIMIT 15",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Rework Events",
+      "type": "table",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "datasource": "aiboard-postgres",
+          "rawSql": "SELECT card_id, state_name, entry_count, rework_count FROM v_card_rework ORDER BY rework_count DESC",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Runs Over Time",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "datasource": "aiboard-postgres",
+          "rawSql": "SELECT date_trunc('day', started_at_utc) AS time, COUNT(*) FILTER (WHERE outcome = 'COMPLETE') AS \"Complete\", COUNT(*) FILTER (WHERE outcome = 'ERROR') AS \"Error\", COUNT(*) FILTER (WHERE outcome = 'NEEDS_INFO') AS \"Needs Info\" FROM agent_run WHERE completed_at_utc IS NOT NULL AND $__timeFilter(started_at_utc) GROUP BY 1 ORDER BY 1",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Cycle Time per Story Point (hours/pt)",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 8 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "datasource": "aiboard-postgres",
+          "rawSql": "WITH latest_estimate AS (SELECT DISTINCT ON (card_id) card_id, estimate FROM agent_run WHERE outcome IS NOT NULL AND completed_at_utc IS NOT NULL AND estimate IS NOT NULL ORDER BY card_id, started_at_utc DESC), card_cycle AS (SELECT ar.card_id, le.estimate, EXTRACT(EPOCH FROM (MAX(ar.completed_at_utc) - MIN(ar.started_at_utc))) AS cycle_time_seconds FROM agent_run ar JOIN latest_estimate le ON ar.card_id = le.card_id WHERE ar.completed_at_utc IS NOT NULL GROUP BY ar.card_id, le.estimate), per_point AS (SELECT cycle_time_seconds / NULLIF(estimate, 0) AS cpp FROM card_cycle WHERE estimate > 0) SELECT NOW() AS time, ROUND((AVG(cpp) / 3600)::numeric, 2) AS \"Avg h/pt\", ROUND((COALESCE(STDDEV(cpp), 0) / 3600)::numeric, 2) AS \"Std Dev h/pt\" FROM per_point",
+          "format": "table"
+        }
+      ]
+    }
+  ]
+}

@@ -194,4 +194,16 @@ public sealed class PgRunStore(
         }
         return results;
     }
+
+    public async Task UpdateRunEstimateAsync(string runId, double estimate, CancellationToken ct)
+    {
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE agent_run SET estimate = $2 WHERE run_id = $1";
+        cmd.Parameters.AddWithValue(runId);
+        cmd.Parameters.AddWithValue(estimate);
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        logger.LogDebug("Updated estimate for run {RunId}: {Estimate}", runId, estimate);
+    }
 }

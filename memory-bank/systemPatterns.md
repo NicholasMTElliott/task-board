@@ -24,12 +24,22 @@ dotnet run -- --mode polling --board-id 1 --workspace .
     ↓ runs AgentRunner.ExecuteAsync() same as agent mode
 ```
 
+### Metrics Mode
+```
+dotnet run -- --mode metrics [--card-id N | --since 7d]
+    ↓
+MetricsRunner (C#)
+    ↓ queries PostgreSQL via IMetricsStore / PgMetricsStore
+    ↓ aggregates agent_run + step_result data (SQL views)
+Formats and prints metrics table to stdout
+```
+
 ### Queue-based Mode (legacy, for webhook-triggered flows)
 ```
 Webhook → Cloudflare Worker → PGMQ on Neon → .NET EventProcessor → Orchestrator → Board API
 ```
 
-> **Current focus:** Direct CLI agent mode and polling mode with GitHub Projects. Queue-based flow preserved for future webhook integration.
+> **Current focus:** Direct CLI agent mode, polling mode, and metrics mode with GitHub Projects. Queue-based flow preserved for future webhook integration.
 
 ## Core Design Patterns
 
@@ -41,6 +51,7 @@ States can define multiple sequential steps, each with its own role (and therefo
 - **Task file on disk** (`/.aiboard/tasks/{id}.md`) — steps read/write sections; card body is updated after each step.
 - **Comments file on disk** — refreshed after each step's comment is upserted to the board, so subsequent steps see prior step output as a conversation chain.
 - **Step-specific comments** — each step gets its own comment marker (`<!-- agent-step:{step.Name} -->`) on the card.
+- **Run-level comment** — posted after all steps with marker `<!-- agent-run:{runId} -->`, but **only when `gitNote` is non-null** (i.e., for `commit_and_push` states that produce a branch-push note). For `discard` states (design/test), no run-level comment is posted — only step comments appear.
 
 If any step returns non-COMPLETE, the chain halts and the card transitions based on that outcome.
 
@@ -168,6 +179,8 @@ The design pipeline includes a calibration-based estimation step (step 4). Confi
   ```json
   "COMPLETE": [{ "type": "moveToColumn", "value": "Designed" }, { "type": "setField", "field": "Estimate", "value": "{{estimation}}" }]
   ```
+- `AgentRunner` logs a warning when estimation is configured but no step returned a structured `estimate` field (the estimator agent may have described the estimate in `detail` text only)
+- `TransitionExecutor` validates that template variables are resolved before dispatching actions: if `{{...}}` patterns remain after substitution, the action is **skipped with a warning** instead of failing silently. Guard is active only when a `templateContext` is provided.
 
 ### Child Task Generation
 User stories can generate child task tickets via the `cardTypes` config:
@@ -205,6 +218,9 @@ User stories can generate child task tickets via the `cardTypes` config:
 | UpdateFileProcessor | Processes `.aiboard/updates/` files for child ticket creation and cross-card comments |
 | CrossReferenceResolver | Parse card references, fetch dependent cards |
 | IRunStore / PgRunStore | Agent run and step result persistence (PostgreSQL); NullRunStore for no-op |
+| IMetricsStore / PgMetricsStore | Read-only analytical queries over agent_run + step_result; NullMetricsStore for no-op |
+| MetricsRunner | CLI metrics mode: queries IMetricsStore and formats output for `--mode metrics` |
+| SinceParser | Parses `--since` time strings (e.g., `7d`, `24h`, `1w`) into UTC DateTime offsets |
 | PrerequisiteValidator | Startup validation of providers, board config, and prompt files |
 | CardSelector / CardFilterEvaluator | Polling card selection and filtering logic |
 | SystemSleepInhibitor | Prevents OS sleep during polling (Windows/Mac/Linux) |
@@ -318,6 +334,7 @@ Schema:
 | started_at_utc | Run start time |
 | completed_at_utc | Run end time (nullable) |
 | outcome | COMPLETE / NEEDS_INFO / ERROR (nullable) |
+| estimate | Story point estimate captured from the estimation step (nullable) |
 
 ### step_result (step tracking)
 | Column | Description |
@@ -330,6 +347,16 @@ Schema:
 | detail | Step output detail (nullable) |
 | started_at_utc | Step start time |
 | completed_at_utc | Step end time (nullable) |
+
+### SQL Views (metrics, V12)
+| View | Description |
+|------|-------------|
+| `v_run_metrics` | One row per completed run; derived `duration_seconds`, `is_complete`, `is_error`, `is_rate_limited` |
+| `v_step_duration` | One row per completed step; `duration_seconds` derived |
+| `v_card_metrics` | Per-card aggregates: cycle time, working time, waiting time |
+| `v_card_rework` | Cards/states re-entered more than once; `WHERE outcome IS NOT NULL` to exclude in-progress runs |
+
+Rate-limit detection in `v_run_metrics` uses `error_detail ILIKE '%rate limit%' OR error_detail ILIKE '%overloaded%'` (string matching; structured `failure_reason` column deferred to a follow-up ticket).
 
 ### queue tables (PGMQ, legacy)
 | Table | Purpose |
@@ -352,12 +379,3 @@ Schema:
 | origin_list_id | Pre-Questions list (for return-path validation) |
 | waiting_on_human | Boolean flag |
 
-### run_log
-| Column | Description |
-|--------|-------------|
-| run_id | UUID (PK) |
-| card_id | Card ID |
-| role | Agent role executed |
-| step_name | Step name within multi-step execution (nullable) |
-| outcome | COMPLETE / NEEDS_INFO / ERROR |
-| created_at_utc | Execution time |

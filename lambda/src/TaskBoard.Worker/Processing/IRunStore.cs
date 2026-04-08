@@ -17,4 +17,7 @@ public interface IRunStore
         string cardId, string? stateName, CancellationToken ct);
     Task<IReadOnlyList<StepResultRecord>> GetLatestRunStepResultsAsync(
         string cardId, string stateName, CancellationToken ct);
+
+    /// <summary>Persists the story-point estimate for an agent run.</summary>
+    Task UpdateRunEstimateAsync(string runId, double estimate, CancellationToken ct);
 }

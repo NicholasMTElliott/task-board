@@ -44,8 +44,9 @@ The orchestrator becomes:
 
 ```
 Execution modes:
-  --mode agent --card-id N    (direct, single card)
-  --mode polling --board-id 1 (automatic, priority-sorted pickup)
+  --mode agent --card-id N           (direct, single card)
+  --mode polling --board-id 1        (automatic, priority-sorted pickup)
+  --mode metrics [--card-id N | --since 7d]  (operational metrics report)
 
 AgentRunner flow (agent_run states):
   Fetch card → move to IN_PROGRESS column
@@ -244,7 +245,7 @@ File-based config (`workflow.github.json`) maps columns to roles and transitions
 docker compose up -d
 ```
 
-This launches PostgreSQL on `localhost:5432` and runs Flyway migrations automatically.
+This launches PostgreSQL on `localhost:5432`, runs Flyway migrations automatically, and starts a Grafana instance on `http://localhost:3000` (admin/admin) with a pre-provisioned metrics dashboard.
 The default connection string in `appsettings.json` connects to this local instance.
 
 ### Run an agent on a card
@@ -274,6 +275,15 @@ dotnet run --project lambda/src/TaskBoard.Worker -- --mode agent --card-id 3 --b
 
 # Polling (auto-pickup highest priority card from "Ready for" columns)
 dotnet run --project lambda/src/TaskBoard.Worker -- --mode polling --board-id 1 --workspace .
+
+# Metrics report (all time)
+dotnet run --project lambda/src/TaskBoard.Worker -- --mode metrics
+
+# Metrics report (last 7 days)
+dotnet run --project lambda/src/TaskBoard.Worker -- --mode metrics --since 7d
+
+# Metrics report (single card)
+dotnet run --project lambda/src/TaskBoard.Worker -- --mode metrics --card-id 3
 ```
 
 ---

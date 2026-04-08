@@ -486,6 +486,7 @@ public class AgentRunnerOptionalStepsTests : IDisposable
             new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_boardClient, normalisedConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 

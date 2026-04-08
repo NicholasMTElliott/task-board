@@ -4,7 +4,6 @@ public sealed class PgmqOptions
 {
     public const string SectionName = "Pgmq";
 
-    public string ConnectionString { get; set; } = "";
     public string PingQueueName { get; set; } = "pings";
     public int VisibilityTimeoutSeconds { get; set; } = 60;
     public int BatchSize { get; set; } = 10;
