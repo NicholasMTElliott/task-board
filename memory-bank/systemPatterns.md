@@ -182,6 +182,26 @@ The design pipeline includes a calibration-based estimation step (step 4). Confi
 - `AgentRunner` logs a warning when estimation is configured but no step returned a structured `estimate` field (the estimator agent may have described the estimate in `detail` text only)
 - `TransitionExecutor` validates that template variables are resolved before dispatching actions: if `{{...}}` patterns remain after substitution, the action is **skipped with a warning** instead of failing silently. Guard is active only when a `templateContext` is provided.
 
+### Agent Image Upload Pipeline
+Agents can generate images (screenshots, diagrams, etc.) and have them hosted on GitHub so they appear inline in ticket bodies, new ticket files, and cross-card comments.
+
+**Agent convention:** Write image files to `.aiboard/images/output/` in the worktree and reference them with standard markdown: `![alt](.aiboard/images/output/file.png)`. The harness detects these local paths and handles upload transparently.
+
+**Upload mechanism:** `GitHubImageUploader` commits files to a dedicated `agent-images` branch via `gh api repos/{owner}/{repo}/contents/{path}` (GitHub Contents API). Returns `raw.githubusercontent.com` URLs. Content-hash deduplication (SHA256 truncated to 16 hex, path = `{cardId}/{hash}.{ext}`) prevents duplicate uploads. Auto-creates the `agent-images` branch on first use.
+
+**Processing:** `ImageReferenceProcessor.ProcessLocalImagesAsync(markdown, workspacePath, uploader)` scans markdown for `.aiboard/images/output/` path patterns, uploads each unique file once, and rewrites the markdown. Failures produce a `[Image: file — upload failed]` placeholder (warning logged, no exception).
+
+**Supported formats:** 7 image types (jpg, jpeg, png, gif, webp, svg, bmp). 10 MB per-file limit enforced by the uploader.
+
+**Integration points (3 call sites):**
+- `AgentRunner.UpdateCardBodyFromTaskFileAsync` — card body on board write-back
+- `UpdateFileProcessor.ProcessNewTicketFileAsync` — new `.aiboard/updates/new-{slug}.md` tickets
+- `UpdateFileProcessor.ProcessCommentFileAsync` — cross-card comment files
+
+**Provider behavior:** `GitHubImageUploader` is registered for the `github` provider. `NullImageUploader` (returns null for all uploads) is used for `trello` and `stub` providers.
+
+**Known limitation:** `raw.githubusercontent.com` URLs require repo read access. Viewers with GitHub "triage" role (issue-only access) on private repos cannot see images. All standard collaborators (read access or above) can view them. Public repos: fully accessible.
+
 ### Child Task Generation
 User stories can generate child task tickets via the `cardTypes` config:
 ```json
@@ -215,7 +235,10 @@ User stories can generate child task tickets via the `cardTypes` config:
 | AgentExecutorResolver | Multi-executor registry; resolves by provider key (`claude-cli`, `codex`, `stub`) |
 | GitWorkspaceManager | Git worktree lifecycle for isolated agent execution |
 | TaskFileManager | Write board cards as `.aiboard/tasks/{id}.md` files + comments files |
-| UpdateFileProcessor | Processes `.aiboard/updates/` files for child ticket creation and cross-card comments |
+| UpdateFileProcessor | Processes `.aiboard/updates/` files for child ticket creation and cross-card comments; applies image upload processing to outbound markdown |
+| IImageUploader / NullImageUploader | Interface for image upload; NullImageUploader is the no-op for Trello/stub providers |
+| GitHubImageUploader | Uploads agent-generated images to `agent-images` branch via GitHub Contents API; SHA256 content-hash dedup; auto-creates branch on first use |
+| ImageReferenceProcessor | Scans outbound markdown for `.aiboard/images/output/` paths, uploads via `IImageUploader`, rewrites to hosted URLs before board write-back |
 | CrossReferenceResolver | Parse card references, fetch dependent cards |
 | IRunStore / PgRunStore | Agent run and step result persistence (PostgreSQL); NullRunStore for no-op |
 | IMetricsStore / PgMetricsStore | Read-only analytical queries over agent_run + step_result; NullMetricsStore for no-op |

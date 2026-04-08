@@ -11,6 +11,7 @@ Manual ticket management is repetitive: drafting technical designs, generating t
 - Cross-ticket conflicts go unnoticed → dedicated review steps assess related tickets before and after design
 - Ticket sizing is inconsistent or skipped → estimator agent produces calibration-based size estimates
 - User stories lack task decomposition → agents can generate child task tickets automatically
+- Agent output is text-only, limiting richness of designs and bug reports → agents can write images to `.aiboard/images/output/` and the harness uploads them to GitHub so they appear inline in tickets
 
 ## How It Should Work (Operator Perspective)
 1. Operator creates an issue and adds it to the project board in **Backlog**.

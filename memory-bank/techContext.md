@@ -80,6 +80,7 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ Metrics reporting (`--mode metrics`): `IMetricsStore` / `PgMetricsStore`, SQL views, Grafana dashboard in docker-compose
 - ✅ Connection string config key renamed from `Pgmq:ConnectionString` to `Database:ConnectionString`
 - ✅ Estimate persisted to `agent_run.estimate` column (captured during design pipeline estimation step)
+- ✅ Agent image upload pipeline: agents write images to `.aiboard/images/output/`; harness uploads to dedicated `agent-images` branch via GitHub Contents API (`gh api repos/{repo}/contents/{path}`); SHA256 content-hash deduplication; `NullImageUploader` for non-GitHub providers
 
 ## Open Technical Decisions
 - [ ] Webhook/event-driven triggers (currently manual CLI or polling)
