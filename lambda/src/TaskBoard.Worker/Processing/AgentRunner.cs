@@ -413,7 +413,7 @@ public sealed partial class AgentRunner(
                     if (gitBehavior == "discard")
                         await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
 
-                    await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, lastResult.Outcome, lastResult.Detail, cancellationToken));
+                    await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, lastResult.Outcome, lastResult.Detail, null, cancellationToken));
                     return new AgentRunResult(lastResult.Outcome, lastResult.Detail, lastResult.Questions);
                 }
             }
@@ -471,7 +471,7 @@ public sealed partial class AgentRunner(
             var runComment = $"{commentPrefix}\n\n{FormatComment(lastResult!, gitNote, includeConversationLog: runStore is NullRunStore)}";
             await boardClient.UpsertAgentCommentAsync(cardId, runComment, runMarker, cancellationToken);
 
-            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, lastResult!.Outcome, null, cancellationToken));
+            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, lastResult!.Outcome, null, null, cancellationToken));
 
             var completeKey = lastResult!.Outcome.ToString();
             if (state.Transitions.TryGetValue(completeKey, out var completeTarget))
@@ -531,7 +531,7 @@ public sealed partial class AgentRunner(
                     cardId);
             }
 
-            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, AgentOutcome.ERROR, rateLimitEx.Message, cancellationToken));
+            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, AgentOutcome.ERROR, rateLimitEx.Message, FailureReason.RATE_LIMIT, cancellationToken));
 
             // Rethrow so PollingRunner can back off, or Program.cs can handle cleanly
             throw;
@@ -600,7 +600,7 @@ public sealed partial class AgentRunner(
                 logger.LogWarning(postEx, "Failed to post error feedback to board for card {CardId}", cardId);
             }
 
-            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, AgentOutcome.ERROR, ex.Message, cancellationToken));
+            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, AgentOutcome.ERROR, ex.Message, FailureReason.AGENT_ERROR, cancellationToken));
             return new AgentRunResult(AgentOutcome.ERROR, ex.Message);
         }
         } // using logger scope

@@ -930,7 +930,7 @@ public class AgentRunnerTests : IDisposable
             Arg.Is<StepResultRecord>(r => r.CardId == TargetCardId && r.Outcome == AgentOutcome.COMPLETE),
             Arg.Any<CancellationToken>());
         await mockRunStore.Received(1).CompleteRunAsync(
-            Arg.Any<string>(), AgentOutcome.COMPLETE, Arg.Is<string?>(s => s == null), Arg.Any<CancellationToken>());
+            Arg.Any<string>(), AgentOutcome.COMPLETE, Arg.Is<string?>(s => s == null), Arg.Is<FailureReason?>(r => r == null), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -1011,7 +1011,67 @@ public class AgentRunnerTests : IDisposable
         await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
 
         await mockRunStore.Received().CompleteRunAsync(
-            Arg.Any<string>(), AgentOutcome.ERROR, Arg.Any<string>(), Arg.Any<CancellationToken>());
+            Arg.Any<string>(), AgentOutcome.ERROR, Arg.Any<string>(), Arg.Is<FailureReason?>(r => r == null), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RateLimitException_RecordsRateLimitFailureReason()
+    {
+        SetupBoardCards();
+        var throwingExecutor = Substitute.For<IAgentExecutor>();
+        throwingExecutor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns<AgentResult>(_ => throw new RateLimitException("Claude rate limited", RateLimitSource.AgentCli));
+
+        var mockRunStore = Substitute.For<IRunStore>();
+        var runner = new AgentRunner(
+            _trelloClient, AgentExecutorResolver.ForSingleExecutor(throwingExecutor), _taskFileManager, _gitWorkspaceManager,
+            _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            mockRunStore,
+            NullLogger<AgentRunner>.Instance);
+
+        await Assert.ThrowsAsync<RateLimitException>(() =>
+            runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None));
+
+        await mockRunStore.Received(1).CompleteRunAsync(
+            Arg.Any<string>(), AgentOutcome.ERROR, Arg.Any<string>(), FailureReason.RATE_LIMIT, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UnhandledException_RecordsAgentErrorFailureReason()
+    {
+        SetupBoardCards();
+        var throwingExecutor = Substitute.For<IAgentExecutor>();
+        throwingExecutor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns<AgentResult>(_ => throw new InvalidOperationException("Unexpected failure"));
+
+        var mockRunStore = Substitute.For<IRunStore>();
+        var runner = new AgentRunner(
+            _trelloClient, AgentExecutorResolver.ForSingleExecutor(throwingExecutor), _taskFileManager, _gitWorkspaceManager,
+            _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            mockRunStore,
+            NullLogger<AgentRunner>.Instance);
+
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.ERROR, result.Outcome);
+        await mockRunStore.Received(1).CompleteRunAsync(
+            Arg.Any<string>(), AgentOutcome.ERROR, Arg.Any<string>(), FailureReason.AGENT_ERROR, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SuccessOutcome_RecordsNullFailureReason()
+    {
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+        var mockRunStore = Substitute.For<IRunStore>();
+
+        var runner = CreateRunnerWithRunStore(mockRunStore);
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        await mockRunStore.Received(1).CompleteRunAsync(
+            Arg.Any<string>(), AgentOutcome.COMPLETE, Arg.Any<string?>(), Arg.Is<FailureReason?>(r => r == null), Arg.Any<CancellationToken>());
     }
 
     [Fact]

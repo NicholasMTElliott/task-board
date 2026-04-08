@@ -11,7 +11,7 @@ public interface IRunStore
 {
     Task CreateRunAsync(RunRecord run, CancellationToken ct);
     Task UpdateRunProgressAsync(string runId, int completedSteps, CancellationToken ct);
-    Task CompleteRunAsync(string runId, AgentOutcome outcome, string? errorDetail, CancellationToken ct);
+    Task CompleteRunAsync(string runId, AgentOutcome outcome, string? errorDetail, FailureReason? failureReason, CancellationToken ct);
     Task SaveStepResultAsync(StepResultRecord result, CancellationToken ct);
     Task<IReadOnlyList<StepResultRecord>> GetStepResultsForCardAsync(
         string cardId, string? stateName, CancellationToken ct);
