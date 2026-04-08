@@ -221,20 +221,24 @@ builder.Services.AddSingleton<MergeRunner>();
 builder.Services.AddSingleton<CompletionRunner>();
 builder.Services.AddSingleton<PollingRunner>();
 
-// ── Queue-driven mode services (registered if Pgmq connection is configured) ──
-var pgmqConnectionString = builder.Configuration.GetSection(PgmqOptions.SectionName)["ConnectionString"];
-if (!string.IsNullOrWhiteSpace(pgmqConnectionString))
+// ── Database services (registered if Database connection is configured) ───────
+var dbConnectionString = builder.Configuration.GetSection(DatabaseOptions.SectionName)["ConnectionString"];
+if (!string.IsNullOrWhiteSpace(dbConnectionString))
 {
+    builder.Services.AddSingleton(NpgsqlDataSource.Create(dbConnectionString));
+    builder.Services.AddSingleton<IRunStore, PgRunStore>();
+    builder.Services.AddSingleton<IMetricsStore, PgMetricsStore>();
+    builder.Services.AddSingleton<MetricsRunner>();
     builder.Services.Configure<PgmqOptions>(builder.Configuration.GetSection(PgmqOptions.SectionName));
-    builder.Services.AddSingleton(NpgsqlDataSource.Create(pgmqConnectionString));
     builder.Services.AddSingleton<IPingQueueClient, PgmqPingQueueClient>();
     builder.Services.AddSingleton<ICardClaimService, CardClaimService>();
     builder.Services.AddSingleton<QueueDrivenRunner>();
-    builder.Services.AddSingleton<IRunStore, PgRunStore>();
 }
 else
 {
     builder.Services.AddSingleton<IRunStore>(NullRunStore.Instance);
+    builder.Services.AddSingleton<IMetricsStore>(NullMetricsStore.Instance);
+    builder.Services.AddSingleton<MetricsRunner>();
 }
 
 using var host = builder.Build();
@@ -278,10 +282,10 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
     logger.LogInformation("Available AI providers: {Providers}",
         string.Join(", ", detectedProviders.Where(p => p != "stub").Order()));
 
-    if (!string.IsNullOrWhiteSpace(pgmqConnectionString))
+    if (!string.IsNullOrWhiteSpace(dbConnectionString))
     {
         var (pgOk, pgError) = await PrerequisiteValidator.ValidatePostgresAsync(
-            pgmqConnectionString);
+            dbConnectionString);
         if (!pgOk)
         {
             logger.LogError("PostgreSQL connection failed: {Error}", pgError);
@@ -292,7 +296,7 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
     else
     {
         logger.LogWarning(
-            "Pgmq:ConnectionString not configured — run tracking disabled (using NullRunStore)");
+            "Database:ConnectionString not configured — run tracking and metrics disabled (using NullRunStore)");
     }
 }
 
@@ -451,9 +455,9 @@ if (mode == "queue")
         return;
     }
 
-    if (string.IsNullOrWhiteSpace(pgmqConnectionString))
+    if (string.IsNullOrWhiteSpace(dbConnectionString))
     {
-        logger.LogError("Pgmq:ConnectionString (or --neon-connection) is required for queue mode");
+        logger.LogError("Database:ConnectionString (or --db-connection) is required for queue mode");
         return;
     }
 
@@ -487,8 +491,28 @@ if (mode == "queue")
     return;
 }
 
+if (mode == "metrics")
+{
+    var cardId = builder.Configuration["CardId"];
+    var sinceArg = builder.Configuration["Since"];
+    var since = SinceParser.Parse(sinceArg);
+
+    if (sinceArg is not null && since is null)
+    {
+        logger.LogError(
+            "Invalid --since value '{SinceArg}'. Use format <N><unit> where unit is h, d, or w. Example: 7d",
+            sinceArg);
+        return;
+    }
+
+    using var scope = host.Services.CreateScope();
+    var metricsRunner = scope.ServiceProvider.GetRequiredService<MetricsRunner>();
+    await metricsRunner.RunAsync(cardId, since, CancellationToken.None);
+    return;
+}
+
 // No recognized mode — show help
-logger.LogError("No valid --mode specified. Use --mode agent, --mode polling, or --mode queue.");
+logger.LogError("No valid --mode specified. Use --mode agent, --mode polling, --mode queue, or --mode metrics.");
 CliDefinitions.PrintHelp();
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
