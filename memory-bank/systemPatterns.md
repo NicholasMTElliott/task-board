@@ -136,6 +136,33 @@ Task files can reference other cards (e.g., `#5`, `#12`). The `CrossReferenceRes
 ### Agent Executor Pattern
 Agent executors are registered via `AgentExecutorResolver` which resolves by provider key (`claude-cli`, `codex`, `stub`). Selection via `AGENT_EXECUTOR` env var. Multiple executors can coexist; the resolver auto-detects available providers at startup.
 
+### Container Session Reuse (IAgentExecutorSession)
+To avoid per-step container startup overhead, executors that support Docker can implement `ISessionableAgentExecutor`, which creates a long-lived container session spanning the full agent run pipeline (main steps + gate check + optional specialist reviews).
+
+**Interfaces:**
+- `IAgentExecutorSession` (`IAsyncDisposable`) — represents a live container; `SessionId`, `ProviderKey`, `IsAlive`, `ExecuteInSessionAsync`
+- `ISessionableAgentExecutor : IAgentExecutor` — adds `ProviderKey` and `TryCreateSessionAsync(SessionRequest, CancellationToken)`
+- `SessionRequest` record — `CardId`, `RunId`, `ContainerName` (`aiboard-{cardId}`), `ImageName`, optional `Mounts` and `EnvironmentVariables`
+
+**Lifecycle in `AgentRunner.ExecuteAsync`:**
+1. Before the step loop, attempt `TryCreateSessionAsync` if the resolved executor implements `ISessionableAgentExecutor` and `DockerAgentOptions.ReuseContainer` is `true`.
+2. All LLM invocations (steps, gate check, optional specialist reviews) go through `ExecuteWithSessionAsync`, which routes through `session.ExecuteInSessionAsync` if the session is alive and the step's provider matches.
+3. Provider mismatch (e.g., haiku gate check on `claude-cli` while session is `docker`) bypasses the session and calls `executor.ExecuteAsync` directly — logged at Debug.
+4. If the session dies between steps, the invocation falls back to `executor.ExecuteAsync` transparently (logged at Warning).
+5. `await using` on the session guarantees disposal on all exit paths (success, step failure, cancellation, exceptions). Disposal calls `docker stop` + `docker rm`.
+
+**Container naming:** `aiboard-{cardId}` — one per card, mutual exclusion enforced by IN_PROGRESS column transition.
+
+**Configuration:** `DockerAgentOptions` section in `appsettings.json`:
+- `ReuseContainer` (bool, default: `true`) — set to `false` to revert to per-step `docker run`
+- `ImageName` (string, default: `"aiboard-agent:latest"`) — Docker image used for container creation
+
+**Fallback strategy:** If `TryCreateSessionAsync` returns `null` (image not found, Docker unavailable), the run proceeds without a session — all steps use `executor.ExecuteAsync` directly.
+
+**Orphaned container detection:** `PrerequisiteValidator.DetectOrphanedContainersAsync` runs `docker ps --filter name=aiboard-` at startup and logs a warning if any `aiboard-*` containers are found (prior crash cleanup). Cleanup is manual.
+
+**Non-session executors** (`ClaudeAgentExecutor`, `CodexAgentExecutor`, `StubAgentExecutor`) do not implement `ISessionableAgentExecutor` and are completely unaffected.
+
 ### Claude CLI Subprocess Pattern
 The .NET worker invokes the Claude CLI (`claude`) as a subprocess via `ClaudeAgentExecutor`.
 
@@ -373,6 +400,7 @@ Schema:
 | completed_at_utc | Run end time (nullable) |
 | outcome | COMPLETE / NEEDS_INFO / ERROR (nullable) |
 | estimate | Story point estimate captured from the estimation step (nullable) |
+| session_startup_ms | Time (ms) to create and start the Docker container for a session-based run (nullable; NULL = no session) |
 
 ### step_result (step tracking)
 | Column | Description |
@@ -385,6 +413,7 @@ Schema:
 | detail | Step output detail (nullable) |
 | started_at_utc | Step start time |
 | completed_at_utc | Step end time (nullable) |
+| session_exec_ms | Time (ms) for this step's execution via `docker exec` (nullable; NULL = no session or non-Docker executor) |
 
 ### SQL Views (metrics, V12)
 | View | Description |

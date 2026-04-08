@@ -52,8 +52,11 @@ AgentRunner flow (agent_run states):
   Fetch card → move to IN_PROGRESS column
   → create git worktree, resolve cross-references
   → write task files + comments file
-  → execute steps sequentially (each step = Claude CLI subprocess)
-  → optional gate check (lightweight Haiku validation)
+  → [optional] create Docker container session (ISessionableAgentExecutor)
+  → execute steps sequentially; each step routed through session (docker exec) or direct executor
+  → optional gate check (lightweight Haiku validation) — also routed through session
+  → optional specialist reviews — also routed through session
+  → dispose session (docker stop + docker rm)
   → post-process: upsert step comments, handle git, move to outcome column
 
 MergeRunner flow (system_merge states):
