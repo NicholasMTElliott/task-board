@@ -234,6 +234,7 @@ File-based config (`workflow.github.json`) maps columns to roles and transitions
 | Board abstraction | `ITaskBoardClient` interface |
 | Orchestrator | C# / .NET 10 |
 | Agent executor | Claude CLI subprocess (`--output-format stream-json` + `--json-schema`) |
+| Agent sandbox image | `docker/agent-sandbox/Dockerfile` — node:22-slim + Claude CLI + git + ripgrep; `aiboard-agent-sandbox:latest` |
 | Git isolation | Git worktrees (`GitWorkspaceManager`) |
 | Task files | `.aiboard/tasks/{id}.md` (ephemeral, gitignored) |
 
@@ -256,6 +257,22 @@ docker compose up -d
 
 This launches PostgreSQL on `localhost:5432`, runs Flyway migrations automatically, and starts a Grafana instance on `http://localhost:3000` (admin/admin) with a pre-provisioned metrics dashboard.
 The default connection string in `appsettings.json` connects to this local instance.
+
+### Build the agent sandbox image (optional)
+
+Only needed if using Docker-based agent execution (in progress — see story #47).
+
+```powershell
+.\scripts\build-sandbox.ps1
+```
+
+Or via docker compose:
+
+```powershell
+docker compose --profile build up agent-sandbox
+```
+
+Build args: `-BaseImage`, `-AgentUid`, `-AgentGid`, `-ClaudeCliVersion`, `-Tag`, `-NoCache`.
 
 ### Run an agent on a card
 

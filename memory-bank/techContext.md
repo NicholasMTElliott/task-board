@@ -11,6 +11,7 @@
 | Board provider (primary) | GitHub Projects v2 | Via `gh` CLI (GraphQL + REST) |
 | Board provider (legacy) | Trello | REST API |
 | Git isolation | Git worktrees | `GitWorkspaceManager` |
+| Agent sandbox image | `docker/agent-sandbox/Dockerfile` | node:22-slim + Claude CLI (npm) + git + ripgrep + curl; non-root `agent` user; base image / UID/GID configurable via build args |
 | Workflow config | `workflow.github.json` | File-based, in repo |
 
 ### Edge / Ingestion (Legacy Queue Path)
@@ -87,6 +88,7 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ Card type labels (type:story, type:task, type:bug)
 - ✅ Event-driven parent completion (completeParentIfReady transition action replaces polled children_complete for stories)
 - ✅ GetCardAsync now includes project field metadata (priority, estimate) via gh project item-list
+- ✅ Agent sandbox Docker image (`docker/agent-sandbox/Dockerfile`): node:22-slim base, Claude CLI via npm, git, ripgrep, curl, non-root `agent` user (UID 1000, configurable), `/workspace` mount target; build via `scripts/build-sandbox.ps1` or `docker compose --profile build up agent-sandbox`; image tag `aiboard-agent-sandbox:latest`
 
 ## Open Technical Decisions
 - [ ] Webhook/event-driven triggers (currently manual CLI or polling)
