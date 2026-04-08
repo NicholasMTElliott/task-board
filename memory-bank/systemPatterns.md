@@ -41,6 +41,7 @@ States can define multiple sequential steps, each with its own role (and therefo
 - **Task file on disk** (`/.aiboard/tasks/{id}.md`) — steps read/write sections; card body is updated after each step.
 - **Comments file on disk** — refreshed after each step's comment is upserted to the board, so subsequent steps see prior step output as a conversation chain.
 - **Step-specific comments** — each step gets its own comment marker (`<!-- agent-step:{step.Name} -->`) on the card.
+- **Run-level comment** — posted after all steps with marker `<!-- agent-run:{runId} -->`, but **only when `gitNote` is non-null** (i.e., for `commit_and_push` states that produce a branch-push note). For `discard` states (design/test), no run-level comment is posted — only step comments appear.
 
 If any step returns non-COMPLETE, the chain halts and the card transitions based on that outcome.
 
@@ -168,6 +169,8 @@ The design pipeline includes a calibration-based estimation step (step 4). Confi
   ```json
   "COMPLETE": [{ "type": "moveToColumn", "value": "Designed" }, { "type": "setField", "field": "Estimate", "value": "{{estimation}}" }]
   ```
+- `AgentRunner` logs a warning when estimation is configured but no step returned a structured `estimate` field (the estimator agent may have described the estimate in `detail` text only)
+- `TransitionExecutor` validates that template variables are resolved before dispatching actions: if `{{...}}` patterns remain after substitution, the action is **skipped with a warning** instead of failing silently. Guard is active only when a `templateContext` is provided.
 
 ### Child Task Generation
 User stories can generate child task tickets via the `cardTypes` config:
@@ -352,12 +355,3 @@ Schema:
 | origin_list_id | Pre-Questions list (for return-path validation) |
 | waiting_on_human | Boolean flag |
 
-### run_log
-| Column | Description |
-|--------|-------------|
-| run_id | UUID (PK) |
-| card_id | Card ID |
-| role | Agent role executed |
-| step_name | Step name within multi-step execution (nullable) |
-| outcome | COMPLETE / NEEDS_INFO / ERROR |
-| created_at_utc | Execution time |

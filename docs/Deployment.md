@@ -62,12 +62,12 @@ Verify migrations applied:
 ./scripts/migrate.ps1 -Action info
 ```
 
-You should see V1 through V8 all marked as "Success".
+You should see V1 through V11 all marked as "Success".
 
 **What gets created:**
 - `pgmq.q_events` / `pgmq.q_pings` — message queues
 - `card_state` — distributed card locking
-- `run_log` — agent execution history
+- `agent_run` / `step_result` — agent execution history
 - `processed_events` — webhook idempotency
 
 ---
@@ -364,7 +364,7 @@ dotnet run --project lambda/src/TaskBoard.Worker -- --help
 **Database connection failures**
 - Verify `NEON_DATABASE_URL` is correct and the database is active (Neon free tier auto-suspends after inactivity).
 - Run `./scripts/migrate.ps1 -Action info` to test connectivity.
-- Check that migrations V1-V8 are all applied.
+- Check that migrations V1-V11 are all applied.
 
 **Agent process hangs or times out**
 - Default agent timeout is 1800s (30 min). Check `ClaudeCli__TimeoutSeconds`.

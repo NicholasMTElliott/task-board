@@ -214,6 +214,62 @@ public class TransitionExecutorTests
         await _boardClient.Received(1).AssignAsync(CardId, "bot-user", Arg.Any<CancellationToken>());
     }
 
+    // --- Unresolved template detection ---
+
+    [Fact]
+    public async Task ExecuteAsync_UnresolvedTemplateInValue_SkipsAction()
+    {
+        // Context does not contain "estimation" — {{estimation}} remains unresolved
+        var context = new Dictionary<string, string> { ["other"] = "x" };
+        var target = new TransitionTarget([new TransitionAction(ActionTypes.SetField, "{{estimation}}", Field: "Estimate")]);
+
+        await TransitionExecutor.ExecuteAsync(CardId, target, _boardClient, _logger, CancellationToken.None, context);
+
+        // SetFieldAsync should NOT be called — unresolved template was detected
+        await _boardClient.DidNotReceiveWithAnyArgs().SetFieldAsync(default!, default!, default!, default);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ResolvedTemplate_CallsSetField()
+    {
+        // Context contains "estimation" — template is fully resolved
+        var context = new Dictionary<string, string> { ["estimation"] = "4" };
+        var target = new TransitionTarget([new TransitionAction(ActionTypes.SetField, "{{estimation}}", Field: "Estimate")]);
+
+        await TransitionExecutor.ExecuteAsync(CardId, target, _boardClient, _logger, CancellationToken.None, context);
+
+        await _boardClient.Received(1).SetFieldAsync(CardId, "Estimate", "4", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UnresolvedTemplateInField_SkipsAction()
+    {
+        // Context does not contain "fieldName" — {{fieldName}} remains unresolved
+        var context = new Dictionary<string, string> { ["other"] = "x" };
+        var target = new TransitionTarget([new TransitionAction(ActionTypes.ClearField, Field: "{{fieldName}}")]);
+
+        await TransitionExecutor.ExecuteAsync(CardId, target, _boardClient, _logger, CancellationToken.None, context);
+
+        await _boardClient.DidNotReceiveWithAnyArgs().ClearFieldAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UnresolvedTemplateInValue_ContinuesToNextAction()
+    {
+        // Unresolved template should be skipped, but subsequent actions must still execute
+        var context = new Dictionary<string, string> { ["other"] = "x" };
+        var target = new TransitionTarget([
+            new TransitionAction(ActionTypes.SetField, "{{estimation}}", Field: "Estimate"),
+            new TransitionAction(ActionTypes.MoveToColumn, "Designed"),
+        ]);
+
+        await TransitionExecutor.ExecuteAsync(CardId, target, _boardClient, _logger, CancellationToken.None, context);
+
+        // SetField was skipped, but MoveToColumn must still be called
+        await _boardClient.DidNotReceiveWithAnyArgs().SetFieldAsync(default!, default!, default!, default);
+        await _boardClient.Received(1).MoveCardToColumnAsync(CardId, "Designed", Arg.Any<CancellationToken>());
+    }
+
     // --- Empty target ---
 
     [Fact]
