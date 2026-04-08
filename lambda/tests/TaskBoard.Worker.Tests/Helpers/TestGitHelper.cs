@@ -42,6 +42,18 @@ internal static class TestGitHelper
         return stdout.Trim();
     }
 
+    /// <summary>Initialize a bare git repo suitable for worktree tests.</summary>
+    internal static void InitGitRepo(string path)
+    {
+        RunGitSync(path, "init");
+        RunGitSync(path, "config", "user.email", "test@test.com");
+        RunGitSync(path, "config", "user.name", "Test");
+        File.WriteAllText(Path.Combine(path, ".gitignore"), ".aiboard/\n");
+        File.WriteAllText(Path.Combine(path, ".gitkeep"), "");
+        RunGitSync(path, "add", ".");
+        RunGitSync(path, "commit", "-m", "initial");
+    }
+
     private static ProcessStartInfo CreateStartInfo(string workingDirectory, string[] args)
     {
         var psi = new ProcessStartInfo

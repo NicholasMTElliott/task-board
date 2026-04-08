@@ -52,8 +52,11 @@ AgentRunner flow (agent_run states):
   Fetch card → move to IN_PROGRESS column
   → create git worktree, resolve cross-references
   → write task files + comments file
-  → execute steps sequentially (each step = Claude CLI subprocess)
-  → optional gate check (lightweight Haiku validation)
+  → [optional] create Docker container session (ISessionableAgentExecutor)
+  → execute steps sequentially; each step routed through session (docker exec) or direct executor
+  → optional gate check (lightweight Haiku validation) — also routed through session
+  → optional specialist reviews — also routed through session
+  → dispose session (docker stop + docker rm)
   → post-process: upload agent-generated images, upsert step comments, handle git, move to outcome column
 
 MergeRunner flow (system_merge states):
@@ -234,6 +237,7 @@ File-based config (`workflow.github.json`) maps columns to roles and transitions
 | Board abstraction | `ITaskBoardClient` interface |
 | Orchestrator | C# / .NET 10 |
 | Agent executor | Claude CLI subprocess (`--output-format stream-json` + `--json-schema`) |
+| Agent sandbox image | `docker/agent-sandbox/Dockerfile` — node:22-slim + Claude CLI + git + ripgrep; `aiboard-agent-sandbox:latest` |
 | Git isolation | Git worktrees (`GitWorkspaceManager`) |
 | Task files | `.aiboard/tasks/{id}.md` (ephemeral, gitignored) |
 
@@ -256,6 +260,22 @@ docker compose up -d
 
 This launches PostgreSQL on `localhost:5432`, runs Flyway migrations automatically, and starts a Grafana instance on `http://localhost:3000` (admin/admin) with a pre-provisioned metrics dashboard.
 The default connection string in `appsettings.json` connects to this local instance.
+
+### Build the agent sandbox image (optional)
+
+Only needed if using Docker-based agent execution (in progress — see story #47).
+
+```powershell
+.\scripts\build-sandbox.ps1
+```
+
+Or via docker compose:
+
+```powershell
+docker compose --profile build up agent-sandbox
+```
+
+Build args: `-BaseImage`, `-AgentUid`, `-AgentGid`, `-ClaudeCliVersion`, `-Tag`, `-NoCache`.
 
 ### Run an agent on a card
 

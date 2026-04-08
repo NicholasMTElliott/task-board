@@ -209,6 +209,10 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
 var agentIdentity = AgentIdentity.Generate();
 builder.Services.AddSingleton(agentIdentity);
 
+// Docker agent options (always registered; defaults used when section is absent)
+builder.Services.Configure<DockerAgentOptions>(builder.Configuration.GetSection(DockerAgentOptions.SectionName));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<DockerAgentOptions>>().Value);
+
 // Agent mode services
 builder.Services.AddHttpClient("ImageDownloader");
 builder.Services.AddSingleton<ImageDownloader>();
@@ -286,6 +290,18 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
     logger.LogInformation("All prerequisites validated successfully");
     logger.LogInformation("Available AI providers: {Providers}",
         string.Join(", ", detectedProviders.Where(p => p != "stub").Order()));
+
+    // Check for orphaned aiboard-* containers from prior crashed runs
+    var orphanedContainers = await PrerequisiteValidator.DetectOrphanedContainersAsync();
+    if (orphanedContainers.Count > 0)
+    {
+        logger.LogWarning(
+            "Found {Count} orphaned aiboard container(s) from prior runs: {Names}. " +
+            "These may consume resources. Run 'docker rm -f {JoinedNames}' to clean up.",
+            orphanedContainers.Count,
+            string.Join(", ", orphanedContainers),
+            string.Join(" ", orphanedContainers));
+    }
 
     if (!string.IsNullOrWhiteSpace(dbConnectionString))
     {
