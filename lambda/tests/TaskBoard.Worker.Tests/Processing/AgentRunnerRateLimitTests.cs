@@ -87,6 +87,7 @@ public class AgentRunnerRateLimitTests : IDisposable
             new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 

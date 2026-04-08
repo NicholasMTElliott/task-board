@@ -50,6 +50,7 @@ public class AgentRunnerTests : IDisposable
             new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -198,6 +199,7 @@ public class AgentRunnerTests : IDisposable
             BuildWorkflowConfig().Normalised(), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, BuildWorkflowConfig().Normalised(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         SetupBoardCards();
@@ -549,6 +551,7 @@ public class AgentRunnerTests : IDisposable
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
@@ -577,6 +580,7 @@ public class AgentRunnerTests : IDisposable
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -587,6 +591,7 @@ public class AgentRunnerTests : IDisposable
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             runStore,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -604,6 +609,7 @@ public class AgentRunnerTests : IDisposable
                 new AgentIdentity("Test", "Agent", "TestMachine"),
                 NullLogger<UpdateFileProcessor>.Instance),
             runStore,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -674,12 +680,11 @@ public class AgentRunnerTests : IDisposable
 
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
 
-        // Should have 2 step comments + 1 run-level comment = at least 3 upsert calls
+        // Should have exactly 2 step comments; no run-level comment for discard states (gitNote is null)
         var commentCalls = _trelloClient.ReceivedCalls()
             .Where(c => c.GetMethodInfo().Name == "UpsertAgentCommentAsync")
             .ToList();
-        Assert.True(commentCalls.Count >= 3,
-            $"Expected at least 3 comment upserts (2 steps + 1 run), got {commentCalls.Count}");
+        Assert.Equal(2, commentCalls.Count);
 
         // Verify step markers are used
         var markers = commentCalls.Select(c => (string)c.GetArguments()[2]!).ToList();
@@ -713,6 +718,7 @@ public class AgentRunnerTests : IDisposable
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
@@ -744,6 +750,7 @@ public class AgentRunnerTests : IDisposable
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
@@ -839,6 +846,7 @@ public class AgentRunnerTests : IDisposable
             _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
@@ -886,6 +894,7 @@ public class AgentRunnerTests : IDisposable
             _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);

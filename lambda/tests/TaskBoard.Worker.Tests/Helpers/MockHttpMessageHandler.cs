@@ -20,6 +20,23 @@ public sealed class MockHttpMessageHandler : HttpMessageHandler
         });
     }
 
+    public void EnqueueBinaryResponse(HttpStatusCode statusCode, byte[] content, string contentType = "image/png")
+    {
+        _responseFactories.Enqueue(_ =>
+        {
+            var response = new HttpResponseMessage(statusCode);
+            var byteContent = new ByteArrayContent(content);
+            byteContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(contentType);
+            response.Content = byteContent;
+            return response;
+        });
+    }
+
+    public void EnqueueResponse(Func<HttpRequestMessage, HttpResponseMessage> factory)
+    {
+        _responseFactories.Enqueue(factory);
+    }
+
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         _sentRequests.Add(request);

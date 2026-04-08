@@ -55,7 +55,7 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 ### Migration Tooling
 - Flyway via Docker (`redgate/flyway`) for SQL-first schema migrations
 - Scripts in `db/migrations`, applied via `scripts/migrate.ps1`
-- Migration chain: V1 (processed_events) → V2 (pgmq_core) → V3 (events_queue) → V4 (card_state) → V5 (run_log) → V6 (run_log step_name) → V9 (agent_run) → V10 (step_result)
+- Migration chain: V1 (processed_events) → V2 (pgmq_core) → V3 (events_queue) → V4 (card_state) → V5 (run_log) → V6 (run_log step_name) → V7 (pgmq_pings_queue) → V8 (card_state_claimed_at) → V9 (agent_run) → V10 (step_result) → V11 (drop_run_log) → V12 (metrics: estimate column, started_at indexes, SQL views)
 
 ## Decided Architecture Items
 - ✅ Board abstraction: `ITaskBoardClient` with GitHub Projects and Trello implementations
@@ -77,6 +77,9 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ Multi-executor support (AgentExecutorResolver: claude-cli, codex, stub)
 - ✅ Sleep inhibition during polling (Windows/Mac/Linux)
 - ✅ Startup prerequisite validation (PrerequisiteValidator)
+- ✅ Metrics reporting (`--mode metrics`): `IMetricsStore` / `PgMetricsStore`, SQL views, Grafana dashboard in docker-compose
+- ✅ Connection string config key renamed from `Pgmq:ConnectionString` to `Database:ConnectionString`
+- ✅ Estimate persisted to `agent_run.estimate` column (captured during design pipeline estimation step)
 - ✅ Story-to-task decomposition (Ready for Tasking → Waiting for Tasks pipeline)
 - ✅ Priority propagation from parent to child cards (GenerationConfig.CopyFields)
 - ✅ Estimate rollup to parent card (updateParentSum transition action)

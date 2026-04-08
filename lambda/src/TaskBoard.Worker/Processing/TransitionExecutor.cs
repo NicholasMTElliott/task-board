@@ -35,6 +35,17 @@ public static class TransitionExecutor
             else
             {
                 // Lenient — log warnings but continue
+                // Only check for unresolved templates when a context was provided (templates are expected to resolve)
+                if (templateContext is not null && (HasUnresolvedTemplates(resolvedValue) || HasUnresolvedTemplates(resolvedField)))
+                {
+                    logger.LogWarning(
+                        "Transition action '{Type}' for card {CardId} has unresolved template variable " +
+                        "(field='{Field}', value='{Value}') — skipping. Check that the preceding steps " +
+                        "returned the expected structured output fields.",
+                        action.Type, cardId, resolvedField ?? action.Field, resolvedValue ?? action.Value);
+                    continue;
+                }
+
                 try
                 {
                     switch (action.Type)
@@ -70,8 +81,9 @@ public static class TransitionExecutor
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex,
-                        "Non-critical transition action '{Type}' failed for card {CardId} — continuing",
-                        action.Type, cardId);
+                        "Non-critical transition action '{Type}' for card {CardId} failed " +
+                        "(field='{Field}', value='{Value}') — continuing",
+                        action.Type, cardId, resolvedField ?? action.Field, resolvedValue ?? action.Value);
                 }
             }
         }
@@ -166,4 +178,7 @@ public static class TransitionExecutor
 
         return value;
     }
+
+    private static bool HasUnresolvedTemplates(string? value) =>
+        value is not null && value.Contains("{{") && value.Contains("}}");
 }

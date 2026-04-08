@@ -45,11 +45,17 @@ internal static class CliDefinitions
         ["--trello-base-url"] = "Trello:BaseUrl",
         ["--trello-agent-username"] = "Trello:AgentUsername",
 
+        // Database
+        ["--db-connection"] = "Database:ConnectionString",
+        ["--neon-connection"] = "Database:ConnectionString",   // alias for backward compat
+
         // PGMQ / Queue mode
-        ["--neon-connection"] = "Pgmq:ConnectionString",
         ["--ping-queue"] = "Pgmq:PingQueueName",
         ["--stale-claim-minutes"] = "Pgmq:StaleClaimMinutes",
         ["--max-concurrent-agents"] = "Pgmq:MaxConcurrentAgents",
+
+        // Metrics mode
+        ["--since"] = "Since",
     };
 
     /// <summary>
@@ -81,6 +87,7 @@ internal static class CliDefinitions
         Console.WriteLine("Usage:");
         Console.WriteLine("  aiboard --mode agent --card-id 3 --board-id 1 --workspace .");
         Console.WriteLine("  aiboard --mode polling --board-id 1 --workspace .");
+        Console.WriteLine("  aiboard --mode metrics [--card-id 3] [--since 7d]");
         Console.WriteLine("  aiboard --config project-a.json --mode polling");
         Console.WriteLine();
         Console.WriteLine("All options can also be set via appsettings.json, appsettings.user.json,");
@@ -95,7 +102,7 @@ internal static class CliDefinitions
         Console.WriteLine();
 
         WriteSection("General", [
-            ("--mode <mode>",             "Execution mode: agent, polling",                    null),
+            ("--mode <mode>",             "Execution mode: agent, polling, metrics",           null),
             ("--card-id <id>",            "Card/issue number (required for agent mode)",       null),
             ("--config <path>",           "Additional JSON config file to layer in",           null),
             ("--prompt-root <path>",      "Base directory for prompt file resolution",         "exe directory"),
@@ -128,6 +135,11 @@ internal static class CliDefinitions
             ("--trello-api-token <token>",      "Trello API token",                 null),
             ("--trello-base-url <url>",         "Trello API base URL",              "https://api.trello.com"),
             ("--trello-agent-username <name>",  "Override agent's Trello username",  null),
+        ], pad);
+
+        WriteSection("Database / Metrics", [
+            ("--db-connection <conn>",  "PostgreSQL connection string",                         null),
+            ("--since <duration>",      "Time window for metrics (e.g. 24h, 7d, 2w)",          "all time"),
         ], pad);
     }
 
