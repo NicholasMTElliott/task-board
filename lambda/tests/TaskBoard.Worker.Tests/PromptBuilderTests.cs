@@ -145,6 +145,32 @@ public class PromptBuilderTests
     }
 
     [Fact]
+    public void AppendSharedSections_ContainsImageReferenceInstructions()
+    {
+        var sb = new StringBuilder();
+        PromptBuilder.AppendSharedSections(sb, CreateContext(), "/tmp/task.md");
+
+        var result = sb.ToString();
+        Assert.Contains("local image:", result);
+        Assert.Contains("Read tool", result);
+    }
+
+    [Fact]
+    public void AppendSharedSections_ImageInstructionsInInstructionsSection()
+    {
+        var sb = new StringBuilder();
+        PromptBuilder.AppendSharedSections(sb, CreateContext(), "/tmp/task.md");
+
+        var result = sb.ToString();
+        var instructionsIdx = result.IndexOf("## Instructions", StringComparison.Ordinal);
+        var qualityGatesIdx = result.IndexOf("## Quality Gates", StringComparison.Ordinal);
+        var imageIdx = result.IndexOf("local image:", StringComparison.Ordinal);
+
+        Assert.True(imageIdx > instructionsIdx, "Image instructions must appear after ## Instructions");
+        Assert.True(imageIdx < qualityGatesIdx, "Image instructions must appear before ## Quality Gates");
+    }
+
+    [Fact]
     public void AppendSharedSections_UpdateFileInstructionsAfterOutcomeRules()
     {
         var sb = new StringBuilder();

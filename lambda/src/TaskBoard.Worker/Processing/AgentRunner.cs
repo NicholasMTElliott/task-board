@@ -16,6 +16,7 @@ public sealed partial class AgentRunner(
     AgentIdentity agentIdentity,
     UpdateFileProcessor updateFileProcessor,
     IRunStore runStore,
+    ImageDownloader imageDownloader,
     ILogger<AgentRunner> logger)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
@@ -218,8 +219,15 @@ public sealed partial class AgentRunner(
                 }
             }
 
+            // 5.2a Download images referenced in the target card body
+            var imageMapping = await imageDownloader.DownloadImagesAsync(
+                cardId, targetCard.Body, worktreePath, cancellationToken);
+
             await taskFileManager.WriteAllTaskFilesAsync(
-                worktreePath, contextCards, workflowConfig, referenceContext, cancellationToken);
+                worktreePath, contextCards, workflowConfig, referenceContext,
+                imageMapping.Count > 0 ? imageMapping : null,
+                imageMapping.Count > 0 ? cardId : null,
+                cancellationToken);
 
             // 5.3 Write comments file for the active card
             string? commentsFilePath = null;

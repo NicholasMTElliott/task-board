@@ -207,6 +207,8 @@ var agentIdentity = AgentIdentity.Generate();
 builder.Services.AddSingleton(agentIdentity);
 
 // Agent mode services
+builder.Services.AddHttpClient("ImageDownloader");
+builder.Services.AddSingleton<ImageDownloader>();
 builder.Services.AddSingleton<TaskFileManager>();
 
 var worktreeBaseRaw = builder.Configuration["WorktreeBasePath"];

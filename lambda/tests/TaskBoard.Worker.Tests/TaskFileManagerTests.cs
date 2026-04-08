@@ -435,6 +435,153 @@ public class TaskFileManagerTests : IDisposable
         Assert.DoesNotContain("<details>", content);
     }
 
+    // ── AnnotateBodyWithImagePaths ───────────────────────────────────────────
+
+    [Fact]
+    public void AnnotateBodyWithImagePaths_EmptyMapping_ReturnsBodyUnchanged()
+    {
+        var body = "Some body with ![img](https://example.com/a.png)";
+        var result = TaskFileManager.AnnotateBodyWithImagePaths(body, new Dictionary<string, string>());
+
+        Assert.Equal(body, result);
+    }
+
+    [Fact]
+    public void AnnotateBodyWithImagePaths_MarkdownImage_AppendsAnnotation()
+    {
+        var body = "See this: ![screenshot](https://example.com/screen.png) for context.";
+        var mapping = new Dictionary<string, string>
+        {
+            ["https://example.com/screen.png"] = ".aiboard/images/42/abc123def456.png"
+        };
+
+        var result = TaskFileManager.AnnotateBodyWithImagePaths(body, mapping);
+
+        Assert.Contains("( local image: .aiboard/images/42/abc123def456.png )", result);
+        Assert.Contains("![screenshot](https://example.com/screen.png)", result);
+    }
+
+    [Fact]
+    public void AnnotateBodyWithImagePaths_HtmlImage_AppendsAnnotation()
+    {
+        var body = @"<img src=""https://example.com/design.jpg"" width=""800""> is shown above.";
+        var mapping = new Dictionary<string, string>
+        {
+            ["https://example.com/design.jpg"] = ".aiboard/images/42/a1b2c3d4e5f6.jpg"
+        };
+
+        var result = TaskFileManager.AnnotateBodyWithImagePaths(body, mapping);
+
+        Assert.Contains("( local image: .aiboard/images/42/a1b2c3d4e5f6.jpg )", result);
+    }
+
+    [Fact]
+    public void AnnotateBodyWithImagePaths_UrlNotInMapping_NotAnnotated()
+    {
+        var body = "![img](https://example.com/notdownloaded.png)";
+        var mapping = new Dictionary<string, string>
+        {
+            ["https://example.com/different.png"] = ".aiboard/images/42/abc.png"
+        };
+
+        var result = TaskFileManager.AnnotateBodyWithImagePaths(body, mapping);
+
+        Assert.DoesNotContain("local image", result);
+    }
+
+    [Fact]
+    public void AnnotateBodyWithImagePaths_MultipleImages_AnnotatesMatching()
+    {
+        var body =
+            "![first](https://example.com/a.png)\n" +
+            "![second](https://example.com/b.jpg)\n";
+        var mapping = new Dictionary<string, string>
+        {
+            ["https://example.com/a.png"] = ".aiboard/images/5/hash1.png",
+            ["https://example.com/b.jpg"] = ".aiboard/images/5/hash2.jpg",
+        };
+
+        var result = TaskFileManager.AnnotateBodyWithImagePaths(body, mapping);
+
+        Assert.Contains("( local image: .aiboard/images/5/hash1.png )", result);
+        Assert.Contains("( local image: .aiboard/images/5/hash2.jpg )", result);
+    }
+
+    // ── StripAnnotations (image extension) ──────────────────────────────────
+
+    [Fact]
+    public void StripAnnotations_ImageAnnotation_IsRemoved()
+    {
+        var body = "![img](https://example.com/a.png) ( local image: .aiboard/images/42/abc.png ) rest of text";
+
+        var result = TaskFileManager.StripAnnotations(body);
+
+        Assert.DoesNotContain("local image", result);
+        Assert.Contains("![img](https://example.com/a.png)", result);
+        Assert.Contains("rest of text", result);
+    }
+
+    [Fact]
+    public void StripAnnotations_RoundTrip_BodyIsRestoredAfterAnnotationAndStrip()
+    {
+        var originalBody = "![screenshot](https://example.com/shot.png) shows the design.";
+        var mapping = new Dictionary<string, string>
+        {
+            ["https://example.com/shot.png"] = ".aiboard/images/7/aaaa1111bbbb.png"
+        };
+
+        var annotated = TaskFileManager.AnnotateBodyWithImagePaths(originalBody, mapping);
+        var stripped = TaskFileManager.StripAnnotations(annotated);
+
+        Assert.Equal(originalBody, stripped);
+    }
+
+    [Fact]
+    public void StripAnnotations_BothReferenceAndImageAnnotations_BothRemoved()
+    {
+        var body =
+            "See #5 ( see .aiboard/tasks/5-some-ticket.md ) for context.\n" +
+            "![img](https://example.com/x.png) ( local image: .aiboard/images/42/a1.png )";
+
+        var result = TaskFileManager.StripAnnotations(body);
+
+        Assert.DoesNotContain("( see .aiboard/tasks/5-some-ticket.md )", result);
+        Assert.DoesNotContain("( local image: .aiboard/images/42/a1.png )", result);
+        Assert.Contains("#5", result);
+        Assert.Contains("![img](https://example.com/x.png)", result);
+    }
+
+    // ── BuildTaskFileContent (image integration) ─────────────────────────────
+
+    [Fact]
+    public void BuildTaskFileContent_WithImageMapping_AnnotatesTargetCard()
+    {
+        var card = new BoardCard("42", "Feature", "See ![mock](https://example.com/mockup.png) for design.", "list-1");
+        var mapping = new Dictionary<string, string>
+        {
+            ["https://example.com/mockup.png"] = ".aiboard/images/42/deadbeef1234.png"
+        };
+
+        var content = TaskFileManager.BuildTaskFileContent(card, "Design", imageMapping: mapping, imageTargetCardId: "42");
+
+        Assert.Contains("( local image: .aiboard/images/42/deadbeef1234.png )", content);
+    }
+
+    [Fact]
+    public void BuildTaskFileContent_WithImageMapping_DoesNotAnnotateOtherCard()
+    {
+        var card = new BoardCard("99", "Other Card", "See ![img](https://example.com/img.png).", "list-1");
+        var mapping = new Dictionary<string, string>
+        {
+            ["https://example.com/img.png"] = ".aiboard/images/42/deadbeef1234.png"
+        };
+
+        // imageTargetCardId is "42", card.Id is "99"
+        var content = TaskFileManager.BuildTaskFileContent(card, "Design", imageMapping: mapping, imageTargetCardId: "42");
+
+        Assert.DoesNotContain("local image", content);
+    }
+
     // ── TrimToSummary ────────────────────────────────────────────────────────
 
     [Fact]
