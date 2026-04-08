@@ -208,17 +208,15 @@
     },
     "Waiting for Tasks": {
       "name": "Waiting for Tasks",
-      "gateType": "children_complete",
+      "gateType": "holding",
       "role": null,
       "taskPrompt": null,
       "includeInAgentContext": false,
-      "pipelineOrder": 6,
       "transitions": {
         "COMPLETE": [
           { "type": "moveToColumn", "value": "Done" },
           { "type": "updateParentSum", "field": "Estimate" }
-        ],
-        "ERROR": "Error"
+        ]
       }
     },
     "Ready for Implementation": {
@@ -511,7 +509,10 @@
       },
       "transitions": {
         "IN_PROGRESS": "Merging",
-        "COMPLETE": "Done",
+        "COMPLETE": [
+          { "type": "moveToColumn", "value": "Done" },
+          { "type": "completeParentIfReady" }
+        ],
         "ERROR": "Error",
         "MERGE_CONFLICT": "Ready for Implementation"
       }

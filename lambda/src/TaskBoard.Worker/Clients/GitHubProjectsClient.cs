@@ -39,6 +39,10 @@ public sealed class GitHubProjectsClient(
 
         var metadata = new Dictionary<string, string> { ["issueNumber"] = id };
 
+        // Extract project field values (priority, estimate, etc.) from projectItems.
+        // gh issue view returns limited project data, so also populate from project item-list.
+        await PopulateProjectFieldMetadataAsync(id, metadata, cancellationToken);
+
         var labels = root.TryGetProperty("labels", out var labelsProp)
             ? labelsProp.EnumerateArray()
                 .Select(l => l.TryGetProperty("name", out var n) ? n.GetString() : null)
@@ -525,6 +529,42 @@ public sealed class GitHubProjectsClient(
         }
 
         return "";
+    }
+
+    /// <summary>
+    /// Fetches project field values (priority, estimate, etc.) for a single card via
+    /// gh project item-list and adds them to the metadata dictionary. Best-effort — failures
+    /// are logged as warnings and the metadata remains unchanged.
+    /// </summary>
+    private async Task PopulateProjectFieldMetadataAsync(
+        string cardId, Dictionary<string, string> metadata, CancellationToken ct)
+    {
+        try
+        {
+            var json = await RunGhAsync(
+                ["project", "item-list", _options.ProjectNumber.ToString(),
+                 "--owner", _options.Owner, "--format", "json",
+                 "--jq", $".items[] | select(.content.number == {cardId})"],
+                ct);
+
+            if (string.IsNullOrWhiteSpace(json))
+                return;
+
+            using var doc = JsonDocument.Parse(json);
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (prop.Name is "id" or "content" or "status" or "title" or "repository" or "labels")
+                    continue;
+                if (prop.Value.ValueKind == JsonValueKind.String)
+                    metadata[prop.Name] = prop.Value.GetString() ?? "";
+                else if (prop.Value.ValueKind == JsonValueKind.Number)
+                    metadata[prop.Name] = prop.Value.GetRawText();
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to fetch project field metadata for card #{CardId} — continuing without", cardId);
+        }
     }
 
     public async Task AddLabelAsync(string cardId, string labelName, CancellationToken cancellationToken)

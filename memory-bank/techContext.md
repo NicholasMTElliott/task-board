@@ -85,6 +85,8 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ Estimate rollup to parent card (updateParentSum transition action)
 - ✅ Best-guess estimates on generated tasks (estimate front matter in new-*.md files)
 - ✅ Card type labels (type:story, type:task, type:bug)
+- ✅ Event-driven parent completion (completeParentIfReady transition action replaces polled children_complete for stories)
+- ✅ GetCardAsync now includes project field metadata (priority, estimate) via gh project item-list
 
 ## Open Technical Decisions
 - [ ] Webhook/event-driven triggers (currently manual CLI or polling)

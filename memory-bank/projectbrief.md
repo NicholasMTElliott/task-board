@@ -42,7 +42,7 @@ A single founder/operator can place a card in a "Ready for" column on their kanb
 | 5 | Designed | — | Manual gate |
 | 6 | Ready for Tasking | Senior Engineer (story decomposition + best-guess estimates) | agent_run |
 | 7 | Tasking | — | In-progress |
-| 8 | Waiting for Tasks | — | children_complete |
+| 8 | Waiting for Tasks | — | holding (event-driven via completeParentIfReady) |
 | 9 | Ready for Implementation | Implementer + Code Reviewer (2 steps + optional specialist reviews) | agent_run |
 | 10 | Implementing | — | In-progress |
 | 11 | Implementation Questions | — | Holding (NEEDS_INFO) |

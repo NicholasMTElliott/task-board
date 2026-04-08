@@ -119,7 +119,7 @@ public static class WorkflowConfigValidator
                 {
                     if (action.Type is not (ActionTypes.MoveToColumn or ActionTypes.AddLabel or ActionTypes.RemoveLabel
                         or ActionTypes.Assign or ActionTypes.Unassign or ActionTypes.SetField or ActionTypes.ClearField
-                        or ActionTypes.UpdateParentSum))
+                        or ActionTypes.UpdateParentSum or ActionTypes.CompleteParentIfReady))
                     {
                         errors.Add($"State '{stateId}' ({state.Name}) transition '{outcome}' has unknown action type '{action.Type}'.");
                     }

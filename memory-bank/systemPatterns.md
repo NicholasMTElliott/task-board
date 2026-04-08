@@ -215,9 +215,13 @@ Ready for Design → Designed → Ready for Implementation → ... → Approved 
 - Configured on "Ready for Design" COMPLETE transition (updates story estimate after each child's design refines its estimate) and on "Waiting for Tasks" COMPLETE transition (final sum when story completes)
 - No-op if card has no parent or cross-ref resolver is unavailable
 
-**Completion tracking:**
-- `CompletionRunner` handles `children_complete` gate type — polls child cards via `trackedIssues` GraphQL until all reach terminal state
-- If no children found → ERROR; some pending → NEEDS_INFO (stays for re-poll); all complete → COMPLETE → Done
+**Completion tracking (event-driven, not polled):**
+- "Waiting for Tasks" is a `holding` state — the poller ignores it entirely, avoiding deadlock
+- When a child task completes merge (Approved → Done), the `completeParentIfReady` transition action fires
+- It finds the parent via `trackedInIssues` cross-refs, fetches all siblings via `trackedIssues`, and checks terminal states
+- If all siblings are Done → transitions parent to Done via its COMPLETE transition target
+- If siblings are pending → posts/updates a progress comment on the parent (stable marker, upserted in place)
+- `CompletionRunner` still exists for other `children_complete` use cases but is not used in the story-to-task flow
 
 ### Rate Limiting
 - `ClaudeAgentExecutor` detects rate limits via stderr analysis (checks for "rate limit" / "overloaded")
@@ -313,6 +317,7 @@ Schema:
 - `generationConfig` on a step configures child ticket creation: `targetType`, `targetColumn`, `linkToParent`, `copyFields`
 - `copyFields` copies specified field values from parent card metadata to created children (e.g., `["priority"]`)
 - `updateParentSum` transition action sums a field across all `sub_item` children and sets the result on the parent
+- `completeParentIfReady` transition action checks if the card's parent has all children in terminal states and transitions the parent if so; posts a progress comment otherwise
 - New ticket front matter supports `estimate:` field — value is set on the created card and summed for parent rollup
 - State keys are column names for GitHub Projects or list IDs for Trello
 

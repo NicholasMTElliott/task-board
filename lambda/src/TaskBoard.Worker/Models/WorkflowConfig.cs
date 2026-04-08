@@ -18,7 +18,8 @@ public static class ActionTypes
     public const string Unassign     = "unassign";
     public const string AddLabel        = "addLabel";
     public const string RemoveLabel     = "removeLabel";
-    public const string UpdateParentSum = "updateParentSum";
+    public const string UpdateParentSum        = "updateParentSum";
+    public const string CompleteParentIfReady = "completeParentIfReady";
 }
 
 [JsonConverter(typeof(TransitionTargetConverter))]

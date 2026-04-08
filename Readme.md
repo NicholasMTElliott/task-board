@@ -63,6 +63,9 @@ MergeRunner flow (system_merge states):
 
 CompletionRunner flow (children_complete states):
   Poll child cards → check all reached terminal state → move parent to Done
+
+Event-driven parent completion (completeParentIfReady):
+  Child task reaches Done → check parent's siblings → all done? → transition parent to Done
 ```
 
 ---
@@ -78,7 +81,7 @@ CompletionRunner flow (children_complete states):
 | 5 | Designed | -- | Manual gate |
 | 6 | Ready for Tasking | Senior Engineer (1 step: decompose story into tasks) | agent_run |
 | 7 | Tasking | -- | In-progress |
-| 8 | Waiting for Tasks | -- | children_complete |
+| 8 | Waiting for Tasks | -- | holding (event-driven via completeParentIfReady) |
 | 9 | Ready for Implementation | Implementer + Code Reviewer (2 steps + optional specialist reviews) | agent_run |
 | 10 | Implementing | -- | In-progress |
 | 11 | Implementation Questions | -- | Holding (NEEDS_INFO) |

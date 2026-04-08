@@ -1189,6 +1189,35 @@ public class WorkflowConfigValidatorTests
         Assert.Contains(errors, e => e.Contains("updateParentSum") && e.Contains("field name"));
     }
 
+    // ── CompleteParentIfReady validation ────────────────────────────
+
+    [Fact]
+    public void Transition_CompleteParentIfReady_ValidConfig_PassesValidation()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-approved"] = new WorkflowState(
+                    "Approved", null, "system_merge",
+                    null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = new TransitionTarget(
+                        [
+                            new TransitionAction(ActionTypes.MoveToColumn, "list-done"),
+                            new TransitionAction(ActionTypes.CompleteParentIfReady),
+                        ])
+                    }),
+                ["list-done"] = new WorkflowState("Done", null, "terminal", null,
+                    new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new());
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("completeParentIfReady"));
+    }
+
     // ── Filter validation tests ────────────────────────────────────
 
     [Fact]

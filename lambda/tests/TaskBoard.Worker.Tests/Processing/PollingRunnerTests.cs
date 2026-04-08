@@ -87,6 +87,7 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            Substitute.For<ICrossReferenceResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var pollingRunner = new PollingRunner(
@@ -137,6 +138,7 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            Substitute.For<ICrossReferenceResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var pollingRunner = new PollingRunner(
@@ -193,6 +195,7 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            Substitute.For<ICrossReferenceResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var pollingRunner = new PollingRunner(
@@ -268,6 +271,7 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             config,
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            Substitute.For<ICrossReferenceResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         // Resolver only has "claude-cli", not "codex"
@@ -352,6 +356,7 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             config,
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            Substitute.For<ICrossReferenceResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var resolverWithClaudeOnly = new AgentExecutorResolver(
@@ -432,6 +437,7 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            Substitute.For<ICrossReferenceResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var completionRunner = new CompletionRunner(
@@ -485,6 +491,7 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            Substitute.For<ICrossReferenceResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var completionRunner2 = new CompletionRunner(
@@ -538,6 +545,7 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            Substitute.For<ICrossReferenceResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var fakeLogger = new FakeLogger<PollingRunner>();
@@ -616,6 +624,7 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             config,
             new AgentIdentity("Test", "Agent", "TestMachine"),
+            Substitute.For<ICrossReferenceResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var completionRunner = new CompletionRunner(
