@@ -1,0 +1,3 @@
+# Exclude everything — this Dockerfile uses no COPY instructions.
+# The image is built entirely from package manager installs.
+*
