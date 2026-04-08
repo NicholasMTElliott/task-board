@@ -306,12 +306,14 @@ public sealed partial class AgentRunner(
                 var stepExecutor = executorResolver.Resolve(stepRole.Provider);
                 lastResult = await stepExecutor.ExecuteAsync(context, cancellationToken);
 
-                // Capture estimate if this step returned one
+                // Capture estimate if this step returned one and persist it to DB
                 if (lastResult.Estimate.HasValue)
                 {
                     capturedEstimate = lastResult.Estimate;
                     logger.LogInformation("Step '{StepName}' produced estimate: {Estimate} story point(s)",
                         step.Name, capturedEstimate);
+                    await SafeDbCallAsync(() =>
+                        runStore.UpdateRunEstimateAsync(runId, capturedEstimate.Value, cancellationToken));
                 }
 
                 // 6d. Update card body from task file after each step (write-after-each-step strategy)
