@@ -351,6 +351,11 @@ public sealed class GitHubProjectsClient(
     private async Task<ResolvedField> ResolveFieldAsync(
         string fieldName, CancellationToken cancellationToken)
     {
+        // GitHub Projects GraphQL field(name:) is case-sensitive, but gh project item-list
+        // lowercases all field names. Try the exact name first; on failure, resolve the
+        // canonical name via a case-insensitive lookup across all project fields.
+        var resolvedName = await ResolveFieldNameCaseAsync(fieldName, cancellationToken);
+
         const string query = """
             query($owner: String!, $projectNumber: Int!, $fieldName: String!) {
               user(login: $owner) {
@@ -375,7 +380,7 @@ public sealed class GitHubProjectsClient(
             "-f", $"query={query}",
             "-f", $"owner={_options.Owner}",
             "-F", $"projectNumber={_options.ProjectNumber}",
-            "-f", $"fieldName={fieldName}"], cancellationToken);
+            "-f", $"fieldName={resolvedName}"], cancellationToken);
         using var doc = JsonDocument.Parse(json);
         ThrowOnGraphQlErrors(doc, $"ResolveFieldAsync({fieldName})");
 
@@ -411,6 +416,61 @@ public sealed class GitHubProjectsClient(
         throw new InvalidOperationException(
             $"Could not determine field type for '{fieldName}'. " +
             "The field may be an unsupported type (e.g., iteration).");
+    }
+
+    /// <summary>
+    /// Resolves the canonical (properly-cased) field name for a GitHub Project field.
+    /// gh project item-list lowercases all field names (e.g., "Priority" → "priority"),
+    /// but the GraphQL field(name:) query is case-sensitive. This method fetches all
+    /// field names and returns the case-insensitive match.
+    /// </summary>
+    private async Task<string> ResolveFieldNameCaseAsync(
+        string fieldName, CancellationToken cancellationToken)
+    {
+        const string query = """
+            query($owner: String!, $projectNumber: Int!) {
+              user(login: $owner) {
+                projectV2(number: $projectNumber) {
+                  fields(first: 50) {
+                    nodes {
+                      ... on ProjectV2Field { name }
+                      ... on ProjectV2SingleSelectField { name }
+                      ... on ProjectV2IterationField { name }
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        try
+        {
+            var json = await RunGhAsync(["api", "graphql",
+                "-f", $"query={query}",
+                "-f", $"owner={_options.Owner}",
+                "-F", $"projectNumber={_options.ProjectNumber}"], cancellationToken);
+
+            using var doc = JsonDocument.Parse(json);
+            var fields = doc.RootElement
+                .GetProperty("data").GetProperty("user").GetProperty("projectV2")
+                .GetProperty("fields").GetProperty("nodes");
+
+            foreach (var node in fields.EnumerateArray())
+            {
+                if (node.TryGetProperty("name", out var nameProp))
+                {
+                    var name = nameProp.GetString();
+                    if (name is not null && string.Equals(name, fieldName, StringComparison.OrdinalIgnoreCase))
+                        return name;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Failed to resolve canonical field name for '{FieldName}' — using as-is", fieldName);
+        }
+
+        return fieldName; // fallback: use as-is
     }
 
     private async Task<(string ProjectId, string FieldId, string OptionId)> ResolveStatusFieldOption(
@@ -543,7 +603,7 @@ public sealed class GitHubProjectsClient(
         {
             var json = await RunGhAsync(
                 ["project", "item-list", _options.ProjectNumber.ToString(),
-                 "--owner", _options.Owner, "--format", "json",
+                 "--owner", _options.Owner, "--limit", "500", "--format", "json",
                  "--jq", $".items[] | select(.content.number == {cardId})"],
                 ct);
 
