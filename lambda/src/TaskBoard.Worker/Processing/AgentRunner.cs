@@ -93,7 +93,7 @@ public sealed partial class AgentRunner(
         if (state.Transitions.TryGetValue(TransitionKeys.InProgress, out var inProgressTarget))
         {
             await TransitionExecutor.ExecuteAsync(
-                cardId, inProgressTarget, boardClient, logger, cancellationToken, templateContext);
+                cardId, inProgressTarget, boardClient, logger, cancellationToken, templateContext, crossReferenceResolver, workflowConfig);
             logger.LogInformation("Moved card {CardId} to in-progress via {Count} action(s)",
                 cardId, inProgressTarget.Actions.Count);
         }
@@ -124,7 +124,7 @@ public sealed partial class AgentRunner(
                         {
                             await TransitionExecutor.ExecuteAsync(
                                 cardId, mergeOutcome.KickBackTarget, boardClient, logger,
-                                cancellationToken, templateContext);
+                                cancellationToken, templateContext, crossReferenceResolver, workflowConfig);
                         }
                         logger.LogInformation("Card {CardId} kicked back due to merge conflict", cardId);
                         return new AgentRunResult(AgentOutcome.ERROR,
@@ -344,6 +344,15 @@ public sealed partial class AgentRunner(
                     updateResult = UpdateProcessingResult.Empty;
                 }
 
+                // 6d-ii-b. If update processing produced estimates (e.g., generate_tasks step),
+                //          capture the total for use in the COMPLETE transition's setField action.
+                if (updateResult.TotalEstimate.HasValue)
+                {
+                    capturedEstimate = updateResult.TotalEstimate;
+                    logger.LogInformation("Update processing produced total estimate: {Estimate} (from {Count} tickets)",
+                        capturedEstimate, updateResult.CreatedTickets.Count);
+                }
+
                 // 6d-iii. Save step result to DB
                 {
                     var stepCompletedAt = DateTimeOffset.UtcNow;
@@ -412,7 +421,7 @@ public sealed partial class AgentRunner(
                     if (state.Transitions.TryGetValue(outcomeKey, out var stepOutcomeTarget))
                     {
                         await TransitionExecutor.ExecuteAsync(
-                            cardId, stepOutcomeTarget, boardClient, logger, cancellationToken, templateContext);
+                            cardId, stepOutcomeTarget, boardClient, logger, cancellationToken, templateContext, crossReferenceResolver, workflowConfig);
                         logger.LogInformation("Step '{StepName}' returned {Outcome}, executed transition for card {CardId}",
                             step.Name, outcomeKey, cardId);
                     }
@@ -499,7 +508,7 @@ public sealed partial class AgentRunner(
             if (state.Transitions.TryGetValue(completeKey, out var completeTarget))
             {
                 await TransitionExecutor.ExecuteAsync(
-                    cardId, completeTarget, boardClient, logger, cancellationToken, templateContext);
+                    cardId, completeTarget, boardClient, logger, cancellationToken, templateContext, crossReferenceResolver, workflowConfig);
                 logger.LogInformation("Executed {Outcome} transition for card {CardId}", completeKey, cardId);
             }
 
@@ -614,7 +623,7 @@ public sealed partial class AgentRunner(
                 if (state.Transitions.TryGetValue(TransitionKeys.Error, out var errorTarget))
                 {
                     await TransitionExecutor.ExecuteAsync(
-                        cardId, errorTarget, boardClient, logger, cancellationToken);
+                        cardId, errorTarget, boardClient, logger, cancellationToken, crossRefResolver: crossReferenceResolver, workflowConfig: workflowConfig);
                 }
             }
             catch (Exception postEx)
@@ -957,7 +966,7 @@ public sealed partial class AgentRunner(
 
                 if (state.Transitions.TryGetValue(TransitionKeys.NeedsInfo, out var questionsTarget))
                     await TransitionExecutor.ExecuteAsync(
-                        cardId, questionsTarget, boardClient, logger, cancellationToken);
+                        cardId, questionsTarget, boardClient, logger, cancellationToken, crossRefResolver: crossReferenceResolver, workflowConfig: workflowConfig);
 
                 return new GateCheckResult(
                     new AgentRunResult(AgentOutcome.NEEDS_INFO, gateResult.Detail, gateResult.Questions),
@@ -986,7 +995,7 @@ public sealed partial class AgentRunner(
 
                     if (state.Transitions.TryGetValue(TransitionKeys.NeedsInfo, out var questionsCol))
                         await TransitionExecutor.ExecuteAsync(
-                            cardId, questionsCol, boardClient, logger, cancellationToken);
+                            cardId, questionsCol, boardClient, logger, cancellationToken, crossRefResolver: crossReferenceResolver, workflowConfig: workflowConfig);
 
                     return new GateCheckResult(
                         new AgentRunResult(AgentOutcome.NEEDS_INFO, gateResult.Detail, gateResult.Questions),
@@ -1003,7 +1012,7 @@ public sealed partial class AgentRunner(
                 var transitionKey = state.Transitions.ContainsKey(TransitionKeys.GateFail) ? TransitionKeys.GateFail : TransitionKeys.Error;
                 if (state.Transitions.TryGetValue(transitionKey, out var gateFailTarget))
                     await TransitionExecutor.ExecuteAsync(
-                        cardId, gateFailTarget, boardClient, logger, cancellationToken);
+                        cardId, gateFailTarget, boardClient, logger, cancellationToken, crossRefResolver: crossReferenceResolver, workflowConfig: workflowConfig);
 
                 return new GateCheckResult(new AgentRunResult(AgentOutcome.ERROR, gateResult.Detail), null);
             }
@@ -1143,7 +1152,7 @@ public sealed partial class AgentRunner(
                 var outcomeKey = result.Outcome.ToString();
                 if (state.Transitions.TryGetValue(outcomeKey, out var optOutcomeTarget))
                     await TransitionExecutor.ExecuteAsync(
-                        cardId, optOutcomeTarget, boardClient, logger, cancellationToken);
+                        cardId, optOutcomeTarget, boardClient, logger, cancellationToken, crossRefResolver: crossReferenceResolver, workflowConfig: workflowConfig);
 
                 return new AgentRunResult(result.Outcome, result.Detail, result.Questions);
             }
@@ -1490,7 +1499,7 @@ public sealed partial class AgentRunner(
         if (state.Transitions.TryGetValue(outcomeKey, out var outcomeTarget))
         {
             await TransitionExecutor.ExecuteAsync(
-                originalCard.Id, outcomeTarget, boardClient, logger, cancellationToken);
+                originalCard.Id, outcomeTarget, boardClient, logger, cancellationToken, crossRefResolver: crossReferenceResolver, workflowConfig: workflowConfig);
             logger.LogInformation("Executed {Outcome} transition for card {CardId}", outcomeKey, originalCard.Id);
         }
         else

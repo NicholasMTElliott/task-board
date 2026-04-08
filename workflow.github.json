@@ -134,7 +134,8 @@
         "IN_PROGRESS": "Designing",
         "COMPLETE": [
           { "type": "moveToColumn", "value": "Designed" },
-          { "type": "setField", "field": "Estimate", "value": "{{estimation}}" }
+          { "type": "setField", "field": "Estimate", "value": "{{estimation}}" },
+          { "type": "updateParentSum", "field": "Estimate" }
         ],
         "NEEDS_INFO": "Design Questions",
         "ERROR": "Error",
@@ -165,6 +166,58 @@
       "taskPrompt": null,
       "includeInAgentContext": true,
       "transitions": {}
+    },
+    "Ready for Tasking": {
+      "name": "Ready for Tasking",
+      "gateType": "agent_run",
+      "pipelineOrder": 5,
+      "gitBehavior": "discard",
+      "includeInAgentContext": true,
+      "providerParams": {
+        "effort": "max"
+      },
+      "steps": [
+        {
+          "name": "generate_tasks",
+          "role": "senior_engineer",
+          "taskPromptFile": "prompts/states/steps/generate_children.md",
+          "generationConfig": {
+            "targetType": "task",
+            "targetColumn": "Ready for Design",
+            "linkToParent": true,
+            "copyFields": ["priority"]
+          }
+        }
+      ],
+      "transitions": {
+        "IN_PROGRESS": "Tasking",
+        "COMPLETE": [
+          { "type": "moveToColumn", "value": "Waiting for Tasks" },
+          { "type": "setField", "field": "Estimate", "value": "{{estimation}}" }
+        ],
+        "ERROR": "Error"
+      }
+    },
+    "Tasking": {
+      "name": "Tasking",
+      "role": null,
+      "gateType": "in_progress",
+      "taskPrompt": null,
+      "includeInAgentContext": false,
+      "transitions": {}
+    },
+    "Waiting for Tasks": {
+      "name": "Waiting for Tasks",
+      "gateType": "holding",
+      "role": null,
+      "taskPrompt": null,
+      "includeInAgentContext": false,
+      "transitions": {
+        "COMPLETE": [
+          { "type": "moveToColumn", "value": "Done" },
+          { "type": "updateParentSum", "field": "Estimate" }
+        ]
+      }
     },
     "Ready for Implementation": {
       "name": "Ready for Implementation",
@@ -456,7 +509,10 @@
       },
       "transitions": {
         "IN_PROGRESS": "Merging",
-        "COMPLETE": "Done",
+        "COMPLETE": [
+          { "type": "moveToColumn", "value": "Done" },
+          { "type": "completeParentIfReady" }
+        ],
         "ERROR": "Error",
         "MERGE_CONFLICT": "Ready for Implementation"
       }

@@ -64,6 +64,9 @@ Legacy single-step states (top-level `role` + `taskPrompt`) are auto-normalized 
 3. `review_design_conflicts` — verify no cross-ticket conflicts
 4. `estimate_ticket` — calibration-based size estimation (haiku via `estimator`)
 
+**Ready for Tasking** (1 step: opus 4.6 via `senior_engineer`):
+1. `generate_tasks` — decompose user story into child tasks with best-guess estimates; `generationConfig` creates `type:task` cards in "Ready for Design" linked to parent, copies priority field
+
 **Ready for Implementation** (2 steps):
 1. `implement` — write code (sonnet 4.6 via `implementer`)
 2. `code_review` — review changes (sonnet 4.6 via `code_reviewer`)
@@ -202,14 +205,43 @@ Agents can generate images (screenshots, diagrams, etc.) and have them hosted on
 
 **Known limitation:** `raw.githubusercontent.com` URLs require repo read access. Viewers with GitHub "triage" role (issue-only access) on private repos cannot see images. All standard collaborators (read access or above) can view them. Public repos: fully accessible.
 
-### Child Task Generation
+### Child Task Generation (Story → Task Decomposition)
 User stories can generate child task tickets via the `cardTypes` config:
 ```json
 "cardTypes": { "story": { "name": "User Story", "labelPrefix": "type", "allowedChildren": ["task"] }, "task": { "name": "Task", "allowedChildren": [] } }
 ```
-- `UpdateFileProcessor` processes `.aiboard/updates/new-{slug}.md` files to create child tickets on the board
-- `generate_children.md` prompt step guides agents to produce child task definitions
-- `CompletionRunner` handles `children_complete` gate type — polls child cards until all reach terminal state
+
+**Card type labels:** Issues are labeled `type:story`, `type:task`, or `type:bug` to identify their card type. The `labelPrefix` field in `cardTypes` controls the label format.
+
+**Pipeline flow for stories:**
+Backlog → Ready for Design → Designed → **Ready for Tasking** → Tasking → **Waiting for Tasks** → Done
+
+**Pipeline flow for tasks:**
+Ready for Design → Designed → Ready for Implementation → ... → Approved → Done
+
+**Tasking step** ("Ready for Tasking" state):
+- `generate_tasks` step uses `senior_engineer` role with `generate_children.md` prompt
+- `generationConfig` on the step: `targetType: "task"`, `targetColumn: "Ready for Design"`, `linkToParent: true`, `copyFields: ["priority"]`
+- Agent writes `new-{slug}.md` files to `.aiboard/updates/` with `estimate` in front matter (best-guess from scale [1, 2, 4, 8])
+- `UpdateFileProcessor` creates child tickets with type label, parent link, target column, copied priority field, and estimate
+- Notification comments are skipped during structured generation (redundant with parent task list)
+- Story estimate set to sum of child estimates via `setField` transition action
+
+**Priority propagation:**
+`GenerationConfig.CopyFields` specifies fields to copy from parent to child. `UpdateFileProcessor` fetches the parent card's metadata and passes matching values via `CreateCardRequest.FieldValues`. Currently used to copy `priority`.
+
+**Estimate rollup:**
+- `updateParentSum` transition action: finds the card's parent via `trackedInIssues` cross-refs, sums the specified field across all `sub_item` children, and sets the result on the parent card
+- Configured on "Ready for Design" COMPLETE transition (updates story estimate after each child's design refines its estimate) and on "Waiting for Tasks" COMPLETE transition (final sum when story completes)
+- No-op if card has no parent or cross-ref resolver is unavailable
+
+**Completion tracking (event-driven, not polled):**
+- "Waiting for Tasks" is a `holding` state — the poller ignores it entirely, avoiding deadlock
+- When a child task completes merge (Approved → Done), the `completeParentIfReady` transition action fires
+- It finds the parent via `trackedInIssues` cross-refs, fetches all siblings via `trackedIssues`, and checks terminal states
+- If all siblings are Done → transitions parent to Done via its COMPLETE transition target
+- If siblings are pending → posts/updates a progress comment on the parent (stable marker, upserted in place)
+- `CompletionRunner` still exists for other `children_complete` use cases but is not used in the story-to-task flow
 
 ### Rate Limiting
 - `ClaudeAgentExecutor` detects rate limits via stderr analysis (checks for "rate limit" / "overloaded")
@@ -266,7 +298,8 @@ Schema:
       "includeInAgentContext": true,
       "pipelineOrder": 1,
       "steps": [
-        { "name": "<step_name>", "role": "<role_key>", "taskPromptFile": "<path>" }
+        { "name": "<step_name>", "role": "<role_key>", "taskPromptFile": "<path>",
+          "generationConfig": { "targetType": "<cardType>", "targetColumn": "<state>", "linkToParent": true, "copyFields": ["<field>"] } }
       ],
       "gateCheck": {
         "role": "<role_key>",
@@ -277,7 +310,7 @@ Schema:
       ],
       "transitions": {
         "IN_PROGRESS": "<column>",
-        "COMPLETE": "<column> | [{ \"type\": \"moveToColumn\", \"value\": \"...\" }, { \"type\": \"setField\", \"field\": \"...\", \"value\": \"...\" }]",
+        "COMPLETE": "<column> | [{ \"type\": \"moveToColumn\", \"value\": \"...\" }, { \"type\": \"setField\", \"field\": \"...\", \"value\": \"...\" }, { \"type\": \"updateParentSum\", \"field\": \"...\" }]",
         "NEEDS_INFO": "<column>",
         "ERROR": "<column>",
         "GATE_FAIL": "<column>",
@@ -304,6 +337,11 @@ Schema:
 - `systemPromptFile` takes precedence over `systemPrompt`
 - `providerParams` are state-level (shared across all steps)
 - `sections` can be empty for roles that only produce comments (gate_checker, code_reviewer)
+- `generationConfig` on a step configures child ticket creation: `targetType`, `targetColumn`, `linkToParent`, `copyFields`
+- `copyFields` copies specified field values from parent card metadata to created children (e.g., `["priority"]`)
+- `updateParentSum` transition action sums a field across all `sub_item` children and sets the result on the parent
+- `completeParentIfReady` transition action checks if the card's parent has all children in terminal states and transitions the parent if so; posts a progress comment otherwise
+- New ticket front matter supports `estimate:` field — value is set on the created card and summed for parent rollup
 - State keys are column names for GitHub Projects or list IDs for Trello
 
 ## Roles

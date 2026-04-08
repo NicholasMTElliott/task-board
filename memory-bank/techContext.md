@@ -81,6 +81,13 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ Connection string config key renamed from `Pgmq:ConnectionString` to `Database:ConnectionString`
 - ✅ Estimate persisted to `agent_run.estimate` column (captured during design pipeline estimation step)
 - ✅ Agent image upload pipeline: agents write images to `.aiboard/images/output/`; harness uploads to dedicated `agent-images` branch via GitHub Contents API (`gh api repos/{repo}/contents/{path}`); SHA256 content-hash deduplication; `NullImageUploader` for non-GitHub providers
+- ✅ Story-to-task decomposition (Ready for Tasking → Waiting for Tasks pipeline)
+- ✅ Priority propagation from parent to child cards (GenerationConfig.CopyFields)
+- ✅ Estimate rollup to parent card (updateParentSum transition action)
+- ✅ Best-guess estimates on generated tasks (estimate front matter in new-*.md files)
+- ✅ Card type labels (type:story, type:task, type:bug)
+- ✅ Event-driven parent completion (completeParentIfReady transition action replaces polled children_complete for stories)
+- ✅ GetCardAsync now includes project field metadata (priority, estimate) via gh project item-list
 
 ## Open Technical Decisions
 - [ ] Webhook/event-driven triggers (currently manual CLI or polling)

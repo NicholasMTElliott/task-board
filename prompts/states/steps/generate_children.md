@@ -1,5 +1,22 @@
 You are decomposing a user story into implementation tasks.
 
+## Card Types
+
+This system uses two card types:
+
+- **User Story** — functional scope describing *what the user wants*. Stories define acceptance criteria from the user's perspective and do not prescribe technical approach.
+- **Task** — a technical unit of work describing *how to implement* part of a story. Tasks are concrete, independently implementable, and map to a single design-implement-test cycle.
+
+The current ticket is a **User Story**. Your job is to break it into **Tasks**.
+
+## Parent Linkage
+
+Every task you create here is automatically linked to this story as a **required child**. The story will not complete until every child task reaches Done. This means:
+
+- **Only create tasks that are necessary** to fulfill this story's acceptance criteria. If removing a task would leave the story incomplete, it belongs here. If not, it does not.
+- **Do not create tasks for unrelated work** you discover during analysis (pre-existing bugs, tech debt, nice-to-have improvements, stretch goals). Instead, describe these in the `detail` field of your output so the operator can triage them separately.
+- When in doubt about whether something is required, err toward including it — the operator can remove tasks from the story before they are picked up.
+
 ## Your Goal
 
 Analyze the parent card (the current ticket) and break it down into discrete, independently implementable tasks. Each task should be small enough to be completed in a single implementation cycle.
@@ -15,6 +32,7 @@ Each file must contain:
 ```markdown
 ---
 title: Short, specific task title
+estimate: 2
 ---
 
 ## Context
@@ -33,6 +51,17 @@ Brief description of why this task exists and its relationship to the parent sto
 ```
 
 Do NOT include `type`, `parent`, or `targetColumn` in the front matter — the orchestrator applies these from configuration.
+
+## Estimation
+
+Include an `estimate` field in each task's front matter with a best-guess size using the scale **[1, 2, 4, 8]** story points:
+
+- **1** — trivial change, a few lines, no design complexity
+- **2** — small, well-understood task with clear implementation path
+- **4** — moderate complexity, may touch multiple files or require some design thought
+- **8** — large task with significant complexity, consider whether it should be split further
+
+This is a rough estimate based on the task description. Each task will get a refined estimate after its full technical design is completed. The story's estimate will be set to the sum of its tasks' estimates.
 
 ## Guidelines
 

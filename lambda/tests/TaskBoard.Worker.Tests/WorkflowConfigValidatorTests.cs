@@ -1126,6 +1126,98 @@ public class WorkflowConfigValidatorTests
         Assert.DoesNotContain(errors, e => e.Contains("COMPLETE"));
     }
 
+    // ── UpdateParentSum validation ────────────────────────────────
+
+    [Fact]
+    public void Transition_UpdateParentSum_ValidConfig_PassesValidation()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = new TransitionTarget(
+                        [
+                            new TransitionAction(ActionTypes.MoveToColumn, "list-done"),
+                            new TransitionAction(ActionTypes.SetField, "4", Field: "Estimate"),
+                            new TransitionAction(ActionTypes.UpdateParentSum, Field: "Estimate"),
+                        ])
+                    }),
+                ["list-done"] = new WorkflowState("Done", null, "terminal", null,
+                    new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("updateParentSum"));
+    }
+
+    [Fact]
+    public void Transition_UpdateParentSum_MissingField_ReportsError()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze.",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = new TransitionTarget(
+                        [
+                            new TransitionAction(ActionTypes.MoveToColumn, "list-done"),
+                            new TransitionAction(ActionTypes.UpdateParentSum), // missing field
+                        ])
+                    }),
+                ["list-done"] = new WorkflowState("Done", null, "terminal", null,
+                    new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "prompt", new List<string> { "Requirements" })
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e => e.Contains("updateParentSum") && e.Contains("field name"));
+    }
+
+    // ── CompleteParentIfReady validation ────────────────────────────
+
+    [Fact]
+    public void Transition_CompleteParentIfReady_ValidConfig_PassesValidation()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-approved"] = new WorkflowState(
+                    "Approved", null, "system_merge",
+                    null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = new TransitionTarget(
+                        [
+                            new TransitionAction(ActionTypes.MoveToColumn, "list-done"),
+                            new TransitionAction(ActionTypes.CompleteParentIfReady),
+                        ])
+                    }),
+                ["list-done"] = new WorkflowState("Done", null, "terminal", null,
+                    new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new());
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.DoesNotContain(errors, e => e.Contains("completeParentIfReady"));
+    }
+
     // ── Filter validation tests ────────────────────────────────────
 
     [Fact]

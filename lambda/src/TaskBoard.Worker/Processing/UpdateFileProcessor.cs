@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
@@ -155,12 +156,44 @@ public sealed class UpdateFileProcessor(
             : parsed.Parent;
         var targetColumn = generationConfig?.TargetColumn ?? parsed.TargetColumn;
 
+        // Build field values: copy fields from parent + estimate from front matter
+        Dictionary<string, string>? fieldValues = null;
+        if (generationConfig?.CopyFields is { Count: > 0 })
+        {
+            try
+            {
+                var parentCard = await boardClient.GetCardAsync(sourceCardId, ct);
+                if (parentCard.Metadata is not null)
+                {
+                    foreach (var field in generationConfig.CopyFields)
+                    {
+                        if (parentCard.Metadata.TryGetValue(field, out var value) && !string.IsNullOrEmpty(value))
+                        {
+                            fieldValues ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                            fieldValues[field] = value;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Could not fetch parent card #{ParentCardId} to copy fields — proceeding without", sourceCardId);
+            }
+        }
+
+        if (parsed.Estimate is not null)
+        {
+            fieldValues ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            fieldValues[workflowConfig.Estimation?.FieldName ?? "Estimate"] = parsed.Estimate;
+        }
+
         var request = new CreateCardRequest(
             Title: parsed.Title,
             Body: processedBody,
             ParentCardId: parentId,
             CardType: typeLabel,
-            TargetColumn: targetColumn);
+            TargetColumn: targetColumn,
+            FieldValues: fieldValues);
 
         var newCardId = await boardClient.CreateCardAsync(request, ct);
         logger.LogInformation(
@@ -168,15 +201,24 @@ public sealed class UpdateFileProcessor(
             newCardId, parsed.Title, slug,
             parentId ?? "(none)", typeLabel ?? "(none)", targetColumn ?? "(none)");
 
-        // Post notification comment on the source card with dedup marker
-        var dedupMarker = $"<!-- agent-created-ticket:{slug} -->";
-        var commentBody = $"**{agentIdentity.DisplayName}** created #{newCardId}: {parsed.Title}";
-        await boardClient.UpsertAgentCommentAsync(sourceCardId, commentBody, dedupMarker, ct);
+        // Post notification comment on the source card with dedup marker (skip for structured
+        // generation — the task list in the parent body already tracks the relationship)
+        if (generationConfig is null)
+        {
+            var dedupMarker = $"<!-- agent-created-ticket:{slug} -->";
+            var commentBody = $"**{agentIdentity.DisplayName}** created #{newCardId}: {parsed.Title}";
+            await boardClient.UpsertAgentCommentAsync(sourceCardId, commentBody, dedupMarker, ct);
+        }
 
         // Delete processed file
         File.Delete(filePath);
 
-        return new CreatedTicketInfo(newCardId, parsed.Title, slug);
+        // Parse estimate as double for aggregation
+        double? estimateValue = null;
+        if (parsed.Estimate is not null && double.TryParse(parsed.Estimate, CultureInfo.InvariantCulture, out var ev))
+            estimateValue = ev;
+
+        return new CreatedTicketInfo(newCardId, parsed.Title, slug, estimateValue);
     }
 
     private async Task<CrossCardCommentInfo?> ProcessCommentFileAsync(
@@ -286,7 +328,7 @@ public sealed class UpdateFileProcessor(
 
     /// <summary>
     /// Parses a new-ticket update file with optional YAML front matter.
-    /// Front matter fields: title (required), type, parent, targetColumn.
+    /// Front matter fields: title (required), type, parent, targetColumn, estimate.
     /// Body is everything after the closing "---".
     /// </summary>
     internal static ParsedNewTicket? ParseNewTicketFile(string content)
@@ -300,6 +342,7 @@ public sealed class UpdateFileProcessor(
         string? type = null;
         string? parent = null;
         string? targetColumn = null;
+        string? estimate = null;
         string body;
 
         if (trimmed.StartsWith("---", StringComparison.Ordinal))
@@ -328,6 +371,8 @@ public sealed class UpdateFileProcessor(
                     parent = l["parent:".Length..].Trim().Trim('"', '\'');
                 else if (l.StartsWith("targetColumn:", StringComparison.OrdinalIgnoreCase))
                     targetColumn = l["targetColumn:".Length..].Trim().Trim('"', '\'');
+                else if (l.StartsWith("estimate:", StringComparison.OrdinalIgnoreCase))
+                    estimate = l["estimate:".Length..].Trim().Trim('"', '\'');
             }
         }
         else
@@ -339,7 +384,7 @@ public sealed class UpdateFileProcessor(
 
         return string.IsNullOrWhiteSpace(title)
             ? null
-            : new ParsedNewTicket(title, body, type, parent, targetColumn);
+            : new ParsedNewTicket(title, body, type, parent, targetColumn, estimate);
     }
 
     private static string? ExtractTitleFromBody(string body)
@@ -371,9 +416,30 @@ public sealed record UpdateProcessingResult(
 {
     public static readonly UpdateProcessingResult Empty = new([], []);
     public bool HasUpdates => CreatedTickets.Count > 0 || PostedComments.Count > 0;
+
+    /// <summary>
+    /// Sum of all created ticket estimates (from front matter). Null if no estimates were provided.
+    /// </summary>
+    public double? TotalEstimate
+    {
+        get
+        {
+            double sum = 0;
+            bool any = false;
+            foreach (var t in CreatedTickets)
+            {
+                if (t.Estimate.HasValue)
+                {
+                    sum += t.Estimate.Value;
+                    any = true;
+                }
+            }
+            return any ? sum : null;
+        }
+    }
 }
 
-public sealed record CreatedTicketInfo(string NewCardId, string Title, string Slug);
+public sealed record CreatedTicketInfo(string NewCardId, string Title, string Slug, double? Estimate = null);
 public sealed record CrossCardCommentInfo(string TargetCardId, string SourceFileName);
 
 /// <summary>
@@ -384,4 +450,5 @@ internal sealed record ParsedNewTicket(
     string Body,
     string? Type = null,
     string? Parent = null,
-    string? TargetColumn = null);
+    string? TargetColumn = null,
+    string? Estimate = null);

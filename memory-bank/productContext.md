@@ -17,11 +17,12 @@ Manual ticket management is repetitive: drafting technical designs, generating t
 1. Operator creates an issue and adds it to the project board in **Backlog**.
 2. Operator writes requirements/scope/context and moves card to **Ready for Design**.
 3. Operator runs: `.\scripts\run_once.ps1 -CardId {N}` (or uses `--mode polling` for automatic pickup)
-4. Design runs 4 steps: review related tickets → create technical design → review for cross-ticket conflicts → estimate ticket size. Gate check validates output and may trigger optional specialist reviews (security, performance, etc.). Card moves to **Designed** with estimate written to board field.
-5. Operator reviews design, approves by moving to **Ready for Implementation**.
-6. Implementation runs 2 steps: implement code (Sonnet 4.6) → code review (Sonnet 4.6). Gate check validates output and may trigger optional specialist reviews. Card moves to **Ready for Test**.
-7. Test runs 2 steps: QA agent validates implementation → documentation agent updates memory bank if implementation introduced new patterns/components. Gate check validates output (including doc updates) and may trigger optional specialist reviews. Moves to **Tested** on success.
-8. Operator approves by moving to **Approved**. System auto-merges the PR and moves to **Done**.
+4. Design runs 4 steps: review related tickets → create technical design → review for cross-ticket conflicts → estimate ticket size. Gate check validates output and may trigger optional specialist reviews (security, performance, etc.). Card moves to **Designed** with estimate written to board field. If the card has a parent story, the story's estimate is recalculated as the sum of its children.
+5. Operator reviews design. **For user stories** (`type:story`), approves by moving to **Ready for Tasking**. **For tasks/bugs**, approves by moving to **Ready for Implementation**.
+6. *(Stories only)* Tasking decomposes the story into child tasks. Each child inherits the story's priority, gets a best-guess estimate, and is placed in **Ready for Design**. The story's estimate is set to the sum of child estimates. Story moves to **Waiting for Tasks** and completes automatically when all children reach **Done**.
+7. Implementation runs 2 steps: implement code (Sonnet 4.6) → code review (Sonnet 4.6). Gate check validates output and may trigger optional specialist reviews. Card moves to **Ready for Test**.
+8. Test runs 2 steps: QA agent validates implementation → documentation agent updates memory bank if implementation introduced new patterns/components. Gate check validates output (including doc updates) and may trigger optional specialist reviews. Moves to **Tested** on success.
+9. Operator approves by moving to **Approved**. System auto-merges the PR and moves to **Done**.
 
 At any agent state, if the agent needs more information:
 - Card is moved to the relevant **Questions** holding column.

@@ -39,6 +39,10 @@ public sealed class GitHubProjectsClient(
 
         var metadata = new Dictionary<string, string> { ["issueNumber"] = id };
 
+        // Extract project field values (priority, estimate, etc.) from projectItems.
+        // gh issue view returns limited project data, so also populate from project item-list.
+        await PopulateProjectFieldMetadataAsync(id, metadata, cancellationToken);
+
         var labels = root.TryGetProperty("labels", out var labelsProp)
             ? labelsProp.EnumerateArray()
                 .Select(l => l.TryGetProperty("name", out var n) ? n.GetString() : null)
@@ -347,6 +351,11 @@ public sealed class GitHubProjectsClient(
     private async Task<ResolvedField> ResolveFieldAsync(
         string fieldName, CancellationToken cancellationToken)
     {
+        // GitHub Projects GraphQL field(name:) is case-sensitive, but gh project item-list
+        // lowercases all field names. Try the exact name first; on failure, resolve the
+        // canonical name via a case-insensitive lookup across all project fields.
+        var resolvedName = await ResolveFieldNameCaseAsync(fieldName, cancellationToken);
+
         const string query = """
             query($owner: String!, $projectNumber: Int!, $fieldName: String!) {
               user(login: $owner) {
@@ -371,7 +380,7 @@ public sealed class GitHubProjectsClient(
             "-f", $"query={query}",
             "-f", $"owner={_options.Owner}",
             "-F", $"projectNumber={_options.ProjectNumber}",
-            "-f", $"fieldName={fieldName}"], cancellationToken);
+            "-f", $"fieldName={resolvedName}"], cancellationToken);
         using var doc = JsonDocument.Parse(json);
         ThrowOnGraphQlErrors(doc, $"ResolveFieldAsync({fieldName})");
 
@@ -407,6 +416,61 @@ public sealed class GitHubProjectsClient(
         throw new InvalidOperationException(
             $"Could not determine field type for '{fieldName}'. " +
             "The field may be an unsupported type (e.g., iteration).");
+    }
+
+    /// <summary>
+    /// Resolves the canonical (properly-cased) field name for a GitHub Project field.
+    /// gh project item-list lowercases all field names (e.g., "Priority" → "priority"),
+    /// but the GraphQL field(name:) query is case-sensitive. This method fetches all
+    /// field names and returns the case-insensitive match.
+    /// </summary>
+    private async Task<string> ResolveFieldNameCaseAsync(
+        string fieldName, CancellationToken cancellationToken)
+    {
+        const string query = """
+            query($owner: String!, $projectNumber: Int!) {
+              user(login: $owner) {
+                projectV2(number: $projectNumber) {
+                  fields(first: 50) {
+                    nodes {
+                      ... on ProjectV2Field { name }
+                      ... on ProjectV2SingleSelectField { name }
+                      ... on ProjectV2IterationField { name }
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        try
+        {
+            var json = await RunGhAsync(["api", "graphql",
+                "-f", $"query={query}",
+                "-f", $"owner={_options.Owner}",
+                "-F", $"projectNumber={_options.ProjectNumber}"], cancellationToken);
+
+            using var doc = JsonDocument.Parse(json);
+            var fields = doc.RootElement
+                .GetProperty("data").GetProperty("user").GetProperty("projectV2")
+                .GetProperty("fields").GetProperty("nodes");
+
+            foreach (var node in fields.EnumerateArray())
+            {
+                if (node.TryGetProperty("name", out var nameProp))
+                {
+                    var name = nameProp.GetString();
+                    if (name is not null && string.Equals(name, fieldName, StringComparison.OrdinalIgnoreCase))
+                        return name;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Failed to resolve canonical field name for '{FieldName}' — using as-is", fieldName);
+        }
+
+        return fieldName; // fallback: use as-is
     }
 
     private async Task<(string ProjectId, string FieldId, string OptionId)> ResolveStatusFieldOption(
@@ -525,6 +589,42 @@ public sealed class GitHubProjectsClient(
         }
 
         return "";
+    }
+
+    /// <summary>
+    /// Fetches project field values (priority, estimate, etc.) for a single card via
+    /// gh project item-list and adds them to the metadata dictionary. Best-effort — failures
+    /// are logged as warnings and the metadata remains unchanged.
+    /// </summary>
+    private async Task PopulateProjectFieldMetadataAsync(
+        string cardId, Dictionary<string, string> metadata, CancellationToken ct)
+    {
+        try
+        {
+            var json = await RunGhAsync(
+                ["project", "item-list", _options.ProjectNumber.ToString(),
+                 "--owner", _options.Owner, "--limit", "500", "--format", "json",
+                 "--jq", $".items[] | select(.content.number == {cardId})"],
+                ct);
+
+            if (string.IsNullOrWhiteSpace(json))
+                return;
+
+            using var doc = JsonDocument.Parse(json);
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (prop.Name is "id" or "content" or "status" or "title" or "repository" or "labels")
+                    continue;
+                if (prop.Value.ValueKind == JsonValueKind.String)
+                    metadata[prop.Name] = prop.Value.GetString() ?? "";
+                else if (prop.Value.ValueKind == JsonValueKind.Number)
+                    metadata[prop.Name] = prop.Value.GetRawText();
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to fetch project field metadata for card #{CardId} — continuing without", cardId);
+        }
     }
 
     public async Task AddLabelAsync(string cardId, string labelName, CancellationToken cancellationToken)
@@ -764,6 +864,23 @@ public sealed class GitHubProjectsClient(
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Failed to move #{IssueNumber} to column '{Column}'", issueNumber, request.TargetColumn);
+            }
+        }
+
+        // 6. Best-effort: set custom field values (priority, estimate, etc.)
+        if (request.FieldValues is not null)
+        {
+            foreach (var (fieldName, fieldValue) in request.FieldValues)
+            {
+                try
+                {
+                    await SetFieldAsync(issueNumber, fieldName, fieldValue, ct);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to set field '{Field}' to '{Value}' on #{IssueNumber}",
+                        fieldName, fieldValue, issueNumber);
+                }
             }
         }
 

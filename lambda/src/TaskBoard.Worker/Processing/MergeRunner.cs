@@ -8,6 +8,7 @@ public sealed class MergeRunner(
     GitWorkspaceManager gitWorkspaceManager,
     WorkflowConfig workflowConfig,
     AgentIdentity agentIdentity,
+    ICrossReferenceResolver crossReferenceResolver,
     ILogger<MergeRunner> logger)
 {
     private const int DefaultMaxRetries = 3;
@@ -55,7 +56,8 @@ public sealed class MergeRunner(
         if (state.Transitions.TryGetValue(TransitionKeys.InProgress, out var inProgressTarget))
         {
             await TransitionExecutor.ExecuteAsync(
-                cardId, inProgressTarget, boardClient, logger, cancellationToken);
+                cardId, inProgressTarget, boardClient, logger, cancellationToken,
+                crossRefResolver: crossReferenceResolver, workflowConfig: workflowConfig);
             logger.LogInformation("Moved card {CardId} to in-progress via {Count} action(s)",
                 cardId, inProgressTarget.Actions.Count);
         }
@@ -295,7 +297,8 @@ public sealed class MergeRunner(
 
         try
         {
-            await TransitionExecutor.ExecuteAsync(cardId, target, boardClient, logger, cancellationToken);
+            await TransitionExecutor.ExecuteAsync(cardId, target, boardClient, logger, cancellationToken,
+                crossRefResolver: crossReferenceResolver, workflowConfig: workflowConfig);
             logger.LogInformation("Executed {Outcome} transition actions for card {CardId}", outcome, cardId);
         }
         catch (Exception ex)
