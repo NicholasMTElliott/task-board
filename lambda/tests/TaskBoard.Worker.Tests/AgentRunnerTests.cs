@@ -50,6 +50,7 @@ public class AgentRunnerTests : IDisposable
             new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -198,6 +199,7 @@ public class AgentRunnerTests : IDisposable
             BuildWorkflowConfig().Normalised(), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, BuildWorkflowConfig().Normalised(), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         SetupBoardCards();
@@ -549,6 +551,7 @@ public class AgentRunnerTests : IDisposable
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
@@ -577,6 +580,7 @@ public class AgentRunnerTests : IDisposable
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -587,6 +591,7 @@ public class AgentRunnerTests : IDisposable
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             runStore,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -604,6 +609,7 @@ public class AgentRunnerTests : IDisposable
                 new AgentIdentity("Test", "Agent", "TestMachine"),
                 NullLogger<UpdateFileProcessor>.Instance),
             runStore,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
     }
 
@@ -712,6 +718,7 @@ public class AgentRunnerTests : IDisposable
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
@@ -743,6 +750,7 @@ public class AgentRunnerTests : IDisposable
             config, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
         SetupBoardCards("list-multi");
 
@@ -838,6 +846,7 @@ public class AgentRunnerTests : IDisposable
             _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
@@ -885,6 +894,7 @@ public class AgentRunnerTests : IDisposable
             _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             NullLogger<AgentRunner>.Instance);
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);

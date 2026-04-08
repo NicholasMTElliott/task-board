@@ -14,6 +14,8 @@ public sealed partial class TaskFileManager(ILogger<TaskFileManager> logger)
         IReadOnlyList<BoardCard> cards,
         WorkflowConfig workflowConfig,
         ReferenceAnnotationContext? referenceContext = null,
+        IReadOnlyDictionary<string, string>? imageMapping = null,
+        string? imageTargetCardId = null,
         CancellationToken cancellationToken = default)
     {
         var tasksDir = Path.Combine(workspacePath, TasksRelativePath);
@@ -25,7 +27,7 @@ public sealed partial class TaskFileManager(ILogger<TaskFileManager> logger)
                 ? state.Name
                 : "Unknown";
 
-            var content = BuildTaskFileContent(card, listName, referenceContext);
+            var content = BuildTaskFileContent(card, listName, referenceContext, imageMapping, imageTargetCardId);
             var filePath = GetTaskFilePath(workspacePath, card.Id, card.Title);
 
             await File.WriteAllTextAsync(filePath, content, Encoding.UTF8, cancellationToken);
@@ -54,7 +56,8 @@ public sealed partial class TaskFileManager(ILogger<TaskFileManager> logger)
     }
 
     internal static string BuildTaskFileContent(
-        BoardCard card, string listName, ReferenceAnnotationContext? referenceContext = null)
+        BoardCard card, string listName, ReferenceAnnotationContext? referenceContext = null,
+        IReadOnlyDictionary<string, string>? imageMapping = null, string? imageTargetCardId = null)
     {
         var body = card.Body;
 
@@ -73,6 +76,11 @@ public sealed partial class TaskFileManager(ILogger<TaskFileManager> logger)
             var crossRefSection = BuildCrossReferencesSection(nonTextRefs, referenceContext.CardIdToFilePath);
             if (crossRefSection is not null)
                 body = body + "\n\n" + crossRefSection;
+        }
+
+        if (imageMapping is not null && imageMapping.Count > 0 && card.Id == imageTargetCardId)
+        {
+            body = AnnotateBodyWithImagePaths(body, imageMapping);
         }
 
         var sb = new StringBuilder();
@@ -165,10 +173,42 @@ public sealed partial class TaskFileManager(ILogger<TaskFileManager> logger)
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Appends <c>( local image: path )</c> annotations after markdown and HTML image references
+    /// whose URLs appear in <paramref name="urlToLocalPath"/>.
+    /// </summary>
+    internal static string AnnotateBodyWithImagePaths(
+        string body, IReadOnlyDictionary<string, string> urlToLocalPath)
+    {
+        if (string.IsNullOrEmpty(body) || urlToLocalPath.Count == 0)
+            return body;
+
+        body = MarkdownImageAnnotationRegex().Replace(body, m =>
+        {
+            var url = m.Groups[1].Value.Trim();
+            return urlToLocalPath.TryGetValue(url, out var localPath)
+                ? $"{m.Value} ( local image: {localPath} )"
+                : m.Value;
+        });
+
+        body = HtmlImgAnnotationRegex().Replace(body, m =>
+        {
+            var url = m.Groups[1].Value.Trim();
+            return urlToLocalPath.TryGetValue(url, out var localPath)
+                ? $"{m.Value} ( local image: {localPath} )"
+                : m.Value;
+        });
+
+        return body;
+    }
+
     internal static string StripAnnotations(string body)
     {
-        // Strip inline annotations: ( see .aiboard/tasks/....md )
+        // Strip inline reference annotations: ( see .aiboard/tasks/....md )
         body = Regex.Replace(body, @"\s*\(\s*see\s+\.aiboard/tasks/[^)]+\.md\s*\)", "");
+
+        // Strip inline image annotations: ( local image: .aiboard/images/... )
+        body = Regex.Replace(body, @"\s*\(\s*local image:\s*\.aiboard/images/[^)]+\)", "");
 
         // Strip the ## Cross-References section (always at end)
         body = Regex.Replace(body, @"\n*## Cross-References\n[\s\S]*$", "");
@@ -348,6 +388,12 @@ public sealed partial class TaskFileManager(ILogger<TaskFileManager> logger)
 
         return result.TrimEnd();
     }
+
+    [GeneratedRegex(@"!\[[^\]]*\]\((https?://[^\)]+)\)", RegexOptions.IgnoreCase)]
+    private static partial Regex MarkdownImageAnnotationRegex();
+
+    [GeneratedRegex(@"<img[^>]*?\bsrc=[""'](https?://[^""']+)[""'][^>]*>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex HtmlImgAnnotationRegex();
 
     [GeneratedRegex(@"<details>.*?</details>", RegexOptions.Singleline)]
     private static partial Regex DetailsBlockRegex();
