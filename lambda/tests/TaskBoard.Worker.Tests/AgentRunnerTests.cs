@@ -674,12 +674,11 @@ public class AgentRunnerTests : IDisposable
 
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
 
-        // Should have 2 step comments + 1 run-level comment = at least 3 upsert calls
+        // Should have exactly 2 step comments; no run-level comment for discard states (gitNote is null)
         var commentCalls = _trelloClient.ReceivedCalls()
             .Where(c => c.GetMethodInfo().Name == "UpsertAgentCommentAsync")
             .ToList();
-        Assert.True(commentCalls.Count >= 3,
-            $"Expected at least 3 comment upserts (2 steps + 1 run), got {commentCalls.Count}");
+        Assert.Equal(2, commentCalls.Count);
 
         // Verify step markers are used
         var markers = commentCalls.Select(c => (string)c.GetArguments()[2]!).ToList();
