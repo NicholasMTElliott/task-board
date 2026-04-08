@@ -11,7 +11,8 @@ public sealed record CreateCardRequest(
     string? ParentCardId = null,
     string? CardType = null,
     string? TargetColumn = null,
-    IReadOnlyList<string>? Labels = null);
+    IReadOnlyList<string>? Labels = null,
+    IReadOnlyDictionary<string, string>? FieldValues = null);
 
 /// <summary>
 /// Provider-agnostic interface for task board operations.

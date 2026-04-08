@@ -767,6 +767,23 @@ public sealed class GitHubProjectsClient(
             }
         }
 
+        // 6. Best-effort: set custom field values (priority, estimate, etc.)
+        if (request.FieldValues is not null)
+        {
+            foreach (var (fieldName, fieldValue) in request.FieldValues)
+            {
+                try
+                {
+                    await SetFieldAsync(issueNumber, fieldName, fieldValue, ct);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to set field '{Field}' to '{Value}' on #{IssueNumber}",
+                        fieldName, fieldValue, issueNumber);
+                }
+            }
+        }
+
         return issueNumber;
     }
 

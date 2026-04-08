@@ -16,8 +16,9 @@ public static class ActionTypes
     public const string ClearField   = "clearField";
     public const string Assign       = "assign";
     public const string Unassign     = "unassign";
-    public const string AddLabel     = "addLabel";
-    public const string RemoveLabel  = "removeLabel";
+    public const string AddLabel        = "addLabel";
+    public const string RemoveLabel     = "removeLabel";
+    public const string UpdateParentSum = "updateParentSum";
 }
 
 [JsonConverter(typeof(TransitionTargetConverter))]
@@ -69,7 +70,8 @@ public sealed record CardTypeDefinition(
 public sealed record GenerationConfig(
     string TargetType,
     string? TargetColumn = null,
-    bool LinkToParent = true);
+    bool LinkToParent = true,
+    List<string>? CopyFields = null);
 
 // ── Workflow config ───────────────────────────────────────────────────────────
 

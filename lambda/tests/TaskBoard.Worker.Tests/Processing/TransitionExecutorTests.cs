@@ -243,4 +243,135 @@ public class TransitionExecutorTests
         // Column move should still execute
         await _boardClient.Received(1).MoveCardToColumnAsync(CardId, "Designing", Arg.Any<CancellationToken>());
     }
+
+    // --- UpdateParentSum action ---
+
+    [Fact]
+    public async Task ExecuteAsync_UpdateParentSum_SumsChildEstimatesOnParent()
+    {
+        var crossRefResolver = Substitute.For<ICrossReferenceResolver>();
+
+        // Card has a parent
+        crossRefResolver.GetStructuredReferencesAsync(CardId, Arg.Any<CancellationToken>())
+            .Returns([new CardReference("parent-1", "parent_item", null, "Story")]);
+
+        // Parent has two children
+        crossRefResolver.GetStructuredReferencesAsync("parent-1", Arg.Any<CancellationToken>())
+            .Returns([
+                new CardReference("child-a", "sub_item", null, "Task A"),
+                new CardReference("child-b", "sub_item", null, "Task B"),
+            ]);
+
+        _boardClient.GetCardAsync("child-a", Arg.Any<CancellationToken>())
+            .Returns(new BoardCard("child-a", "Task A", "", "Designed",
+                Metadata: new Dictionary<string, string> { ["Estimate"] = "4" }));
+        _boardClient.GetCardAsync("child-b", Arg.Any<CancellationToken>())
+            .Returns(new BoardCard("child-b", "Task B", "", "Designed",
+                Metadata: new Dictionary<string, string> { ["Estimate"] = "2" }));
+
+        var target = new TransitionTarget([
+            new TransitionAction(ActionTypes.UpdateParentSum, Field: "Estimate"),
+        ]);
+
+        await TransitionExecutor.ExecuteAsync(
+            CardId, target, _boardClient, _logger, CancellationToken.None,
+            crossRefResolver: crossRefResolver);
+
+        await _boardClient.Received(1).SetFieldAsync("parent-1", "Estimate", "6", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UpdateParentSum_NoParent_Noop()
+    {
+        var crossRefResolver = Substitute.For<ICrossReferenceResolver>();
+
+        // Card has no parent
+        crossRefResolver.GetStructuredReferencesAsync(CardId, Arg.Any<CancellationToken>())
+            .Returns(Array.Empty<CardReference>());
+
+        var target = new TransitionTarget([
+            new TransitionAction(ActionTypes.UpdateParentSum, Field: "Estimate"),
+        ]);
+
+        await TransitionExecutor.ExecuteAsync(
+            CardId, target, _boardClient, _logger, CancellationToken.None,
+            crossRefResolver: crossRefResolver);
+
+        await _boardClient.DidNotReceive().SetFieldAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UpdateParentSum_NoCrossRefResolver_Noop()
+    {
+        var target = new TransitionTarget([
+            new TransitionAction(ActionTypes.UpdateParentSum, Field: "Estimate"),
+        ]);
+
+        // No crossRefResolver passed — should not throw
+        await TransitionExecutor.ExecuteAsync(
+            CardId, target, _boardClient, _logger, CancellationToken.None,
+            crossRefResolver: null);
+
+        await _boardClient.DidNotReceive().SetFieldAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UpdateParentSum_ChildrenWithoutEstimate_NoSetField()
+    {
+        var crossRefResolver = Substitute.For<ICrossReferenceResolver>();
+
+        crossRefResolver.GetStructuredReferencesAsync(CardId, Arg.Any<CancellationToken>())
+            .Returns([new CardReference("parent-1", "parent_item", null, "Story")]);
+        crossRefResolver.GetStructuredReferencesAsync("parent-1", Arg.Any<CancellationToken>())
+            .Returns([new CardReference("child-a", "sub_item", null, "Task A")]);
+
+        _boardClient.GetCardAsync("child-a", Arg.Any<CancellationToken>())
+            .Returns(new BoardCard("child-a", "Task A", "", "Backlog",
+                Metadata: new Dictionary<string, string>())); // no Estimate
+
+        var target = new TransitionTarget([
+            new TransitionAction(ActionTypes.UpdateParentSum, Field: "Estimate"),
+        ]);
+
+        await TransitionExecutor.ExecuteAsync(
+            CardId, target, _boardClient, _logger, CancellationToken.None,
+            crossRefResolver: crossRefResolver);
+
+        await _boardClient.DidNotReceive().SetFieldAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UpdateParentSum_PartialEstimates_SumsAvailable()
+    {
+        var crossRefResolver = Substitute.For<ICrossReferenceResolver>();
+
+        crossRefResolver.GetStructuredReferencesAsync(CardId, Arg.Any<CancellationToken>())
+            .Returns([new CardReference("parent-1", "parent_item", null, "Story")]);
+        crossRefResolver.GetStructuredReferencesAsync("parent-1", Arg.Any<CancellationToken>())
+            .Returns([
+                new CardReference("child-a", "sub_item", null, "Task A"),
+                new CardReference("child-b", "sub_item", null, "Task B"),
+            ]);
+
+        _boardClient.GetCardAsync("child-a", Arg.Any<CancellationToken>())
+            .Returns(new BoardCard("child-a", "Task A", "", "Designed",
+                Metadata: new Dictionary<string, string> { ["Estimate"] = "8" }));
+        _boardClient.GetCardAsync("child-b", Arg.Any<CancellationToken>())
+            .Returns(new BoardCard("child-b", "Task B", "", "Backlog",
+                Metadata: new Dictionary<string, string>())); // no estimate yet
+
+        var target = new TransitionTarget([
+            new TransitionAction(ActionTypes.UpdateParentSum, Field: "Estimate"),
+        ]);
+
+        await TransitionExecutor.ExecuteAsync(
+            CardId, target, _boardClient, _logger, CancellationToken.None,
+            crossRefResolver: crossRefResolver);
+
+        // Only child-a has an estimate, so sum = 8
+        await _boardClient.Received(1).SetFieldAsync("parent-1", "Estimate", "8", Arg.Any<CancellationToken>());
+    }
 }

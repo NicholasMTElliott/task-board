@@ -75,16 +75,19 @@ CompletionRunner flow (children_complete states):
 | 3 | Designing | -- | In-progress |
 | 4 | Design Questions | -- | Holding (NEEDS_INFO) |
 | 5 | Designed | -- | Manual gate |
-| 6 | Ready for Implementation | Implementer + Code Reviewer (2 steps + optional specialist reviews) | agent_run |
-| 7 | Implementing | -- | In-progress |
-| 8 | Implementation Questions | -- | Holding (NEEDS_INFO) |
-| 9 | Ready for Test | QA + Doc Updater (2 steps + optional specialist reviews) | agent_run |
-| 10 | Testing | -- | In-progress |
-| 11 | Tested | -- | Manual gate |
-| 12 | Approved | -- | system_merge |
-| 13 | Merging | -- | In-progress |
-| 14 | Done | -- | Terminal |
-| 15 | Error | -- | Holding |
+| 6 | Ready for Tasking | Senior Engineer (1 step: decompose story into tasks) | agent_run |
+| 7 | Tasking | -- | In-progress |
+| 8 | Waiting for Tasks | -- | children_complete |
+| 9 | Ready for Implementation | Implementer + Code Reviewer (2 steps + optional specialist reviews) | agent_run |
+| 10 | Implementing | -- | In-progress |
+| 11 | Implementation Questions | -- | Holding (NEEDS_INFO) |
+| 12 | Ready for Test | QA + Doc Updater (2 steps + optional specialist reviews) | agent_run |
+| 13 | Testing | -- | In-progress |
+| 14 | Tested | -- | Manual gate |
+| 15 | Approved | -- | system_merge |
+| 16 | Merging | -- | In-progress |
+| 17 | Done | -- | Terminal |
+| 18 | Error | -- | Holding |
 
 ---
 
@@ -106,14 +109,15 @@ CompletionRunner flow (children_complete states):
 
 ## How It Works
 
-1. Operator creates an issue, adds it to the project board in **Backlog**.
+1. Operator creates an issue, adds it to the project board in **Backlog**. Issues are labeled `type:story`, `type:task`, or `type:bug` to indicate their card type.
 2. Operator writes requirements/scope and moves card to **Ready for Design**.
 3. Operator runs: `.\scripts\run_once.ps1 -CardId 3` (or uses `--mode polling` for automatic pickup)
-4. Design runs 4 steps: review related tickets -> create technical design -> review for cross-ticket conflicts -> estimate ticket size. Gate check validates output and may trigger optional specialist reviews. Card moves to **Designed** with estimate written to board field.
-5. Operator reviews design, approves by moving to **Ready for Implementation**.
-6. Implementation runs 2 steps: implement code (Sonnet) -> code review (Sonnet). Gate check validates output and may trigger optional specialist reviews. Card moves to **Ready for Test**.
-7. Test runs 2 steps: QA agent validates implementation -> documentation agent updates memory bank if needed. Gate check validates output (including doc updates) and may trigger optional specialist reviews. Moves to **Tested** on success.
-8. Operator approves by moving to **Approved**. System auto-merges the PR branch and moves to **Done**.
+4. Design runs 4 steps: review related tickets -> create technical design -> review for cross-ticket conflicts -> estimate ticket size. Gate check validates output and may trigger optional specialist reviews. Card moves to **Designed** with estimate written to board field. If the card has a parent story, the story's estimate is recalculated as the sum of its children.
+5. Operator reviews design. **For user stories**, approves by moving to **Ready for Tasking**. **For tasks/bugs**, approves by moving to **Ready for Implementation**.
+6. *(Stories only)* Tasking decomposes the story into child tasks. Each task inherits the story's priority, gets a best-guess estimate, and is placed in **Ready for Design**. The story moves to **Waiting for Tasks** and completes automatically when all child tasks reach **Done**.
+7. Implementation runs 2 steps: implement code (Sonnet) -> code review (Sonnet). Gate check validates output and may trigger optional specialist reviews. Card moves to **Ready for Test**.
+8. Test runs 2 steps: QA agent validates implementation -> documentation agent updates memory bank if needed. Gate check validates output (including doc updates) and may trigger optional specialist reviews. Moves to **Tested** on success.
+9. Operator approves by moving to **Approved**. System auto-merges the PR branch and moves to **Done**.
 
 If the agent needs more information, the card moves to a **Questions** column with questions posted as a comment. The operator answers and moves the card back to re-trigger.
 
@@ -207,12 +211,14 @@ File-based config (`workflow.github.json`) maps columns to roles and transitions
 - `steps` array defines sequential agent invocations within a state (each with its own role and prompt)
 - `gateCheck` runs a lightweight agent after all steps complete to validate output
 - `providerParams` passes executor-specific flags (e.g., `effort` for Claude CLI)
-- `gitBehavior`: `discard` (design/test), `commit_and_push` (implementation)
+- `gitBehavior`: `discard` (design/test/tasking), `commit_and_push` (implementation)
 - `taskPromptFile` / `systemPromptFile` point to markdown files under `prompts/`
 - `pipelineOrder` determines polling priority (higher = picked first)
-- `transitions` values can be a string (column name) or an array of actions (`moveToColumn`, `setField`)
+- `transitions` values can be a string (column name) or an array of actions (`moveToColumn`, `setField`, `updateParentSum`)
 - `estimation` configures calibration-based ticket sizing (scale, calibration ticket, board field)
 - `cardTypes` defines card type hierarchy for child task generation (e.g., stories → tasks)
+- `generationConfig` on a step specifies child ticket creation: `targetType`, `targetColumn`, `linkToParent`, `copyFields` (fields to inherit from parent, e.g., priority)
+- `updateParentSum` transition action recalculates a parent card's field as the sum of its children's values (used for estimate rollup)
 
 ---
 

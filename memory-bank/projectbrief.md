@@ -40,13 +40,16 @@ A single founder/operator can place a card in a "Ready for" column on their kanb
 | 3 | Designing | — | In-progress |
 | 4 | Design Questions | — | Holding (NEEDS_INFO) |
 | 5 | Designed | — | Manual gate |
-| 6 | Ready for Implementation | Implementer + Code Reviewer (2 steps + optional specialist reviews) | agent_run |
-| 7 | Implementing | — | In-progress |
-| 8 | Implementation Questions | — | Holding (NEEDS_INFO) |
-| 9 | Ready for Test | QA + Doc Updater (2 steps + optional specialist reviews) | agent_run |
-| 10 | Testing | — | In-progress |
-| 11 | Tested | — | Manual gate |
-| 12 | Approved | — | system_merge |
-| 13 | Merging | — | In-progress |
-| 14 | Done | — | Terminal |
+| 6 | Ready for Tasking | Senior Engineer (story decomposition + best-guess estimates) | agent_run |
+| 7 | Tasking | — | In-progress |
+| 8 | Waiting for Tasks | — | children_complete |
+| 9 | Ready for Implementation | Implementer + Code Reviewer (2 steps + optional specialist reviews) | agent_run |
+| 10 | Implementing | — | In-progress |
+| 11 | Implementation Questions | — | Holding (NEEDS_INFO) |
+| 12 | Ready for Test | QA + Doc Updater (2 steps + optional specialist reviews) | agent_run |
+| 13 | Testing | — | In-progress |
+| 14 | Tested | — | Manual gate |
+| 15 | Approved | — | system_merge |
+| 16 | Merging | — | In-progress |
+| 17 | Done | — | Terminal |
 | 15 | Error | — | Holding |

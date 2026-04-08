@@ -77,6 +77,11 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ Multi-executor support (AgentExecutorResolver: claude-cli, codex, stub)
 - ✅ Sleep inhibition during polling (Windows/Mac/Linux)
 - ✅ Startup prerequisite validation (PrerequisiteValidator)
+- ✅ Story-to-task decomposition (Ready for Tasking → Waiting for Tasks pipeline)
+- ✅ Priority propagation from parent to child cards (GenerationConfig.CopyFields)
+- ✅ Estimate rollup to parent card (updateParentSum transition action)
+- ✅ Best-guess estimates on generated tasks (estimate front matter in new-*.md files)
+- ✅ Card type labels (type:story, type:task, type:bug)
 
 ## Open Technical Decisions
 - [ ] Webhook/event-driven triggers (currently manual CLI or polling)
