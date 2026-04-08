@@ -54,7 +54,7 @@ AgentRunner flow (agent_run states):
   → write task files + comments file
   → execute steps sequentially (each step = Claude CLI subprocess)
   → optional gate check (lightweight Haiku validation)
-  → post-process: upsert step comments, handle git, move to outcome column
+  → post-process: upload agent-generated images, upsert step comments, handle git, move to outcome column
 
 MergeRunner flow (system_merge states):
   Fetch card → find work branch → merge to main (--no-ff)
@@ -245,7 +245,7 @@ File-based config (`workflow.github.json`) maps columns to roles and transitions
 
 - .NET 10 SDK
 - Docker (for local PostgreSQL)
-- `gh` CLI authenticated with `project` + `repo` scopes
+- `gh` CLI authenticated with `project` + `repo` scopes (add `contents:write` for agent image uploads)
 - `claude` CLI installed and authenticated
 
 ### Start the database
