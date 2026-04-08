@@ -23,4 +23,9 @@ public sealed record StepResultRecord(
     IReadOnlyList<AgentQuestion>? Questions,
     IReadOnlyList<string>? RequestedSteps,
     DateTimeOffset StartedAtUtc,
-    DateTimeOffset CompletedAtUtc);
+    DateTimeOffset CompletedAtUtc,
+    /// <summary>
+    /// Time in milliseconds taken to execute this step via docker exec inside a reused container.
+    /// Null when the step ran via direct docker run (no session) or via a non-Docker executor.
+    /// </summary>
+    int? SessionExecMs = null);
