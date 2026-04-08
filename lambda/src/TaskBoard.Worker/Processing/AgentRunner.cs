@@ -424,6 +424,14 @@ public sealed partial class AgentRunner(
             {
                 templateContext["estimation"] = capturedEstimate.Value.ToString("G", CultureInfo.InvariantCulture);
             }
+            else if (workflowConfig.Estimation is not null)
+            {
+                logger.LogWarning(
+                    "Estimation is configured but no step returned a structured estimate for card {CardId}. " +
+                    "The estimator agent may have described the estimate in the detail text without setting " +
+                    "the 'estimate' field in its JSON output.",
+                    cardId);
+            }
 
             // 7. Run gate check if configured
             var gateCheckResult = await RunGateCheckAsync(
@@ -467,9 +475,12 @@ public sealed partial class AgentRunner(
             var gitNote = await HandleGitBehaviorAsync(
                 gitBehavior, worktreePath, branchName, targetCard, state, lastResult!, cancellationToken);
 
-            // 9. Post-process: upsert run-level comment, move card to next state
-            var runComment = $"{commentPrefix}\n\n{FormatComment(lastResult!, gitNote, includeConversationLog: runStore is NullRunStore)}";
-            await boardClient.UpsertAgentCommentAsync(cardId, runComment, runMarker, cancellationToken);
+            // 9. Post-process: upsert run-level comment (only when git note is present), move card to next state
+            if (!string.IsNullOrEmpty(gitNote))
+            {
+                var runComment = $"{commentPrefix}\n\n---\n{gitNote}";
+                await boardClient.UpsertAgentCommentAsync(cardId, runComment, runMarker, cancellationToken);
+            }
 
             await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, lastResult!.Outcome, null, cancellationToken));
 
