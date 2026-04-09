@@ -470,6 +470,33 @@ public class PrerequisiteValidatorTests
         Assert.Contains(errors, e => e.Contains("ProjectNumber"));
     }
 
+    // ── Docker provider ──────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ValidateAsync_DockerProvider_InAvailableProviders_NoProviderError()
+    {
+        var config = MakeMinimalConfig();
+        var providers = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "docker" };
+
+        var errors = await PrerequisiteValidator.ValidateAsync(
+            config, "stub", providers, Path.GetTempPath());
+
+        Assert.DoesNotContain(errors, e => e.Contains("No AI agent providers are available"));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_NoProviders_ErrorMentionsDockerOption()
+    {
+        var config = MakeMinimalConfig();
+        var emptyProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var errors = await PrerequisiteValidator.ValidateAsync(
+            config, "stub", emptyProviders, Path.GetTempPath());
+
+        Assert.Contains(errors, e =>
+            e.Contains("No AI agent providers are available") && e.Contains("docker"));
+    }
+
     // ── Helper ──────────────────────────────────────────────────────────────
 
     /// <summary>Minimal config with no prompt files to validate.</summary>

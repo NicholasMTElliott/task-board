@@ -27,6 +27,9 @@ public static class PrerequisiteValidator
                 cancellationToken))
             available.Add("codex");
 
+        if (await IsDockerAvailableAsync(cancellationToken))
+            available.Add("docker");
+
         return available;
     }
 
@@ -124,7 +127,8 @@ public static class PrerequisiteValidator
         if (availableProviders.Count == 0)
         {
             errors.Add("No AI agent providers are available. " +
-                "At least one of claude-cli (Claude CLI) or codex (Codex CLI) must be installed and on PATH.");
+                "At least one of claude-cli (Claude CLI), codex (Codex CLI), " +
+                "or docker (Docker daemon) must be installed and available.");
         }
 
         // Prompt file checks
@@ -170,6 +174,21 @@ public static class PrerequisiteValidator
     }
 
     // --- Private helpers ---
+
+    /// <summary>
+    /// Two-phase Docker detection: verifies the CLI is present and the daemon is running.
+    /// </summary>
+    private static async Task<bool> IsDockerAvailableAsync(CancellationToken cancellationToken)
+    {
+        // Phase 1: CLI present
+        var (cliOk, _) = await TryRunCommandAsync("docker", ["--version"], cancellationToken: cancellationToken);
+        if (!cliOk)
+            return false;
+
+        // Phase 2: Daemon running (docker info contacts the daemon)
+        var (daemonOk, _) = await TryRunCommandAsync("docker", ["info"], cancellationToken: cancellationToken);
+        return daemonOk;
+    }
 
     private static async Task<bool> IsCliAvailableAsync(
         string fileName, CancellationToken cancellationToken)
