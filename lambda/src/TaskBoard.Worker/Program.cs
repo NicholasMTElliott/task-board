@@ -159,7 +159,7 @@ HashSet<string> detectedProviders;
 if (agentExecutorMode == "stub")
 {
     // Stub mode: all providers map to stub, all considered available
-    detectedProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli", "codex", "stub" };
+    detectedProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli", "codex", "stub", "docker" };
 }
 else
 {
@@ -184,6 +184,12 @@ else
         });
         builder.Services.AddSingleton<CodexAgentExecutor>();
     }
+
+    if (detectedProviders.Contains("docker"))
+    {
+        builder.Services.Configure<DockerAgentOptions>(builder.Configuration.GetSection(DockerAgentOptions.SectionName));
+        builder.Services.AddSingleton<DockerAgentExecutor>();
+    }
 }
 
 builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
@@ -199,6 +205,8 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
         executors["claude-cli"] = sp.GetRequiredService<ClaudeAgentExecutor>();
     if (detectedProviders.Contains("codex"))
         executors["codex"] = sp.GetRequiredService<CodexAgentExecutor>();
+    if (detectedProviders.Contains("docker"))
+        executors["docker"] = sp.GetRequiredService<DockerAgentExecutor>();
     return new AgentExecutorResolver(executors);
 });
 

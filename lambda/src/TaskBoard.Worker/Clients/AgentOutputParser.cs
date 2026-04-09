@@ -161,6 +161,135 @@ internal static class AgentOutputParser
         return inner.Trim();
     }
 
+    /// <summary>
+    /// Parses Claude CLI NDJSON stream output into a result JSON string and a conversation log.
+    /// Finds the first <c>type="result"</c> message that carries a valid
+    /// <c>structured_output</c>, falling back to the last result message.
+    /// Assembles conversation log from all <c>type="assistant"</c> text blocks.
+    /// </summary>
+    internal static (string? ResultJson, string ConversationLog) ParseStreamOutput(
+        string stdout, ILogger logger)
+    {
+        const int MaxConversationLogChars = 50_000;
+        string? resultWithStructuredOutput = null;
+        int resultWithStructuredOutputLine = 0;
+        string? lastResultJson = null;
+        int resultMessageCount = 0;
+        int structuredOutputCount = 0;
+        var conversationLog = new System.Text.StringBuilder();
+        var lineNumber = 0;
+
+        foreach (var line in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            lineNumber++;
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0) continue;
+
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(trimmed);
+                var root = doc.RootElement;
+
+                if (!root.TryGetProperty("type", out var typeEl))
+                    continue;
+
+                var type = typeEl.GetString();
+
+                logger.LogDebug("NDJSON line {LineNumber}: type={Type}, raw={Raw}",
+                    lineNumber, type, trimmed[..Math.Min(500, trimmed.Length)]);
+
+                var hasStructuredOutput = root.TryGetProperty("structured_output", out var so)
+                    && so.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && so.TryGetProperty("outcome", out _);
+
+                if (hasStructuredOutput)
+                {
+                    resultMessageCount++;
+                    lastResultJson = trimmed;
+
+                    if (type != "result")
+                    {
+                        logger.LogWarning(
+                            "Found structured_output in unexpected message type={Type} at line {LineNumber}: {Raw}",
+                            type, lineNumber, trimmed[..Math.Min(1000, trimmed.Length)]);
+                    }
+
+                    logger.LogInformation("NDJSON structured_output #{Count} at line {LineNumber}: {Raw}",
+                        structuredOutputCount + 1, lineNumber, trimmed[..Math.Min(2000, trimmed.Length)]);
+
+                    if (structuredOutputCount == 0)
+                    {
+                        resultWithStructuredOutput = trimmed;
+                        resultWithStructuredOutputLine = lineNumber;
+                    }
+                    else
+                    {
+                        logger.LogWarning(
+                            "Multiple structured_output events! " +
+                            "Previous at line {PrevLine}, current at line {CurrLine}. Using first.",
+                            resultWithStructuredOutputLine, lineNumber);
+                    }
+                    structuredOutputCount++;
+                }
+                else if (type == "result")
+                {
+                    resultMessageCount++;
+                    lastResultJson = trimmed;
+                    logger.LogInformation("NDJSON result message (no structured_output) at line {LineNumber}", lineNumber);
+                }
+                else if (type == "assistant")
+                {
+                    if (root.TryGetProperty("message", out var message)
+                        && message.TryGetProperty("content", out var content)
+                        && content.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        foreach (var block in content.EnumerateArray())
+                        {
+                            if (block.TryGetProperty("type", out var blockType)
+                                && blockType.GetString() == "text"
+                                && block.TryGetProperty("text", out var text))
+                            {
+                                var textValue = text.GetString();
+                                if (!string.IsNullOrEmpty(textValue) && conversationLog.Length < MaxConversationLogChars)
+                                {
+                                    if (conversationLog.Length > 0)
+                                        conversationLog.AppendLine("\n---\n");
+                                    conversationLog.Append(textValue);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                logger.LogDebug("NDJSON line {LineNumber}: malformed JSON, skipping", lineNumber);
+            }
+        }
+
+        var resultJson = resultWithStructuredOutput ?? lastResultJson;
+
+        if (resultWithStructuredOutput is not null && lastResultJson is not null
+            && resultWithStructuredOutput != lastResultJson)
+        {
+            logger.LogWarning(
+                "Used result from line {Line} (has structured_output), not the final result message. " +
+                "Total result messages: {Count}",
+                resultWithStructuredOutputLine, resultMessageCount);
+        }
+
+        logger.LogInformation(
+            "NDJSON parsing complete: {TotalLines} lines, resultMessages={ResultCount}, " +
+            "structuredOutputMessages={StructuredCount}, conversationLogChars={LogChars}",
+            lineNumber, resultMessageCount, structuredOutputCount, conversationLog.Length);
+
+        var log = conversationLog.Length > MaxConversationLogChars
+            ? conversationLog.ToString()[..MaxConversationLogChars] + "\n...[truncated]"
+            : conversationLog.ToString();
+
+        return (resultJson, log);
+    }
+
     internal static string MinifyJson(string json)
     {
         using var doc = JsonDocument.Parse(json);
