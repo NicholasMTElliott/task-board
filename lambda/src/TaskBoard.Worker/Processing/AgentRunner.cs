@@ -18,7 +18,8 @@ public sealed partial class AgentRunner(
     IRunStore runStore,
     ImageDownloader imageDownloader,
     ILogger<AgentRunner> logger,
-    DockerAgentOptions? dockerOptions = null)
+    DockerAgentOptions? dockerOptions = null,
+    DockerMountBuilder? mountBuilder = null)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
 
@@ -252,14 +253,36 @@ public sealed partial class AgentRunner(
             await SafeDbCallAsync(() => runStore.CreateRunAsync(runRecord, cancellationToken));
             await WritePriorStepContextAsync(worktreePath, cardId, state.Name, cancellationToken);
 
-            // 5.5 Attempt to create a reusable container session (if a sessionable executor is available)
+            // 5.5 Build mount context for Docker workspace/credential mounts (if builder is available)
+            DockerMountContext? mountContext = null;
+            if (mountBuilder is not null && dockerOptions is not null)
+            {
+                try
+                {
+                    mountContext = await mountBuilder.BuildAsync(
+                        worktreePath, dockerOptions, cancellationToken);
+                    logger.LogDebug(
+                        "Mount context built for run {RunId} card {CardId}: {MountCount} mount(s)",
+                        runId, cardId, mountContext.Mounts.Count);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex,
+                        "Failed to build mount context for run {RunId} card {CardId} — " +
+                        "session will proceed without workspace mounts",
+                        runId, cardId);
+                }
+            }
+
+            // 5.6 Attempt to create a reusable container session (if a sessionable executor is available)
             IAgentExecutorSession? session = null;
             if (dockerOptions?.ReuseContainer == true)
             {
                 var sessionCreatedAt = DateTimeOffset.UtcNow;
                 try
                 {
-                    session = await TryCreateSessionAsync(state, cardId, runId, cancellationToken);
+                    session = await TryCreateSessionAsync(
+                        state, cardId, runId, mountContext, cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -533,6 +556,10 @@ public sealed partial class AgentRunner(
                         "Session {SessionId} disposed for run {RunId} card {CardId}",
                         session.SessionId, runId, cardId);
                 }
+
+                // Dispose mount context after session (temp .git files must outlive the container)
+                if (mountContext is not null)
+                    await mountContext.DisposeAsync();
             }
 
             // 8. Handle git operations based on stage-specific behavior
@@ -1222,6 +1249,7 @@ public sealed partial class AgentRunner(
         WorkflowState state,
         string cardId,
         string runId,
+        DockerMountContext? mountContext,
         CancellationToken cancellationToken)
     {
         if (state.Steps is not { Count: > 0 })
@@ -1241,11 +1269,13 @@ public sealed partial class AgentRunner(
             CardId: cardId,
             RunId: runId,
             ContainerName: containerName,
-            ImageName: imageName);
+            ImageName: imageName,
+            Mounts: mountContext?.Mounts,
+            EnvironmentVariables: mountContext?.EnvironmentVariables);
 
         logger.LogInformation(
-            "Creating session for run {RunId} card {CardId} (container={ContainerName}, image={ImageName})",
-            runId, cardId, containerName, imageName);
+            "Creating session for run {RunId} card {CardId} (container={ContainerName}, image={ImageName}, mounts={MountCount})",
+            runId, cardId, containerName, imageName, request.Mounts?.Count ?? 0);
 
         return await sessionableExecutor.TryCreateSessionAsync(request, cancellationToken);
     }

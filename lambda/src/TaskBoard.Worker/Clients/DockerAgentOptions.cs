@@ -40,6 +40,20 @@ public sealed class DockerAgentOptions
     /// Key: a human-readable label for logging; value: mount details.
     /// </summary>
     public Dictionary<string, DockerMount> AdditionalMounts { get; set; } = [];
+
+    /// <summary>
+    /// Host path to the Claude CLI credential directory (e.g., <c>~/.claude/</c>).
+    /// When null, <see cref="DockerMountBuilder"/> auto-detects by probing <c>~/.claude/</c>.
+    /// Set explicitly if credentials are stored in a non-standard location.
+    /// </summary>
+    public string? CredentialPath { get; set; }
+
+    /// <summary>
+    /// Container path where Claude credentials are mounted (read-only).
+    /// Defaults to <see cref="DockerMountBuilder.DefaultCredentialMountPoint"/> (<c>/home/agent/.claude</c>),
+    /// which matches the <c>agent</c> user in the aiboard-agent-sandbox image.
+    /// </summary>
+    public string? CredentialMountPoint { get; set; }
 }
 
 /// <summary>A volume mount entry for <c>docker run -v {host}:{container}[:ro]</c>.</summary>
