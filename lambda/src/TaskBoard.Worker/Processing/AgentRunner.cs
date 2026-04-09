@@ -17,7 +17,8 @@ public sealed partial class AgentRunner(
     UpdateFileProcessor updateFileProcessor,
     IRunStore runStore,
     ImageDownloader imageDownloader,
-    ILogger<AgentRunner> logger)
+    ILogger<AgentRunner> logger,
+    DockerAgentOptions? dockerOptions = null)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
 
@@ -251,9 +252,39 @@ public sealed partial class AgentRunner(
             await SafeDbCallAsync(() => runStore.CreateRunAsync(runRecord, cancellationToken));
             await WritePriorStepContextAsync(worktreePath, cardId, state.Name, cancellationToken);
 
-            // 6. Execute steps sequentially
+            // 5.5 Attempt to create a reusable container session (if a sessionable executor is available)
+            IAgentExecutorSession? session = null;
+            if (dockerOptions?.ReuseContainer == true)
+            {
+                var sessionCreatedAt = DateTimeOffset.UtcNow;
+                try
+                {
+                    session = await TryCreateSessionAsync(state, cardId, runId, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex,
+                        "Session creation failed for run {RunId} card {CardId}, falling back to per-step execution",
+                        runId, cardId);
+                }
+
+                if (session is not null)
+                {
+                    var startupMs = (int)(DateTimeOffset.UtcNow - sessionCreatedAt).TotalMilliseconds;
+                    logger.LogInformation(
+                        "Session {SessionId} created for run {RunId} card {CardId} in {StartupMs}ms",
+                        session.SessionId, runId, cardId, startupMs);
+                    await SafeDbCallAsync(() =>
+                        runStore.UpdateRunSessionStartupMsAsync(runId, startupMs, cancellationToken));
+                }
+            }
+
+            // 6. Variables needed both inside the session lifecycle and after it
             var commentPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity);
             AgentResult? lastResult = null;
+
+            try // session lifecycle: dispose after all LLM invocations complete
+            {
 
             // Build prompt context for estimation placeholders (null if estimation not configured)
             Dictionary<string, string>? promptContext = null;
@@ -300,7 +331,7 @@ public sealed partial class AgentRunner(
                     }
                 }
 
-                // 6c. Execute agent for this step
+                // 6c. Execute agent for this step (via session if available, direct otherwise)
                 var context = new AgentExecutionContext(
                     TargetCardId: cardId,
                     TargetCardTitle: targetCard.Title,
@@ -311,8 +342,9 @@ public sealed partial class AgentRunner(
                     ProviderParams: state.ProviderParams,
                     CommentsFilePath: commentsFilePath);
 
-                var stepExecutor = executorResolver.Resolve(stepRole.Provider);
-                lastResult = await stepExecutor.ExecuteAsync(context, cancellationToken);
+                var (stepResult, stepSessionExecMs) = await ExecuteWithSessionAsync(
+                    session, stepRole.Provider, context, step.Name, runId, cancellationToken);
+                lastResult = stepResult;
 
                 // Capture estimate if this step returned one and persist it to DB
                 if (lastResult.Estimate.HasValue)
@@ -388,7 +420,8 @@ public sealed partial class AgentRunner(
                         Questions: lastResult.Questions,
                         RequestedSteps: lastResult.RequestedSteps,
                         StartedAtUtc: stepStartedAt,
-                        CompletedAtUtc: stepCompletedAt);
+                        CompletedAtUtc: stepCompletedAt,
+                        SessionExecMs: stepSessionExecMs);
                     await SafeDbCallAsync(() => runStore.SaveStepResultAsync(stepRecord, cancellationToken));
                     await SafeDbCallAsync(() => runStore.UpdateRunProgressAsync(runId, stepIndex + 1, cancellationToken));
                 }
@@ -454,7 +487,7 @@ public sealed partial class AgentRunner(
 
             // 7. Run gate check if configured
             var gateCheckResult = await RunGateCheckAsync(
-                state, lastResult!, worktreePath, targetCard, cardId, runId, cancellationToken);
+                session, state, lastResult!, worktreePath, targetCard, cardId, runId, cancellationToken);
 
             if (gateCheckResult.BlockingResult is not null)
             {
@@ -472,7 +505,7 @@ public sealed partial class AgentRunner(
             if (gateCheckResult.RequestedSteps is { Count: > 0 } && state.OptionalSteps is { Count: > 0 })
             {
                 var optionalResult = await ExecuteOptionalStepsAsync(
-                    gateCheckResult.RequestedSteps, state, worktreePath, targetCard, cardId,
+                    session, gateCheckResult.RequestedSteps, state, worktreePath, targetCard, cardId,
                     runId, commentPrefix, commentsFilePath, cancellationToken);
 
                 if (optionalResult is not null)
@@ -487,6 +520,18 @@ public sealed partial class AgentRunner(
                         await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
 
                     return optionalResult;
+                }
+            }
+
+            } // end session try block
+            finally
+            {
+                if (session is not null)
+                {
+                    await session.DisposeAsync();
+                    logger.LogInformation(
+                        "Session {SessionId} disposed for run {RunId} card {CardId}",
+                        session.SessionId, runId, cardId);
                 }
             }
 
@@ -787,6 +832,7 @@ public sealed partial class AgentRunner(
     /// Returns a GateCheckResult with non-null BlockingResult if the gate blocks progression.
     /// </summary>
     private async Task<GateCheckResult> RunGateCheckAsync(
+        IAgentExecutorSession? session,
         WorkflowState state,
         AgentResult lastStepResult,
         string worktreePath,
@@ -909,9 +955,10 @@ public sealed partial class AgentRunner(
                 });
 
             logger.LogInformation("Running gate check for card {CardId} in state {State}", cardId, state.Name);
-            var gateExecutor = executorResolver.Resolve(gateRole.Provider);
             var gateStartedAt = DateTimeOffset.UtcNow;
-            gateResult = await gateExecutor.ExecuteAsync(gateContext, cancellationToken);
+            var (gateResult2, gateSessionExecMs) = await ExecuteWithSessionAsync(
+                session, gateRole.Provider, gateContext, "gate_check", runId, cancellationToken);
+            gateResult = gateResult2;
             logger.LogInformation("Gate check result for card {CardId}: {Outcome}", cardId, gateResult.Outcome);
 
             // Save gate check result to DB
@@ -931,7 +978,8 @@ public sealed partial class AgentRunner(
                 Questions: gateResult.Questions,
                 RequestedSteps: gateResult.RequestedSteps,
                 StartedAtUtc: gateStartedAt,
-                CompletedAtUtc: DateTimeOffset.UtcNow);
+                CompletedAtUtc: DateTimeOffset.UtcNow,
+                SessionExecMs: gateSessionExecMs);
             await SafeDbCallAsync(() => runStore.SaveStepResultAsync(gateRecord, cancellationToken));
         }
         catch (Exception ex)
@@ -1024,6 +1072,7 @@ public sealed partial class AgentRunner(
     /// Returns an AgentRunResult if any step halted progression.
     /// </summary>
     private async Task<AgentRunResult?> ExecuteOptionalStepsAsync(
+        IAgentExecutorSession? session,
         IReadOnlyList<string> requestedStepNames,
         WorkflowState state,
         string worktreePath,
@@ -1100,8 +1149,8 @@ public sealed partial class AgentRunner(
                 CommentsFilePath: commentsFilePath);
 
             var optionalStepStartedAt = DateTimeOffset.UtcNow;
-            var optionalExecutor = executorResolver.Resolve(stepRole.Provider);
-            var result = await optionalExecutor.ExecuteAsync(context, cancellationToken);
+            var (result, optionalSessionExecMs) = await ExecuteWithSessionAsync(
+                session, stepRole.Provider, context, $"optional:{step.Name}", runId, cancellationToken);
 
             // Save optional step result to DB
             var optionalStepRecord = new StepResultRecord(
@@ -1120,7 +1169,8 @@ public sealed partial class AgentRunner(
                 Questions: result.Questions,
                 RequestedSteps: result.RequestedSteps,
                 StartedAtUtc: optionalStepStartedAt,
-                CompletedAtUtc: DateTimeOffset.UtcNow);
+                CompletedAtUtc: DateTimeOffset.UtcNow,
+                SessionExecMs: optionalSessionExecMs);
             await SafeDbCallAsync(() => runStore.SaveStepResultAsync(optionalStepRecord, cancellationToken));
 
             // Update card body
@@ -1159,6 +1209,104 @@ public sealed partial class AgentRunner(
 
         logger.LogInformation("All optional steps completed for card {CardId}", cardId);
         return null;
+    }
+
+    // ── Session-aware execution ───────────────────────────────────────
+
+    /// <summary>
+    /// Attempts to create a reusable container session for the primary executor of this run.
+    /// Returns null if: no sessionable executor is registered, ReuseContainer is false,
+    /// or session creation is not possible (executor returns null from TryCreateSessionAsync).
+    /// </summary>
+    private async Task<IAgentExecutorSession?> TryCreateSessionAsync(
+        WorkflowState state,
+        string cardId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        if (state.Steps is not { Count: > 0 })
+            return null;
+
+        var firstStep = state.Steps[0];
+        if (!workflowConfig.Roles.TryGetValue(firstStep.Role, out var firstRole))
+            return null;
+
+        var executor = executorResolver.Resolve(firstRole.Provider);
+        if (executor is not ISessionableAgentExecutor sessionableExecutor)
+            return null;
+
+        var containerName = $"aiboard-{cardId}";
+        var imageName = dockerOptions?.ImageName ?? "aiboard-agent:latest";
+        var request = new SessionRequest(
+            CardId: cardId,
+            RunId: runId,
+            ContainerName: containerName,
+            ImageName: imageName);
+
+        logger.LogInformation(
+            "Creating session for run {RunId} card {CardId} (container={ContainerName}, image={ImageName})",
+            runId, cardId, containerName, imageName);
+
+        return await sessionableExecutor.TryCreateSessionAsync(request, cancellationToken);
+    }
+
+    /// <summary>
+    /// Executes an agent invocation using the session if alive and provider matches;
+    /// falls back to direct per-step execution transparently.
+    /// Returns the result and the session execution time in ms (null if not executed via session).
+    /// </summary>
+    private async Task<(AgentResult Result, int? SessionExecMs)> ExecuteWithSessionAsync(
+        IAgentExecutorSession? session,
+        string providerKey,
+        AgentExecutionContext context,
+        string stepName,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        // Provider mismatch: step uses a different provider than the session
+        if (session is not null
+            && !string.Equals(session.ProviderKey, providerKey, StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogDebug(
+                "Step '{StepName}' provider '{Provider}' does not match session provider '{SessionProvider}', " +
+                "using direct execution",
+                stepName, providerKey, session.ProviderKey);
+        }
+        else if (session is not null && session.IsAlive)
+        {
+            // Session is alive and provider matches — execute via container
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                var sessionResult = await session.ExecuteInSessionAsync(context, cancellationToken);
+                sw.Stop();
+                logger.LogDebug(
+                    "Step '{StepName}' executed via session {SessionId} run {RunId} in {ExecMs}ms",
+                    stepName, session.SessionId, runId, sw.ElapsedMilliseconds);
+                return (sessionResult, (int)sw.ElapsedMilliseconds);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                sw.Stop();
+                logger.LogWarning(ex,
+                    "Session {SessionId} execution failed for step '{StepName}' run {RunId}, " +
+                    "falling back to direct execution",
+                    session.SessionId, stepName, runId);
+                // Fall through to direct execution
+            }
+        }
+        else if (session is not null && !session.IsAlive)
+        {
+            logger.LogWarning(
+                "Session {SessionId} is no longer alive for step '{StepName}' run {RunId}, " +
+                "falling back to direct execution",
+                session.SessionId, stepName, runId);
+        }
+
+        // Direct execution (no session, provider mismatch, or session dead/failed)
+        var directExecutor = executorResolver.Resolve(providerKey);
+        var directResult = await directExecutor.ExecuteAsync(context, cancellationToken);
+        return (directResult, null);
     }
 
     /// <summary>

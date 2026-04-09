@@ -149,6 +149,29 @@ public static class PrerequisiteValidator
     }
 
     /// <summary>
+    /// Checks for orphaned aiboard-* containers left by prior runs that crashed mid-cleanup.
+    /// Returns the names of any running containers that match the aiboard- prefix.
+    /// Callers should log a warning if the result is non-empty.
+    /// Safe to call before host build (no DI dependencies).
+    /// </summary>
+    public static async Task<IReadOnlyList<string>> DetectOrphanedContainersAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var (success, output) = await TryRunCommandAsync(
+            "docker",
+            ["ps", "--filter", "name=aiboard-", "--format", "{{.Names}}"],
+            cancellationToken: cancellationToken);
+
+        if (!success || string.IsNullOrWhiteSpace(output))
+            return [];
+
+        return output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList();
+    }
+
+    /// <summary>
     /// Attempts to connect to PostgreSQL and execute a simple query.
     /// Returns success/failure with an error message on failure.
     /// </summary>

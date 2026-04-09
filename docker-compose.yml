@@ -49,6 +49,22 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
 
+  # Build-only service for the agent sandbox image.
+  # Run: docker compose --profile build build agent-sandbox
+  # Or use: scripts/build-sandbox.ps1
+  agent-sandbox:
+    build:
+      context: ./docker/agent-sandbox
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: node:22-slim
+        AGENT_UID: 1000
+        AGENT_GID: 1000
+        CLAUDE_CLI_VERSION: latest
+    image: aiboard-agent-sandbox:latest
+    profiles:
+      - build
+
 volumes:
   pgdata:
   grafana_data:
