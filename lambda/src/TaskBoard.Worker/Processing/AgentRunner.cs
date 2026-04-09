@@ -108,9 +108,9 @@ public sealed partial class AgentRunner(
             var worktreePath = await gitWorkspaceManager.CreateWorktreeAsync(
                 workspacePath, branchName, cancellationToken);
 
-            // 4a. Merge main branch for existing branches
+            // 4a. Merge main branch for existing branches (skip for discard states — changes are thrown away)
             string? mergePromptAugmentation = null;
-            if (isExistingBranch)
+            if (isExistingBranch && gitBehavior != "discard")
             {
                 var mergeOutcome = await HandleMergeStepAsync(
                     worktreePath, branchName, cardId, targetCard, state, cancellationToken);
@@ -620,7 +620,7 @@ public sealed partial class AgentRunner(
             {
                 try
                 {
-                    var worktreePath = GitWorkspaceManager.GetWorktreePath(workspacePath, branchName);
+                    var worktreePath = gitWorkspaceManager.ResolveWorktreePath(workspacePath, branchName);
                     var taskFilePath = TaskFileManager.GetTaskFilePath(worktreePath, cardId, targetCard.Title);
                     if (File.Exists(taskFilePath))
                     {
@@ -644,7 +644,7 @@ public sealed partial class AgentRunner(
 
                 if (preserveWorktree)
                 {
-                    var worktreePath = GitWorkspaceManager.GetWorktreePath(workspacePath, branchName);
+                    var worktreePath = gitWorkspaceManager.ResolveWorktreePath(workspacePath, branchName);
                     logger.LogWarning(
                         "AIBOARD_PRESERVE_WORKTREE is set — keeping worktree for inspection at: {WorktreePath}",
                         Path.GetFullPath(worktreePath));

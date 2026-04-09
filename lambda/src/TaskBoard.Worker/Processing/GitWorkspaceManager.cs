@@ -22,6 +22,13 @@ public sealed class GitWorkspaceManager(
         return Path.Combine(basePath, branchName.Replace('/', Path.DirectorySeparatorChar));
     }
 
+    /// <summary>
+    /// Resolves the worktree path using the configured <c>worktreeBasePath</c>.
+    /// Use this instead of the static <see cref="GetWorktreePath"/> when the configured base matters.
+    /// </summary>
+    public string ResolveWorktreePath(string repoPath, string branchName)
+        => GetWorktreePath(repoPath, branchName, worktreeBasePath);
+
     public async Task<string> CreateWorktreeAsync(
         string repoPath, string branchName, CancellationToken cancellationToken)
     {
