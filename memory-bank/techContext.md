@@ -36,7 +36,7 @@
 | Trello | `TrelloClient` | `BOARD_PROVIDER=trello` |
 | Stub | `StubTaskBoardClient` | `BOARD_PROVIDER=stub` (default) |
 
-Agent executor selection: `AGENT_EXECUTOR` env var — `claude-cli`, `codex`, or `stub`. Multi-executor support via `AgentExecutorResolver`.
+Agent executor selection: `AGENT_EXECUTOR` env var — `claude-cli`, `docker`, `codex`, or `stub`. Multi-executor support via `AgentExecutorResolver`. `docker` is auto-registered when Docker daemon is detected at startup.
 
 ## Development Environment
 - IDE: Visual Studio Code
@@ -75,7 +75,7 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ Rate limit detection and recovery (Claude CLI stderr + GitHub API 429)
 - ✅ Child task generation (cardTypes, CompletionRunner, UpdateFileProcessor)
 - ✅ Estimation pipeline (estimator role, calibration-based sizing)
-- ✅ Multi-executor support (AgentExecutorResolver: claude-cli, codex, stub)
+- ✅ Multi-executor support (AgentExecutorResolver: claude-cli, docker, codex, stub)
 - ✅ Sleep inhibition during polling (Windows/Mac/Linux)
 - ✅ Startup prerequisite validation (PrerequisiteValidator)
 - ✅ Metrics reporting (`--mode metrics`): `IMetricsStore` / `PgMetricsStore`, SQL views, Grafana dashboard in docker-compose
@@ -91,6 +91,7 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ Agent sandbox Docker image (`docker/agent-sandbox/Dockerfile`): node:22-slim base, Claude CLI via npm, git, ripgrep, curl, non-root `agent` user (UID 1000, configurable), `/workspace` mount target; build via `scripts/build-sandbox.ps1` or `docker compose --profile build up agent-sandbox`; image tag `aiboard-agent-sandbox:latest`
 
 - ✅ Container reuse for multi-step runs (`IAgentExecutorSession` / `ISessionableAgentExecutor`); `DockerAgentOptions.ReuseContainer` (default: true); session spans steps + gate checks + specialist reviews; transparent fallback to per-step execution; orphaned container detection at startup via `PrerequisiteValidator`
+- ✅ `DockerAgentExecutor` (`IAgentExecutor`, provider key `docker`): Claude CLI wrapped in `docker run -i --rm`; system prompt dir mounted read-only; exit code classification (Docker 125/126/127/137 vs Claude CLI 0–124); `CLAUDECODE` env var stripped; extensible `AdditionalMounts` for workspace/credential mounts (#65); auto-registered when Docker daemon detected; `AgentOutputParser.ParseStreamOutput` extracted as shared static for reuse by both `ClaudeAgentExecutor` and `DockerAgentExecutor`
 
 ## Open Technical Decisions
 - [ ] Webhook/event-driven triggers (currently manual CLI or polling)
