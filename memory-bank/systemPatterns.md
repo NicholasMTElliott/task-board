@@ -134,7 +134,18 @@ Agent execution uses git worktrees for isolated working directories:
 Task files can reference other cards (e.g., `#5`, `#12`). The `CrossReferenceResolver` parses these, fetches referenced cards, and includes them in the agent's workspace. This creates tracked relationships so dependent context flows through the pipeline.
 
 ### Agent Executor Pattern
-Agent executors are registered via `AgentExecutorResolver` which resolves by provider key (`claude-cli`, `codex`, `stub`). Selection via `AGENT_EXECUTOR` env var. Multiple executors can coexist; the resolver auto-detects available providers at startup.
+Agent executors are registered via `AgentExecutorResolver` which resolves by provider key (`claude-cli`, `codex`, `stub`, `docker`). Selection via `AGENT_EXECUTOR` env var. Multiple executors can coexist; the resolver auto-detects available providers at startup.
+
+**DockerAgentExecutor** (`IAgentExecutor`, provider key `docker`) wraps Claude CLI invocation inside `docker run -i --rm`. Key design:
+- Standalone class (no inheritance from `ClaudeAgentExecutor`) — differences in process surface are too large
+- System prompt file translated: host directory mounted read-only at `DockerAgentOptions.PromptMountPoint` (`/mnt/aiboard/prompts`); container path computed from `Path.GetFileName`
+- Container named `{prefix}-{cardId}-{random8}` (prefix: `aiboard-run`); random suffix prevents collisions, `--rm` cleans up on normal exit
+- Exit codes classified: Docker daemon errors (125/126/127/137) vs. Claude CLI errors (0–124) via `IsDockerExitCode`
+- `CLAUDECODE` env var stripped from subprocess environment
+- Rate-limit detection via `ClaudeAgentExecutor.IsRateLimited(stderr)` (same as host executor)
+- NDJSON parsing via shared `AgentOutputParser.ParseStreamOutput`
+- Extensible volume mounts (`DockerAgentOptions.AdditionalMounts` dictionary) for workspace/credential mounts (#65)
+- Registered automatically when Docker daemon is detected at startup (`PrerequisiteValidator.IsDockerAvailableAsync` runs `docker info`)
 
 ### Container Session Reuse (IAgentExecutorSession)
 To avoid per-step container startup overhead, executors that support Docker can implement `ISessionableAgentExecutor`, which creates a long-lived container session spanning the full agent run pipeline (main steps + gate check + optional specialist reviews).
@@ -251,7 +262,7 @@ Ready for Design → Designed → Ready for Implementation → ... → Approved 
 - `CompletionRunner` still exists for other `children_complete` use cases but is not used in the story-to-task flow
 
 ### Rate Limiting
-- `ClaudeAgentExecutor` detects rate limits via stderr analysis (checks for "rate limit" / "overloaded")
+- `ClaudeAgentExecutor` and `DockerAgentExecutor` detect rate limits via stderr analysis (checks for "rate limit" / "overloaded")
 - `GitHubProjectsClient` detects GitHub API rate limits (HTTP 429, "abuse detection", "secondary rate")
 - Both throw `RateLimitException` with `RateLimitSource` (BoardApi or AgentCli)
 - `AgentRunner` catches `RateLimitException`, restores card to trigger column for retry
@@ -270,8 +281,10 @@ Ready for Design → Designed → Ready for Implementation → ... → Approved 
 | CompletionRunner | Polls child cards for `children_complete` gate type |
 | PollingRunner | Automatic card pickup via priority-sorted polling |
 | ClaudeAgentExecutor | Claude CLI subprocess with `--json-schema` structured output |
+| DockerAgentExecutor | Claude CLI inside `docker run -i --rm`; provider key `docker`; auto-registered when Docker daemon detected |
+| DockerAgentOptions / DockerMount | Config: image name, prompt mount point, budget, timeout, extensible additional mounts |
 | CodexAgentExecutor | OpenAI Codex CLI subprocess (secondary/legacy) |
-| AgentExecutorResolver | Multi-executor registry; resolves by provider key (`claude-cli`, `codex`, `stub`) |
+| AgentExecutorResolver | Multi-executor registry; resolves by provider key (`claude-cli`, `docker`, `codex`, `stub`) |
 | GitWorkspaceManager | Git worktree lifecycle for isolated agent execution |
 | TaskFileManager | Write board cards as `.aiboard/tasks/{id}.md` files + comments files |
 | UpdateFileProcessor | Processes `.aiboard/updates/` files for child ticket creation and cross-card comments |

@@ -27,6 +27,9 @@ public static class PrerequisiteValidator
                 cancellationToken))
             available.Add("codex");
 
+        if (await IsDockerAvailableAsync(cancellationToken))
+            available.Add("docker");
+
         return available;
     }
 
@@ -193,6 +196,21 @@ public static class PrerequisiteValidator
     }
 
     // --- Private helpers ---
+
+    /// <summary>
+    /// Returns true if the Docker CLI is on PATH and the daemon is responsive.
+    /// Uses <c>docker info</c> so a running daemon is required (not just the client).
+    /// </summary>
+    private static async Task<bool> IsDockerAvailableAsync(CancellationToken cancellationToken)
+    {
+        // First confirm the docker executable is on PATH
+        if (!await IsCliAvailableAsync("docker", cancellationToken))
+            return false;
+
+        // Then verify the daemon is running
+        var (success, _) = await TryRunCommandAsync("docker", ["info"], cancellationToken: cancellationToken);
+        return success;
+    }
 
     private static async Task<bool> IsCliAvailableAsync(
         string fileName, CancellationToken cancellationToken)
