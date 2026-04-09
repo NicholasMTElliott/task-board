@@ -142,9 +142,12 @@ Task files can reference other cards (e.g., `#5`, `#12`). The `CrossReferenceRes
 - Failures are logged and silently skipped — never block agent execution
 
 ### Agent Executor Pattern
-Agent executors are registered via `AgentExecutorResolver` which resolves by provider key (`claude-cli`, `codex`, `stub`, `docker`). Selection via `AGENT_EXECUTOR` env var. Multiple executors can coexist; the resolver auto-detects available providers at startup.
+Agent executors are registered via `AgentExecutorResolver` which resolves by provider key (`claude-cli`, `codex`, `stub`, `docker-claude-cli`). `AGENT_EXECUTOR` env var has three modes:
+- `stub` — all providers mapped to stub (testing/dev)
+- `docker-claude-cli` — Docker executor registered under both `docker-claude-cli` and `claude-cli` keys; `claude-cli` workflow roles transparently route to Docker without config changes; fails fast at startup if Docker unavailable
+- unset / any other value — production auto-detect mode: real providers detected at startup (docker-available → registered under `docker-claude-cli`; other values trigger a deprecation warning)
 
-**DockerAgentExecutor** (`IAgentExecutor`, provider key `docker`) wraps Claude CLI invocation inside `docker run -i --rm`. Key design:
+**DockerAgentExecutor** (`IAgentExecutor`, provider key `docker-claude-cli`) wraps Claude CLI invocation inside `docker run -i --rm`. Key design:
 - Standalone class (no inheritance from `ClaudeAgentExecutor`) — differences in process surface are too large
 - System prompt file translated: host directory mounted read-only at `DockerAgentOptions.PromptMountPoint` (`/mnt/aiboard/prompts`); container path computed from `Path.GetFileName`
 - Container named `{prefix}-{cardId}-{random8}` (prefix: `aiboard-run`); random suffix prevents collisions, `--rm` cleans up on normal exit
@@ -172,9 +175,19 @@ To avoid per-step container startup overhead, executors that support Docker can 
 
 **Container naming:** `aiboard-{cardId}` — one per card, mutual exclusion enforced by IN_PROGRESS column transition.
 
-**Configuration:** `DockerAgentOptions` section in `appsettings.json`:
+**Configuration:** `DockerAgentOptions` section (key `Docker`) in `appsettings.json`:
 - `ReuseContainer` (bool, default: `true`) — set to `false` to revert to per-step `docker run`
-- `ImageName` (string, default: `"aiboard-agent:latest"`) — Docker image used for container creation
+- `ImageName` (string, default: `"aiboard-agent-sandbox:latest"`) — Docker image
+- `ContainerNamePrefix` (string, default: `"aiboard-run"`) — prefix for `{prefix}-{cardId}-{random8}` container names
+- `PromptMountPoint` (string, default: `"/mnt/aiboard/prompts"`) — read-only mount for system prompt files
+- `MaxBudgetUsd` (decimal, default: `10.00`) — max Claude CLI budget per invocation
+- `TimeoutSeconds` (int, default: `900`) — container kill timeout
+- `ContainerUser` (string, default: `""`) — user to run as inside container (empty = image default)
+- `MemoryLimit` (string?, default: `null`) — optional memory limit, e.g. `"4g"`
+- `CpuLimit` (string?, default: `null`) — optional CPU limit, e.g. `"2.0"`
+- `NetworkMode` (string, default: `"host"`) — container network mode; `"none"` for full isolation
+- `CredentialPath` (string, default: `""`) — host path to Claude CLI credentials; auto-detected from `~/.claude` if empty
+- `AdditionalMounts` (Dictionary, default: `{}`) — extensible volume mounts for workspace/credentials (#65)
 
 **Fallback strategy:** If `TryCreateSessionAsync` returns `null` (image not found, Docker unavailable), the run proceeds without a session — all steps use `executor.ExecuteAsync` directly.
 
@@ -289,10 +302,10 @@ Ready for Design → Designed → Ready for Implementation → ... → Approved 
 | CompletionRunner | Polls child cards for `children_complete` gate type |
 | PollingRunner | Automatic card pickup via priority-sorted polling |
 | ClaudeAgentExecutor | Claude CLI subprocess with `--json-schema` structured output |
-| DockerAgentExecutor | Claude CLI inside `docker run -i --rm`; provider key `docker`; auto-registered when Docker daemon detected |
-| DockerAgentOptions / DockerMount | Config: image name, prompt mount point, budget, timeout, extensible additional mounts |
+| DockerAgentExecutor | Claude CLI inside `docker run -i --rm`; provider key `docker-claude-cli`; auto-registered when Docker daemon detected |
+| DockerAgentOptions / DockerMount | Config: image, user, memory/CPU limits, network mode, credential path, prompt mount, budget, timeout, extensible mounts |
 | CodexAgentExecutor | OpenAI Codex CLI subprocess (secondary/legacy) |
-| AgentExecutorResolver | Multi-executor registry; resolves by provider key (`claude-cli`, `docker`, `codex`, `stub`) |
+| AgentExecutorResolver | Multi-executor registry; resolves by provider key (`claude-cli`, `docker-claude-cli`, `codex`, `stub`) |
 | GitWorkspaceManager | Git worktree lifecycle for isolated agent execution |
 | ImageDownloader | Downloads card-referenced images to `.aiboard/images/{cardId}/`; authenticated via `gh auth token` for GitHub |
 | TaskFileManager | Write board cards as `.aiboard/tasks/{id}.md` files + comments files |
