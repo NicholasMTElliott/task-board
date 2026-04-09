@@ -18,6 +18,11 @@ public class DockerAgentOptionsTests
         Assert.Null(opts.MemoryLimit);
         Assert.Null(opts.CpuLimit);
         Assert.Equal("", opts.CredentialPath);
+        Assert.True(opts.ReuseContainer);
+        Assert.Equal("aiboard-run", opts.ContainerNamePrefix);
+        Assert.Equal("/mnt/aiboard/prompts", opts.PromptMountPoint);
+        Assert.Equal(10.00m, opts.MaxBudgetUsd);
+        Assert.Equal(900, opts.TimeoutSeconds);
         Assert.Empty(opts.AdditionalMounts);
     }
 
@@ -58,12 +63,16 @@ public class DockerAgentOptionsTests
     }
 
     [Fact]
-    public void DockerAgentOptions_AdditionalMounts_BindsListFromConfiguration()
+    public void DockerAgentOptions_AdditionalMounts_BindsDictionaryFromConfiguration()
     {
         var configValues = new Dictionary<string, string?>
         {
-            ["Docker:AdditionalMounts:0"] = "/host/data:/container/data",
-            ["Docker:AdditionalMounts:1"] = "/host/tools:/container/tools:ro",
+            ["Docker:AdditionalMounts:workspace:HostPath"] = "/host/data",
+            ["Docker:AdditionalMounts:workspace:ContainerPath"] = "/container/data",
+            ["Docker:AdditionalMounts:workspace:ReadOnly"] = "false",
+            ["Docker:AdditionalMounts:tools:HostPath"] = "/host/tools",
+            ["Docker:AdditionalMounts:tools:ContainerPath"] = "/container/tools",
+            ["Docker:AdditionalMounts:tools:ReadOnly"] = "true",
         };
 
         var config = new ConfigurationBuilder()
@@ -74,8 +83,13 @@ public class DockerAgentOptionsTests
         config.GetSection(DockerAgentOptions.SectionName).Bind(opts);
 
         Assert.Equal(2, opts.AdditionalMounts.Count);
-        Assert.Contains("/host/data:/container/data", opts.AdditionalMounts);
-        Assert.Contains("/host/tools:/container/tools:ro", opts.AdditionalMounts);
+        Assert.True(opts.AdditionalMounts.ContainsKey("workspace"));
+        Assert.Equal("/host/data", opts.AdditionalMounts["workspace"].HostPath);
+        Assert.Equal("/container/data", opts.AdditionalMounts["workspace"].ContainerPath);
+        Assert.False(opts.AdditionalMounts["workspace"].ReadOnly);
+        Assert.True(opts.AdditionalMounts.ContainsKey("tools"));
+        Assert.Equal("/host/tools", opts.AdditionalMounts["tools"].HostPath);
+        Assert.True(opts.AdditionalMounts["tools"].ReadOnly);
     }
 
     [Fact]

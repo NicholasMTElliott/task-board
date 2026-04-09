@@ -213,7 +213,9 @@ else
         });
         builder.Services.AddSingleton<DockerAgentExecutor>();
 
-        if (dockerModeRequested)
+        // Only mark docker-claude-cli as available when Docker is actually detected.
+        // If dockerModeRequested but docker is absent, the fail-fast check below fires.
+        if (dockerModeRequested && detectedProviders.Contains("docker"))
             detectedProviders.Add("docker-claude-cli");
     }
 }
@@ -234,7 +236,7 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
     if (detectedProviders.Contains("codex"))
         executors["codex"] = sp.GetRequiredService<CodexAgentExecutor>();
 
-    if (detectedProviders.Contains("docker") || dockerModeRequested)
+    if (detectedProviders.Contains("docker") || detectedProviders.Contains("docker-claude-cli"))
     {
         var dockerExecutor = sp.GetRequiredService<DockerAgentExecutor>();
         executors["docker-claude-cli"] = dockerExecutor;
@@ -252,8 +254,40 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
 var agentIdentity = AgentIdentity.Generate();
 builder.Services.AddSingleton(agentIdentity);
 
-// Agent mode services
-builder.Services.AddHttpClient("ImageDownloader");
+// Docker agent options (always registered; defaults used when section is absent)
+builder.Services.Configure<DockerAgentOptions>(builder.Configuration.GetSection(DockerAgentOptions.SectionName));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<DockerAgentOptions>>().Value);
+
+// Agent mode services — resolve GitHub token for authenticated image downloads
+string? ghImageToken = null;
+if (boardProvider == "github")
+{
+    try
+    {
+        using var ghTokenProc = System.Diagnostics.Process.Start(
+            new System.Diagnostics.ProcessStartInfo("gh", "auth token")
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+        if (ghTokenProc is not null)
+        {
+            ghImageToken = (await ghTokenProc.StandardOutput.ReadToEndAsync()).Trim();
+            await ghTokenProc.WaitForExitAsync();
+            if (ghTokenProc.ExitCode != 0) ghImageToken = null;
+        }
+    }
+    catch { /* gh not available — image downloads will be best-effort */ }
+}
+
+builder.Services.AddHttpClient("ImageDownloader", client =>
+{
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("TaskBoard-Worker/1.0");
+    if (!string.IsNullOrEmpty(ghImageToken))
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", ghImageToken);
+});
 builder.Services.AddSingleton<ImageDownloader>();
 builder.Services.AddSingleton<TaskFileManager>();
 
@@ -341,6 +375,18 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
     logger.LogInformation("All prerequisites validated successfully");
     logger.LogInformation("Available AI providers: {Providers}",
         string.Join(", ", detectedProviders.Where(p => p != "stub").Order()));
+
+    // Check for orphaned aiboard-* containers from prior crashed runs
+    var orphanedContainers = await PrerequisiteValidator.DetectOrphanedContainersAsync();
+    if (orphanedContainers.Count > 0)
+    {
+        logger.LogWarning(
+            "Found {Count} orphaned aiboard container(s) from prior runs: {Names}. " +
+            "These may consume resources. Run 'docker rm -f {JoinedNames}' to clean up.",
+            orphanedContainers.Count,
+            string.Join(", ", orphanedContainers),
+            string.Join(" ", orphanedContainers));
+    }
 
     if (!string.IsNullOrWhiteSpace(dbConnectionString))
     {

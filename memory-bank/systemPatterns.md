@@ -133,8 +133,54 @@ Agent execution uses git worktrees for isolated working directories:
 ### Cross-Reference Resolution
 Task files can reference other cards (e.g., `#5`, `#12`). The `CrossReferenceResolver` parses these, fetches referenced cards, and includes them in the agent's workspace. This creates tracked relationships so dependent context flows through the pipeline.
 
+### Image Downloading
+`ImageDownloader` downloads images referenced in card bodies (markdown `![](url)` and HTML `<img src>`) to `.aiboard/images/{cardId}/` in the worktree. Images are passed to the agent as local files via `TaskFileManager`.
+- Named HttpClient `"ImageDownloader"` configured at startup with `User-Agent: TaskBoard-Worker/1.0`
+- When `boardProvider == "github"`, a GitHub token is obtained via `gh auth token` at startup and set as a Bearer Authorization header (required for `github.com/user-attachments/assets/` URLs which return 404 without auth)
+- Max 20 images per card, 10 MB per image
+- Filenames: SHA256(url)[0:12] + extension (deterministic, deduplicating)
+- Failures are logged and silently skipped — never block agent execution
+
 ### Agent Executor Pattern
-Agent executors are registered via `AgentExecutorResolver` which resolves by provider key (`claude-cli`, `codex`, `stub`). Selection via `AGENT_EXECUTOR` env var. Multiple executors can coexist; the resolver auto-detects available providers at startup.
+Agent executors are registered via `AgentExecutorResolver` which resolves by provider key (`claude-cli`, `codex`, `stub`, `docker`). Selection via `AGENT_EXECUTOR` env var. Multiple executors can coexist; the resolver auto-detects available providers at startup.
+
+**DockerAgentExecutor** (`IAgentExecutor`, provider key `docker`) wraps Claude CLI invocation inside `docker run -i --rm`. Key design:
+- Standalone class (no inheritance from `ClaudeAgentExecutor`) — differences in process surface are too large
+- System prompt file translated: host directory mounted read-only at `DockerAgentOptions.PromptMountPoint` (`/mnt/aiboard/prompts`); container path computed from `Path.GetFileName`
+- Container named `{prefix}-{cardId}-{random8}` (prefix: `aiboard-run`); random suffix prevents collisions, `--rm` cleans up on normal exit
+- Exit codes classified: Docker daemon errors (125/126/127/137) vs. Claude CLI errors (0–124) via `IsDockerExitCode`
+- `CLAUDECODE` env var stripped from subprocess environment
+- Rate-limit detection via `ClaudeAgentExecutor.IsRateLimited(stderr)` (same as host executor)
+- NDJSON parsing via shared `AgentOutputParser.ParseStreamOutput`
+- Extensible volume mounts (`DockerAgentOptions.AdditionalMounts` dictionary) for workspace/credential mounts (#65)
+- Registered automatically when Docker daemon is detected at startup (`PrerequisiteValidator.IsDockerAvailableAsync` runs `docker info`)
+
+### Container Session Reuse (IAgentExecutorSession)
+To avoid per-step container startup overhead, executors that support Docker can implement `ISessionableAgentExecutor`, which creates a long-lived container session spanning the full agent run pipeline (main steps + gate check + optional specialist reviews).
+
+**Interfaces:**
+- `IAgentExecutorSession` (`IAsyncDisposable`) — represents a live container; `SessionId`, `ProviderKey`, `IsAlive`, `ExecuteInSessionAsync`
+- `ISessionableAgentExecutor : IAgentExecutor` — adds `ProviderKey` and `TryCreateSessionAsync(SessionRequest, CancellationToken)`
+- `SessionRequest` record — `CardId`, `RunId`, `ContainerName` (`aiboard-{cardId}`), `ImageName`, optional `Mounts` and `EnvironmentVariables`
+
+**Lifecycle in `AgentRunner.ExecuteAsync`:**
+1. Before the step loop, attempt `TryCreateSessionAsync` if the resolved executor implements `ISessionableAgentExecutor` and `DockerAgentOptions.ReuseContainer` is `true`.
+2. All LLM invocations (steps, gate check, optional specialist reviews) go through `ExecuteWithSessionAsync`, which routes through `session.ExecuteInSessionAsync` if the session is alive and the step's provider matches.
+3. Provider mismatch (e.g., haiku gate check on `claude-cli` while session is `docker`) bypasses the session and calls `executor.ExecuteAsync` directly — logged at Debug.
+4. If the session dies between steps, the invocation falls back to `executor.ExecuteAsync` transparently (logged at Warning).
+5. `await using` on the session guarantees disposal on all exit paths (success, step failure, cancellation, exceptions). Disposal calls `docker stop` + `docker rm`.
+
+**Container naming:** `aiboard-{cardId}` — one per card, mutual exclusion enforced by IN_PROGRESS column transition.
+
+**Configuration:** `DockerAgentOptions` section in `appsettings.json`:
+- `ReuseContainer` (bool, default: `true`) — set to `false` to revert to per-step `docker run`
+- `ImageName` (string, default: `"aiboard-agent:latest"`) — Docker image used for container creation
+
+**Fallback strategy:** If `TryCreateSessionAsync` returns `null` (image not found, Docker unavailable), the run proceeds without a session — all steps use `executor.ExecuteAsync` directly.
+
+**Orphaned container detection:** `PrerequisiteValidator.DetectOrphanedContainersAsync` runs `docker ps --filter name=aiboard-` at startup and logs a warning if any `aiboard-*` containers are found (prior crash cleanup). Cleanup is manual.
+
+**Non-session executors** (`ClaudeAgentExecutor`, `CodexAgentExecutor`, `StubAgentExecutor`) do not implement `ISessionableAgentExecutor` and are completely unaffected.
 
 ### Claude CLI Subprocess Pattern
 The .NET worker invokes the Claude CLI (`claude`) as a subprocess via `ClaudeAgentExecutor`.
@@ -224,7 +270,7 @@ Ready for Design → Designed → Ready for Implementation → ... → Approved 
 - `CompletionRunner` still exists for other `children_complete` use cases but is not used in the story-to-task flow
 
 ### Rate Limiting
-- `ClaudeAgentExecutor` detects rate limits via stderr analysis (checks for "rate limit" / "overloaded")
+- `ClaudeAgentExecutor` and `DockerAgentExecutor` detect rate limits via stderr analysis (checks for "rate limit" / "overloaded")
 - `GitHubProjectsClient` detects GitHub API rate limits (HTTP 429, "abuse detection", "secondary rate")
 - Both throw `RateLimitException` with `RateLimitSource` (BoardApi or AgentCli)
 - `AgentRunner` catches `RateLimitException`, restores card to trigger column for retry
@@ -243,9 +289,12 @@ Ready for Design → Designed → Ready for Implementation → ... → Approved 
 | CompletionRunner | Polls child cards for `children_complete` gate type |
 | PollingRunner | Automatic card pickup via priority-sorted polling |
 | ClaudeAgentExecutor | Claude CLI subprocess with `--json-schema` structured output |
+| DockerAgentExecutor | Claude CLI inside `docker run -i --rm`; provider key `docker`; auto-registered when Docker daemon detected |
+| DockerAgentOptions / DockerMount | Config: image name, prompt mount point, budget, timeout, extensible additional mounts |
 | CodexAgentExecutor | OpenAI Codex CLI subprocess (secondary/legacy) |
-| AgentExecutorResolver | Multi-executor registry; resolves by provider key (`claude-cli`, `codex`, `stub`) |
+| AgentExecutorResolver | Multi-executor registry; resolves by provider key (`claude-cli`, `docker`, `codex`, `stub`) |
 | GitWorkspaceManager | Git worktree lifecycle for isolated agent execution |
+| ImageDownloader | Downloads card-referenced images to `.aiboard/images/{cardId}/`; authenticated via `gh auth token` for GitHub |
 | TaskFileManager | Write board cards as `.aiboard/tasks/{id}.md` files + comments files |
 | UpdateFileProcessor | Processes `.aiboard/updates/` files for child ticket creation and cross-card comments |
 | CrossReferenceResolver | Parse card references, fetch dependent cards |
@@ -373,6 +422,7 @@ Schema:
 | completed_at_utc | Run end time (nullable) |
 | outcome | COMPLETE / NEEDS_INFO / ERROR (nullable) |
 | estimate | Story point estimate captured from the estimation step (nullable) |
+| session_startup_ms | Time (ms) to create and start the Docker container for a session-based run (nullable; NULL = no session) |
 
 ### step_result (step tracking)
 | Column | Description |
@@ -385,6 +435,7 @@ Schema:
 | detail | Step output detail (nullable) |
 | started_at_utc | Step start time |
 | completed_at_utc | Step end time (nullable) |
+| session_exec_ms | Time (ms) for this step's execution via `docker exec` (nullable; NULL = no session or non-Docker executor) |
 
 ### SQL Views (metrics, V12)
 | View | Description |

@@ -150,6 +150,29 @@ public static class PrerequisiteValidator
     }
 
     /// <summary>
+    /// Checks for orphaned aiboard-* containers left by prior runs that crashed mid-cleanup.
+    /// Returns the names of any running containers that match the aiboard- prefix.
+    /// Callers should log a warning if the result is non-empty.
+    /// Safe to call before host build (no DI dependencies).
+    /// </summary>
+    public static async Task<IReadOnlyList<string>> DetectOrphanedContainersAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var (success, output) = await TryRunCommandAsync(
+            "docker",
+            ["ps", "--filter", "name=aiboard-", "--format", "{{.Names}}"],
+            cancellationToken: cancellationToken);
+
+        if (!success || string.IsNullOrWhiteSpace(output))
+            return [];
+
+        return output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList();
+    }
+
+    /// <summary>
     /// Attempts to connect to PostgreSQL and execute a simple query.
     /// Returns success/failure with an error message on failure.
     /// </summary>
@@ -176,18 +199,18 @@ public static class PrerequisiteValidator
     // --- Private helpers ---
 
     /// <summary>
-    /// Two-phase Docker detection: verifies the CLI is present and the daemon is running.
+    /// Returns true if the Docker CLI is on PATH and the daemon is responsive.
+    /// Uses <c>docker info</c> so a running daemon is required (not just the client).
     /// </summary>
     private static async Task<bool> IsDockerAvailableAsync(CancellationToken cancellationToken)
     {
-        // Phase 1: CLI present
-        var (cliOk, _) = await TryRunCommandAsync("docker", ["--version"], cancellationToken: cancellationToken);
-        if (!cliOk)
+        // First confirm the docker executable is on PATH
+        if (!await IsCliAvailableAsync("docker", cancellationToken))
             return false;
 
-        // Phase 2: Daemon running (docker info contacts the daemon)
-        var (daemonOk, _) = await TryRunCommandAsync("docker", ["info"], cancellationToken: cancellationToken);
-        return daemonOk;
+        // Then verify the daemon is running
+        var (success, _) = await TryRunCommandAsync("docker", ["info"], cancellationToken: cancellationToken);
+        return success;
     }
 
     private static async Task<bool> IsCliAvailableAsync(

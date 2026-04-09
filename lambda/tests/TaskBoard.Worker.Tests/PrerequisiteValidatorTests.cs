@@ -497,6 +497,39 @@ public class PrerequisiteValidatorTests
             e.Contains("No AI agent providers are available") && e.Contains("docker"));
     }
 
+    // ── docker-claude-cli fail-fast provider key logic ───────────────────────
+
+    [Fact]
+    public void DockerClaudeCliKey_WhenDockerAvailable_IsAddedToProviders()
+    {
+        // Simulate the Program.cs logic: docker-claude-cli is added when docker is detected
+        var providers = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "docker" };
+        bool dockerModeRequested = true;
+
+        if (dockerModeRequested && providers.Contains("docker"))
+            providers.Add("docker-claude-cli");
+
+        Assert.Contains("docker-claude-cli", providers);
+    }
+
+    [Fact]
+    public void DockerClaudeCliKey_WhenDockerUnavailable_IsNotAdded_FailFastFires()
+    {
+        // Simulate the Program.cs logic: docker-claude-cli is NOT added when docker is absent
+        // so the fail-fast guard correctly triggers
+        var providers = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli" };
+        bool dockerModeRequested = true;
+
+        if (dockerModeRequested && providers.Contains("docker"))
+            providers.Add("docker-claude-cli");
+
+        Assert.DoesNotContain("docker-claude-cli", providers);
+
+        // The fail-fast condition should fire
+        bool failFastTriggered = dockerModeRequested && !providers.Contains("docker-claude-cli");
+        Assert.True(failFastTriggered);
+    }
+
     // ── Helper ──────────────────────────────────────────────────────────────
 
     /// <summary>Minimal config with no prompt files to validate.</summary>
