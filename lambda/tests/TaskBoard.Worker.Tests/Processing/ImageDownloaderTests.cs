@@ -363,6 +363,66 @@ public class ImageDownloaderTests : IDisposable
         Assert.StartsWith(".aiboard/images/5/", localPath);
     }
 
+    [Fact]
+    public async Task DownloadImagesAsync_AuthHeaderOnClient_SentWithRequests()
+    {
+        var mockHandler = new MockHttpMessageHandler();
+        mockHandler.EnqueueBinaryResponse(HttpStatusCode.OK, [0x89, 0x50, 0x4E, 0x47], "image/png");
+
+        var httpClient = new HttpClient(mockHandler);
+        httpClient.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "gh_test_token");
+
+        var factory = Substitute.For<IHttpClientFactory>();
+        factory.CreateClient("ImageDownloader").Returns(httpClient);
+        var downloader = new ImageDownloader(factory, NullLogger<ImageDownloader>.Instance);
+
+        var body = "![img](https://github.com/user-attachments/assets/abc123)";
+        await downloader.DownloadImagesAsync("42", body, _tempDir, CancellationToken.None);
+
+        Assert.Single(mockHandler.SentRequests);
+        var authHeader = mockHandler.SentRequests[0].Headers.Authorization;
+        Assert.NotNull(authHeader);
+        Assert.Equal("Bearer", authHeader.Scheme);
+        Assert.Equal("gh_test_token", authHeader.Parameter);
+    }
+
+    [Fact]
+    public async Task DownloadImagesAsync_UserAgentOnClient_SentWithRequests()
+    {
+        var mockHandler = new MockHttpMessageHandler();
+        mockHandler.EnqueueBinaryResponse(HttpStatusCode.OK, [0x89, 0x50, 0x4E, 0x47], "image/png");
+
+        var httpClient = new HttpClient(mockHandler);
+        httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("TaskBoard-Worker/1.0");
+
+        var factory = Substitute.For<IHttpClientFactory>();
+        factory.CreateClient("ImageDownloader").Returns(httpClient);
+        var downloader = new ImageDownloader(factory, NullLogger<ImageDownloader>.Instance);
+
+        var body = "![img](https://github.com/user-attachments/assets/abc123)";
+        await downloader.DownloadImagesAsync("42", body, _tempDir, CancellationToken.None);
+
+        Assert.Single(mockHandler.SentRequests);
+        var userAgent = mockHandler.SentRequests[0].Headers.UserAgent.ToString();
+        Assert.Contains("TaskBoard-Worker/1.0", userAgent);
+    }
+
+    [Fact]
+    public async Task DownloadImagesAsync_NoAuthHeader_RequestsSentWithoutAuth()
+    {
+        var mockHandler = new MockHttpMessageHandler();
+        mockHandler.EnqueueBinaryResponse(HttpStatusCode.OK, [1, 2, 3], "image/png");
+
+        var downloader = CreateDownloader(mockHandler);
+        var body = "![img](https://example.com/public.png)";
+
+        await downloader.DownloadImagesAsync("42", body, _tempDir, CancellationToken.None);
+
+        Assert.Single(mockHandler.SentRequests);
+        Assert.Null(mockHandler.SentRequests[0].Headers.Authorization);
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     private static ImageDownloader CreateDownloader(MockHttpMessageHandler handler)

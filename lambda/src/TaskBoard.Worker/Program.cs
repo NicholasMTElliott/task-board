@@ -218,8 +218,36 @@ builder.Services.AddSingleton(agentIdentity);
 builder.Services.Configure<DockerAgentOptions>(builder.Configuration.GetSection(DockerAgentOptions.SectionName));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<DockerAgentOptions>>().Value);
 
-// Agent mode services
-builder.Services.AddHttpClient("ImageDownloader");
+// Agent mode services — resolve GitHub token for authenticated image downloads
+string? ghImageToken = null;
+if (boardProvider == "github")
+{
+    try
+    {
+        using var ghTokenProc = System.Diagnostics.Process.Start(
+            new System.Diagnostics.ProcessStartInfo("gh", "auth token")
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+        if (ghTokenProc is not null)
+        {
+            ghImageToken = (await ghTokenProc.StandardOutput.ReadToEndAsync()).Trim();
+            await ghTokenProc.WaitForExitAsync();
+            if (ghTokenProc.ExitCode != 0) ghImageToken = null;
+        }
+    }
+    catch { /* gh not available — image downloads will be best-effort */ }
+}
+
+builder.Services.AddHttpClient("ImageDownloader", client =>
+{
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("TaskBoard-Worker/1.0");
+    if (!string.IsNullOrEmpty(ghImageToken))
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", ghImageToken);
+});
 builder.Services.AddSingleton<ImageDownloader>();
 builder.Services.AddSingleton<TaskFileManager>();
 

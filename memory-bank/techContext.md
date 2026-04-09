@@ -12,6 +12,7 @@
 | Board provider (legacy) | Trello | REST API |
 | Git isolation | Git worktrees | `GitWorkspaceManager` |
 | Agent sandbox image | `docker/agent-sandbox/Dockerfile` | node:22-slim + Claude CLI (npm) + git + ripgrep + curl; non-root `agent` user; base image / UID/GID configurable via build args |
+| Image download | `ImageDownloader` + named HttpClient | Bearer auth via `gh auth token` for GitHub provider |
 | Workflow config | `workflow.github.json` | File-based, in repo |
 
 ### Edge / Ingestion (Legacy Queue Path)
@@ -89,9 +90,9 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ Event-driven parent completion (completeParentIfReady transition action replaces polled children_complete for stories)
 - ✅ GetCardAsync now includes project field metadata (priority, estimate) via gh project item-list
 - ✅ Agent sandbox Docker image (`docker/agent-sandbox/Dockerfile`): node:22-slim base, Claude CLI via npm, git, ripgrep, curl, non-root `agent` user (UID 1000, configurable), `/workspace` mount target; build via `scripts/build-sandbox.ps1` or `docker compose --profile build up agent-sandbox`; image tag `aiboard-agent-sandbox:latest`
-
 - ✅ Container reuse for multi-step runs (`IAgentExecutorSession` / `ISessionableAgentExecutor`); `DockerAgentOptions.ReuseContainer` (default: true); session spans steps + gate checks + specialist reviews; transparent fallback to per-step execution; orphaned container detection at startup via `PrerequisiteValidator`
 - ✅ `DockerAgentExecutor` (`IAgentExecutor`, provider key `docker`): Claude CLI wrapped in `docker run -i --rm`; system prompt dir mounted read-only; exit code classification (Docker 125/126/127/137 vs Claude CLI 0–124); `CLAUDECODE` env var stripped; extensible `AdditionalMounts` for workspace/credential mounts (#65); auto-registered when Docker daemon detected; `AgentOutputParser.ParseStreamOutput` extracted as shared static for reuse by both `ClaudeAgentExecutor` and `DockerAgentExecutor`
+- ✅ Image download authentication via `gh auth token` for GitHub user-attachment URLs
 
 ## Open Technical Decisions
 - [ ] Webhook/event-driven triggers (currently manual CLI or polling)

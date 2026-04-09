@@ -133,6 +133,14 @@ Agent execution uses git worktrees for isolated working directories:
 ### Cross-Reference Resolution
 Task files can reference other cards (e.g., `#5`, `#12`). The `CrossReferenceResolver` parses these, fetches referenced cards, and includes them in the agent's workspace. This creates tracked relationships so dependent context flows through the pipeline.
 
+### Image Downloading
+`ImageDownloader` downloads images referenced in card bodies (markdown `![](url)` and HTML `<img src>`) to `.aiboard/images/{cardId}/` in the worktree. Images are passed to the agent as local files via `TaskFileManager`.
+- Named HttpClient `"ImageDownloader"` configured at startup with `User-Agent: TaskBoard-Worker/1.0`
+- When `boardProvider == "github"`, a GitHub token is obtained via `gh auth token` at startup and set as a Bearer Authorization header (required for `github.com/user-attachments/assets/` URLs which return 404 without auth)
+- Max 20 images per card, 10 MB per image
+- Filenames: SHA256(url)[0:12] + extension (deterministic, deduplicating)
+- Failures are logged and silently skipped — never block agent execution
+
 ### Agent Executor Pattern
 Agent executors are registered via `AgentExecutorResolver` which resolves by provider key (`claude-cli`, `codex`, `stub`, `docker`). Selection via `AGENT_EXECUTOR` env var. Multiple executors can coexist; the resolver auto-detects available providers at startup.
 
@@ -286,6 +294,7 @@ Ready for Design → Designed → Ready for Implementation → ... → Approved 
 | CodexAgentExecutor | OpenAI Codex CLI subprocess (secondary/legacy) |
 | AgentExecutorResolver | Multi-executor registry; resolves by provider key (`claude-cli`, `docker`, `codex`, `stub`) |
 | GitWorkspaceManager | Git worktree lifecycle for isolated agent execution |
+| ImageDownloader | Downloads card-referenced images to `.aiboard/images/{cardId}/`; authenticated via `gh auth token` for GitHub |
 | TaskFileManager | Write board cards as `.aiboard/tasks/{id}.md` files + comments files |
 | UpdateFileProcessor | Processes `.aiboard/updates/` files for child ticket creation and cross-card comments |
 | CrossReferenceResolver | Parse card references, fetch dependent cards |
