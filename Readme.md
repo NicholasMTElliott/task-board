@@ -237,7 +237,7 @@ File-based config (`workflow.github.json`) maps columns to roles and transitions
 | Board abstraction | `ITaskBoardClient` interface |
 | Orchestrator | C# / .NET 10 |
 | Agent executor (host) | Claude CLI subprocess (`ClaudeAgentExecutor`, `--output-format stream-json` + `--json-schema`) |
-| Agent executor (container) | `DockerAgentExecutor` — Claude CLI inside `docker run -i --rm`; provider key `docker` |
+| Agent executor (container) | `DockerAgentExecutor` — Claude CLI inside `docker run -i --rm`; provider key `docker-claude-cli`; select via `AGENT_EXECUTOR=docker-claude-cli` |
 | Agent sandbox image | `docker/agent-sandbox/Dockerfile` — node:22-slim + Claude CLI + git + ripgrep; `aiboard-agent-sandbox:latest` |
 | Git isolation | Git worktrees (`GitWorkspaceManager`) |
 | Task files | `.aiboard/tasks/{id}.md` (ephemeral, gitignored) |

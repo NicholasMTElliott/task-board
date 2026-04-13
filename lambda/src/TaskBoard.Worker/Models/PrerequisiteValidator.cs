@@ -127,7 +127,8 @@ public static class PrerequisiteValidator
         if (availableProviders.Count == 0)
         {
             errors.Add("No AI agent providers are available. " +
-                "At least one of claude-cli (Claude CLI) or codex (Codex CLI) must be installed and on PATH.");
+                "At least one of claude-cli (Claude CLI), codex (Codex CLI), " +
+                "or docker (Docker daemon) must be installed and available.");
         }
 
         // Prompt file checks
