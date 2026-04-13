@@ -476,11 +476,16 @@ if (mode == "agent")
     // Determine dispatch: fetch card to check if it's in a system_merge state
     var boardClientInstance = scope.ServiceProvider.GetRequiredService<ITaskBoardClient>();
     var workflowConfigInstance = scope.ServiceProvider.GetRequiredService<WorkflowConfig>();
-    var boardCards = await boardClientInstance.GetBoardCardsAsync(boardId, CancellationToken.None, workflowConfigInstance.GetTerminalStateNames());
+    var boardCards = await boardClientInstance.GetBoardCardsAsync(boardId, CancellationToken.None, workflowConfigInstance.GetTerminalColumnNames());
     var targetCard = boardCards.FirstOrDefault(c => c.Id == cardId);
 
+    // Allow --state override for manual dispatch when filter-based resolution is insufficient
+    var stateOverride = builder.Configuration["StateOverride"];
+
     AgentRunResult result;
-    workflowConfigInstance.States.TryGetValue(targetCard?.ColumnId ?? "", out var cardState);
+    var cardState = stateOverride is not null
+        ? workflowConfigInstance.States.GetValueOrDefault(stateOverride)
+        : (targetCard is not null ? workflowConfigInstance.ResolveState(targetCard) : null);
     try
     {
         if (cardState is not null

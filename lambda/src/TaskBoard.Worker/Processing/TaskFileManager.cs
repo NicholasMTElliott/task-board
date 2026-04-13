@@ -23,9 +23,7 @@ public sealed partial class TaskFileManager(ILogger<TaskFileManager> logger)
 
         foreach (var card in cards)
         {
-            var listName = workflowConfig.States.TryGetValue(card.ColumnId, out var state)
-                ? state.Name
-                : "Unknown";
+            var listName = workflowConfig.ResolveState(card)?.Name ?? "Unknown";
 
             var content = BuildTaskFileContent(card, listName, referenceContext, imageMapping, imageTargetCardId);
             var filePath = GetTaskFilePath(workspacePath, card.Id, card.Title);

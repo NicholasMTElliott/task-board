@@ -57,12 +57,12 @@ public static class CardSelector
         for (var i = 0; i < cards.Count; i++)
         {
             var card = cards[i];
-            if (!workflowConfig.States.TryGetValue(card.ColumnId, out var state))
+            var state = workflowConfig.ResolveState(card);
+            if (state is null)
                 continue;
             if (state.GateType is not (GateTypes.AgentRun or GateTypes.SystemMerge or GateTypes.ChildrenComplete))
                 continue;
-            if (!CardFilterEvaluator.PassesAll(card, state.Filters))
-                continue;
+            // Note: ResolveState already evaluated state.Filters; no separate PassesAll call needed.
 
             if (availableProviders is not null)
             {

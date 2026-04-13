@@ -110,9 +110,13 @@ public static class WorkflowConfigValidator
             // Validate transition targets and actions
             foreach (var (outcome, target) in state.Transitions)
             {
-                // Validate moveToColumn targets reference valid states
-                if (target.Column is string col && !config.States.ContainsKey(col))
-                    errors.Add($"State '{stateId}' ({state.Name}) transition '{outcome}' targets '{col}' which does not exist in States.");
+                // Validate moveToColumn targets reference valid effective column names
+                if (target.Column is string col
+                    && !config.States.Keys.Any(k =>
+                        string.Equals(config.GetEffectiveColumn(k), col, StringComparison.OrdinalIgnoreCase)))
+                {
+                    errors.Add($"State '{stateId}' ({state.Name}) transition '{outcome}' targets column '{col}' which is not mapped to any state.");
+                }
 
                 // Validate action types and required fields
                 foreach (var action in target.Actions)
@@ -198,11 +202,12 @@ public static class WorkflowConfigValidator
                         errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' generationConfig.targetType '{genCfg.TargetType}' is not defined in cardTypes.");
                     }
 
-                    // targetColumn (if specified) must reference a known state
+                    // targetColumn (if specified) must reference a known effective column name
                     if (genCfg.TargetColumn is not null
-                        && !config.States.ContainsKey(genCfg.TargetColumn))
+                        && !config.States.Keys.Any(k =>
+                            string.Equals(config.GetEffectiveColumn(k), genCfg.TargetColumn, StringComparison.OrdinalIgnoreCase)))
                     {
-                        errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' generationConfig.targetColumn '{genCfg.TargetColumn}' is not a known state.");
+                        errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' generationConfig.targetColumn '{genCfg.TargetColumn}' is not a known column.");
                     }
                 }
             }
@@ -225,6 +230,30 @@ public static class WorkflowConfigValidator
 
         // Note: Sections can be empty for roles that don't write to card body
         // (e.g., gate_checker, code_reviewer — they produce comments only)
+
+        // ── Shared-column filter enforcement ────────────────────────────────────
+        // When multiple states share the same effective column, all states sharing that column
+        // must have filters if any of them is actionable (agent_run, system_merge, children_complete).
+        var statesByColumn = config.States
+            .GroupBy(kvp => config.GetEffectiveColumn(kvp.Key), StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .ToList();
+
+        foreach (var group in statesByColumn)
+        {
+            var hasActionable = group.Any(kvp =>
+                string.Equals(kvp.Value.GateType, GateTypes.AgentRun, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(kvp.Value.GateType, GateTypes.SystemMerge, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(kvp.Value.GateType, GateTypes.ChildrenComplete, StringComparison.OrdinalIgnoreCase));
+
+            if (!hasActionable) continue;
+
+            foreach (var (sid, st) in group)
+            {
+                if (st.Filters is null or { Count: 0 })
+                    errors.Add($"State '{sid}' ({st.Name}) shares column '{group.Key}' with another actionable state but has no filters. Add filters to disambiguate.");
+            }
+        }
 
         if (validatePolling)
             ValidatePollingConfig(config, errors);

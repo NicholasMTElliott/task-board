@@ -31,7 +31,7 @@ public sealed class MergeRunner(
         logger.LogInformation("Starting merge run {RunId} for card {CardId}", runId, cardId);
 
         // 1. Fetch card and validate state
-        var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalStateNames());
+        var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalColumnNames());
         var card = cards.FirstOrDefault(c => c.Id == cardId);
         if (card is null)
         {
@@ -39,7 +39,8 @@ public sealed class MergeRunner(
             return new AgentRunResult(AgentOutcome.ERROR, "Card not found on board");
         }
 
-        if (!workflowConfig.States.TryGetValue(card.ColumnId, out var state))
+        var state = workflowConfig.ResolveState(card);
+        if (state is null)
         {
             logger.LogError("Card {CardId} is in column {ColumnId} which is not in workflow config", cardId, card.ColumnId);
             return new AgentRunResult(AgentOutcome.ERROR, "Card column not in workflow config");
