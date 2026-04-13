@@ -1,4 +1,6 @@
 using System.Text.Json.Serialization;
+using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Processing;
 
 namespace TaskBoard.Worker.Models;
 
@@ -108,6 +110,80 @@ public sealed record WorkflowConfig(
             .ToList();
 
     /// <summary>
+    /// Returns the effective board column name for a state.
+    /// If the state has an explicit <see cref="WorkflowState.Column"/> set, that value is returned.
+    /// Otherwise the dictionary key (state ID) is returned as the fallback, which matches the
+    /// existing convention used in workflow.github.json where state keys equal column names.
+    /// </summary>
+    public string GetEffectiveColumn(string stateId) =>
+        States.TryGetValue(stateId, out var state) && state.Column is not null
+            ? state.Column
+            : stateId;
+
+    /// <summary>
+    /// Returns all workflow states whose effective column matches <paramref name="columnName"/>.
+    /// Case-insensitive comparison.
+    /// </summary>
+    public IReadOnlyList<WorkflowState> FindStatesByColumn(string columnName)
+    {
+        var result = new List<WorkflowState>();
+        foreach (var (stateId, state) in States)
+        {
+            if (string.Equals(GetEffectiveColumn(stateId), columnName, StringComparison.OrdinalIgnoreCase))
+                result.Add(state);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Returns the distinct board column names for states with gateType "terminal".
+    /// Use this (instead of <see cref="GetTerminalStateNames"/>) when you need to compare against
+    /// a card's <c>ColumnId</c> field, which contains the board column name.
+    /// </summary>
+    public IReadOnlyList<string> GetTerminalColumnNames() =>
+        States
+            .Where(kvp => string.Equals(kvp.Value.GateType, GateTypes.Terminal, StringComparison.OrdinalIgnoreCase))
+            .Select(kvp => GetEffectiveColumn(kvp.Key))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    /// <summary>
+    /// Resolves the workflow state for a card by matching the card's column ID against
+    /// state effective columns and evaluating state filters.
+    ///
+    /// Returns null if no state's effective column matches, or if all matching states
+    /// fail their filter predicates.
+    ///
+    /// Throws <see cref="InvalidOperationException"/> if multiple states match after
+    /// filter evaluation — this indicates a config error (insufficient filters to disambiguate).
+    /// </summary>
+    public WorkflowState? ResolveState(BoardCard card)
+    {
+        var candidates = FindStatesByColumn(card.ColumnId);
+        if (candidates.Count == 0)
+            return null;
+
+        // Fast path: single candidate with no filters
+        if (candidates.Count == 1 && (candidates[0].Filters is null or { Count: 0 }))
+            return candidates[0];
+
+        var matches = candidates
+            .Where(s => CardFilterEvaluator.PassesAll(card, s.Filters))
+            .ToList();
+
+        if (matches.Count == 0)
+            return null;
+
+        if (matches.Count == 1)
+            return matches[0];
+
+        throw new InvalidOperationException(
+            $"Ambiguous state resolution for card '{card.Id}' in column '{card.ColumnId}': " +
+            $"{matches.Count} states match after filter evaluation. " +
+            "Add more specific filters to disambiguate.");
+    }
+
+    /// <summary>
     /// Collects all distinct provider keys required to execute a given state.
     /// Examines: steps, gate check, and optional steps.
     /// Returns empty set for states with no agent requirements (e.g., system_merge, manual_gate).
@@ -178,7 +254,8 @@ public sealed record WorkflowState(
     List<WorkflowStep>? Steps = null,
     GateCheckConfig? GateCheck = null,
     List<OptionalStepDefinition>? OptionalSteps = null,
-    List<CardFilter>? Filters = null)
+    List<CardFilter>? Filters = null,
+    string? Column = null)
 {
     /// <summary>
     /// Normalises a legacy single-step state (top-level Role + TaskPrompt) into

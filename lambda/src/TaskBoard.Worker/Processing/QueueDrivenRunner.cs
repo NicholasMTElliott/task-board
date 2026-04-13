@@ -111,7 +111,7 @@ public sealed class QueueDrivenRunner(
         string boardId, string workspacePath,
         SemaphoreSlim? semaphore, CancellationToken cancellationToken)
     {
-        var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalStateNames());
+        var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalColumnNames());
         var selection = CardSelector.SelectAll(cards, workflowConfig, executorResolver.AvailableProviders);
 
         foreach (var skipped in selection.SkippedDueToProviders)
@@ -192,7 +192,7 @@ public sealed class QueueDrivenRunner(
     {
         try
         {
-            var state = workflowConfig.States.GetValueOrDefault(card.ColumnId);
+            var state = workflowConfig.ResolveState(card);
             var result = string.Equals(state?.GateType, GateTypes.SystemMerge, StringComparison.OrdinalIgnoreCase)
                 ? await mergeRunner.ExecuteAsync(card.Id, boardId, workspacePath, cancellationToken)
                 : await agentRunner.ExecuteAsync(card.Id, boardId, workspacePath, cancellationToken);

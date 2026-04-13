@@ -14,6 +14,7 @@
 | Agent sandbox image | `docker/agent-sandbox/Dockerfile` | node:22-slim + Claude CLI (npm) + git + ripgrep + curl; non-root `agent` user; base image / UID/GID configurable via build args |
 | Image download | `ImageDownloader` + named HttpClient | Bearer auth via `gh auth token` for GitHub provider |
 | Workflow config | `workflow.github.json` | File-based, in repo |
+| Example workflow config | `workflow.simple.example.json` | Shared-column multi-phase example (5 phases sharing "Ready" column, disambiguated by Activity field + assignee filters) |
 
 ### Edge / Ingestion (Legacy Queue Path)
 | Layer | Technology | Notes |
@@ -99,6 +100,7 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ Image download authentication via `gh auth token` for GitHub user-attachment URLs
 - ✅ Orchestrator-owns-git-writes: all git write operations (commit, push) are performed by `AgentRunner.HandleGitBehaviorAsync` on the host after agent/container exit; agents must not run git write commands; Docker enforces via RO `.git` mount; all 7 system prompts enforce via "Git Policy" section; agents may use read-only git commands freely
 - ✅ Two-phase graceful shutdown (`ShutdownCoordinator`): first Ctrl+C sets `IsShutdownRequested` flag and cancels `IdleToken` (interrupts idle delays); second Ctrl+C fires hard `CancellationToken` cancel; runner loops check flag before claiming new work; `AgentRunner` inter-step check commits+pushes partial work and restores card on shutdown; applies to polling and queue modes only
+- ✅ Shared-column state disambiguation (`WorkflowState.Column` + `WorkflowConfig.ResolveState`): state keys decoupled from board column names; multiple states can share one column, disambiguated by `filters`; `GetEffectiveColumn`/`FindStatesByColumn`/`GetTerminalColumnNames` replace all direct `States.TryGetValue`/`GetTerminalStateNames` call sites (18 sites across 11 files); validator enforces filter presence on actionable shared-column states; `--state` CLI override for agent mode; `workflow.simple.example.json` demonstrates the pattern
 
 ## Open Technical Decisions
 - [ ] Webhook/event-driven triggers (currently manual CLI or polling)
