@@ -315,6 +315,28 @@ Ready for Design → Designed → Ready for Implementation → ... → Approved 
 - `AgentRunner` catches `RateLimitException`, restores card to trigger column for retry
 - `PollingRunner` applies aggressive backoff: board API = 2min base, agent CLI = 30min base (cap 2hr)
 
+### Two-Phase Graceful Shutdown
+Applies to `--mode polling` and `--mode queue` (not agent mode — single card, exits naturally).
+
+**`ShutdownCoordinator`** — thread-safe singleton injected into `Program.cs`, `PollingRunner`, `QueueDrivenRunner`, and `AgentRunner`:
+- `RequestShutdown()` — sets flag via `Interlocked.CompareExchange`; returns `true` only on first call; also cancels `IdleToken`
+- `IsShutdownRequested` — read by runner loops before claiming new work
+- `IdleToken` — `CancellationToken` cancelled on first Ctrl+C; used only for idle/backoff delays (not agent work)
+- `Dispose()` — disposes internal `CancellationTokenSource`
+
+**Two-phase Ctrl+C (in `Program.cs`):**
+1. First Ctrl+C → `coordinator.RequestShutdown()` + log "Shutdown requested — finishing current work, press Ctrl+C again to force quit"
+2. Second Ctrl+C → `cts.Cancel()` (hard cancel, existing behavior) + log "Force shutdown initiated."
+
+**Runner loop behaviour:**
+- `PollingRunner` / `QueueDrivenRunner`: loop condition checks `!shutdownCoordinator.IsShutdownRequested`; idle/backoff delays use a linked token (main token + `IdleToken`) so they abort immediately on first Ctrl+C
+- `QueueDrivenRunner`: claim loop also checks `IsShutdownRequested` to prevent new claims; already in-flight `Task.WhenAll` tasks finish naturally
+
+**`AgentRunner` inter-step check (`stepIndex > 0` guard):**
+- Before each step after the first, checks `IsShutdownRequested`
+- If set: for `commit_and_push` stages — commits and pushes partial work (best-effort, failure is logged as warning); for all stages — restores card to trigger column so it can be re-processed; returns `AgentOutcome.COMPLETE` (controlled interruption, not a failure)
+- Nested try/catch isolates push failure (inner) → commit failure (outer) → card restore failure (outermost); card restore failure still returns COMPLETE
+
 ## Component Relationships
 
 | Component | Responsibility |
@@ -345,6 +367,7 @@ Ready for Design → Designed → Ready for Implementation → ... → Approved 
 | SinceParser | Parses `--since` time strings (e.g., `7d`, `24h`, `1w`) into UTC DateTime offsets |
 | PrerequisiteValidator | Startup validation of providers, board config, and prompt files |
 | CardSelector / CardFilterEvaluator | Polling card selection and filtering logic |
+| ShutdownCoordinator | Thread-safe two-phase Ctrl+C shutdown: `IsShutdownRequested` flag + `IdleToken`; singleton shared by `Program.cs`, runners, and `AgentRunner` |
 | SystemSleepInhibitor | Prevents OS sleep during polling (Windows/Mac/Linux) |
 | PromptBuilder | Assembles system + task prompts for agent execution |
 | workflow.github.json | Workflow config for GitHub Projects (active) |

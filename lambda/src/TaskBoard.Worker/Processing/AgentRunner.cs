@@ -19,7 +19,8 @@ public sealed partial class AgentRunner(
     ImageDownloader imageDownloader,
     ILogger<AgentRunner> logger,
     DockerAgentOptions? dockerOptions = null,
-    DockerMountBuilder? mountBuilder = null)
+    DockerMountBuilder? mountBuilder = null,
+    ShutdownCoordinator? shutdownCoordinator = null)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
 
@@ -326,6 +327,77 @@ public sealed partial class AgentRunner(
 
             for (var stepIndex = 0; stepIndex < state.Steps.Count; stepIndex++)
             {
+                // Inter-step shutdown check: if graceful shutdown was requested after at least one step
+                // completed, preserve partial work and restore the card to its trigger column so it can
+                // be re-processed. Only applies from step 1 onwards — if shutdown is requested before
+                // any work starts, the runner loop condition handles it without entering this path.
+                if (stepIndex > 0 && shutdownCoordinator?.IsShutdownRequested == true)
+                {
+                    logger.LogWarning(
+                        "Shutdown requested between steps at index {StepIndex}/{TotalSteps} for card {CardId} — " +
+                        "preserving partial work and restoring to trigger column",
+                        stepIndex, state.Steps.Count, cardId);
+
+                    // For commit_and_push stages: commit partial work and push so future runs can
+                    // resume from the existing branch (branch is found via FindBranchByPrefixAsync).
+                    if (gitBehavior == "commit_and_push")
+                    {
+                        try
+                        {
+                            var partialCommitMsg = await ReadCommitMessageAsync(worktreePath, targetCard, state, cancellationToken);
+                            await gitWorkspaceManager.CommitAsync(worktreePath, partialCommitMsg, cancellationToken);
+                            try
+                            {
+                                await gitWorkspaceManager.PushAsync(worktreePath, branchName, cancellationToken);
+                                logger.LogInformation(
+                                    "Partial work pushed to branch {Branch} for card {CardId}",
+                                    branchName, cardId);
+                            }
+                            catch (Exception pushEx)
+                            {
+                                logger.LogWarning(pushEx,
+                                    "Failed to push partial work for card {CardId} during shutdown — branch exists locally for manual recovery",
+                                    cardId);
+                            }
+                        }
+                        catch (Exception commitEx)
+                        {
+                            logger.LogWarning(commitEx,
+                                "Failed to commit partial work for card {CardId} during shutdown",
+                                cardId);
+                        }
+                    }
+                    else if (gitBehavior == "discard")
+                    {
+                        await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
+                    }
+
+                    // Restore card to trigger column (best effort — same pattern as rate-limit restore)
+                    try
+                    {
+                        await boardClient.MoveCardToColumnAsync(cardId, targetCard.ColumnId, cancellationToken);
+                        var shutdownComment = gitBehavior == "commit_and_push"
+                            ? $"{commentPrefix}\n\n**Shutdown requested** — {stepIndex}/{state.Steps.Count} steps completed. " +
+                              $"Partial work committed to branch `{branchName}`. " +
+                              $"Card returned to **{targetCard.ColumnId}** for re-processing."
+                            : $"{commentPrefix}\n\n**Shutdown requested** — {stepIndex}/{state.Steps.Count} steps completed. " +
+                              $"Card returned to **{targetCard.ColumnId}** for re-processing.";
+                        await boardClient.UpsertAgentCommentAsync(
+                            cardId, shutdownComment, $"<!-- agent-shutdown:{cardId} -->", cancellationToken);
+                    }
+                    catch (Exception restoreEx)
+                    {
+                        logger.LogWarning(restoreEx,
+                            "Failed to restore card {CardId} to trigger column during shutdown — card may be stuck in IN_PROGRESS",
+                            cardId);
+                    }
+
+                    await SafeDbCallAsync(() => runStore.CompleteRunAsync(
+                        runId, AgentOutcome.COMPLETE, "Shutdown requested — partial work preserved", cancellationToken));
+                    return new AgentRunResult(AgentOutcome.COMPLETE,
+                        "Shutdown requested — partial work preserved and card returned to trigger column for re-processing");
+                }
+
                 var step = state.Steps[stepIndex];
                 var stepRole = workflowConfig.Roles[step.Role];
 
