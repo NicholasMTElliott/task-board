@@ -49,7 +49,7 @@ public sealed class PollingRunner(
             totalCycles++;
             try
             {
-                var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalStateNames());
+                var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalColumnNames());
                 var selectionResult = CardSelector.SelectNext(cards, workflowConfig, executorResolver.AvailableProviders);
 
                 foreach (var skipped in selectionResult.SkippedDueToProviders)
@@ -79,7 +79,7 @@ public sealed class PollingRunner(
                         "Selected card {CardId} ({Title}) in {ColumnId} (cycle {Cycle})",
                         selected.Id, selected.Title, selected.ColumnId, totalCycles);
 
-                    var selectedState = workflowConfig.States.GetValueOrDefault(selected.ColumnId);
+                    var selectedState = workflowConfig.ResolveState(selected);
                     var result = selectedState?.GateType switch
                     {
                         GateTypes.SystemMerge => await mergeRunner.ExecuteAsync(

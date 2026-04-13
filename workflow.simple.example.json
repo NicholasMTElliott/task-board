@@ -1,0 +1,254 @@
+{
+  "_comment": "Example workflow demonstrating shared-column state disambiguation using filters. Five SDLC phases (Design, Implementation, Review, Test, Merge) all share a single 'Ready' column, with the active phase tracked via an 'Activity' custom field. The agent self-assigns to claim work and unassigns on completion/error.",
+  "states": {
+    "Backlog": {
+      "name": "Backlog",
+      "gateType": "manual_entry",
+      "transitions": {}
+    },
+    "design": {
+      "name": "Design",
+      "column": "Ready",
+      "gateType": "agent_run",
+      "pipelineOrder": 1,
+      "gitBehavior": "discard",
+      "filters": [
+        { "type": "field",    "operator": "equals",  "field": "Activity", "value": "Design" },
+        { "type": "assignee", "operator": "isEmpty" }
+      ],
+      "steps": [
+        {
+          "name": "create_design",
+          "role": "senior_engineer",
+          "taskPromptFile": "prompts/states/ready_for_design.md"
+        }
+      ],
+      "transitions": {
+        "IN_PROGRESS": [
+          { "type": "assign",       "value": "{{agent}}" },
+          { "type": "moveToColumn", "value": "In progress" }
+        ],
+        "COMPLETE": [
+          { "type": "unassign" },
+          { "type": "setField", "field": "Activity", "value": "Implementation" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ],
+        "NEEDS_INFO": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Questions" }
+        ],
+        "ERROR": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Problems" }
+        ],
+        "GATE_FAIL": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ]
+      }
+    },
+    "implementation": {
+      "name": "Implementation",
+      "column": "Ready",
+      "gateType": "agent_run",
+      "pipelineOrder": 2,
+      "gitBehavior": "commit_and_push",
+      "filters": [
+        { "type": "field",    "operator": "equals",  "field": "Activity", "value": "Implementation" },
+        { "type": "assignee", "operator": "isEmpty" }
+      ],
+      "steps": [
+        {
+          "name": "implement",
+          "role": "implementer",
+          "taskPromptFile": "prompts/states/ready_for_implementation.md"
+        }
+      ],
+      "transitions": {
+        "IN_PROGRESS": [
+          { "type": "assign",       "value": "{{agent}}" },
+          { "type": "moveToColumn", "value": "In progress" }
+        ],
+        "COMPLETE": [
+          { "type": "unassign" },
+          { "type": "setField", "field": "Activity", "value": "Review" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ],
+        "NEEDS_INFO": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Questions" }
+        ],
+        "ERROR": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Problems" }
+        ],
+        "GATE_FAIL": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ]
+      }
+    },
+    "review": {
+      "name": "Review",
+      "column": "Ready",
+      "gateType": "agent_run",
+      "pipelineOrder": 3,
+      "gitBehavior": "discard",
+      "filters": [
+        { "type": "field",    "operator": "equals",  "field": "Activity", "value": "Review" },
+        { "type": "assignee", "operator": "isEmpty" }
+      ],
+      "steps": [
+        {
+          "name": "code_review",
+          "role": "code_reviewer",
+          "taskPromptFile": "prompts/states/steps/code_review.md"
+        }
+      ],
+      "transitions": {
+        "IN_PROGRESS": [
+          { "type": "assign",       "value": "{{agent}}" },
+          { "type": "moveToColumn", "value": "In progress" }
+        ],
+        "COMPLETE": [
+          { "type": "unassign" },
+          { "type": "setField", "field": "Activity", "value": "Test" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ],
+        "NEEDS_INFO": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Questions" }
+        ],
+        "ERROR": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Problems" }
+        ],
+        "GATE_FAIL": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ]
+      }
+    },
+    "test": {
+      "name": "Test",
+      "column": "Ready",
+      "gateType": "agent_run",
+      "pipelineOrder": 4,
+      "gitBehavior": "discard",
+      "filters": [
+        { "type": "field",    "operator": "equals",  "field": "Activity", "value": "Test" },
+        { "type": "assignee", "operator": "isEmpty" }
+      ],
+      "steps": [
+        {
+          "name": "qa_validation",
+          "role": "qa",
+          "taskPromptFile": "prompts/states/ready_for_test.md"
+        }
+      ],
+      "transitions": {
+        "IN_PROGRESS": [
+          { "type": "assign",       "value": "{{agent}}" },
+          { "type": "moveToColumn", "value": "In progress" }
+        ],
+        "COMPLETE": [
+          { "type": "unassign" },
+          { "type": "setField", "field": "Activity", "value": "Merge" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ],
+        "NEEDS_INFO": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Questions" }
+        ],
+        "ERROR": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Problems" }
+        ],
+        "GATE_FAIL": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ]
+      }
+    },
+    "merge": {
+      "name": "Merge",
+      "column": "Ready",
+      "gateType": "system_merge",
+      "pipelineOrder": 5,
+      "filters": [
+        { "type": "field",    "operator": "equals",  "field": "Activity", "value": "Merge" },
+        { "type": "assignee", "operator": "isEmpty" }
+      ],
+      "transitions": {
+        "IN_PROGRESS": [
+          { "type": "assign",       "value": "{{agent}}" },
+          { "type": "moveToColumn", "value": "In progress" }
+        ],
+        "COMPLETE": [
+          { "type": "unassign" },
+          { "type": "clearField", "field": "Activity" },
+          { "type": "moveToColumn", "value": "Done" }
+        ],
+        "ERROR": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Problems" }
+        ],
+        "MERGE_CONFLICT": [
+          { "type": "unassign" },
+          { "type": "setField", "field": "Activity", "value": "Implementation" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ]
+      }
+    },
+    "in_progress": {
+      "name": "In progress",
+      "column": "In progress",
+      "gateType": "in_progress",
+      "transitions": {}
+    },
+    "questions": {
+      "name": "Questions",
+      "column": "Questions",
+      "gateType": "holding",
+      "transitions": {}
+    },
+    "problems": {
+      "name": "Problems",
+      "column": "Problems",
+      "gateType": "holding",
+      "transitions": {}
+    },
+    "done": {
+      "name": "Done",
+      "column": "Done",
+      "gateType": "terminal",
+      "transitions": {}
+    }
+  },
+  "roles": {
+    "senior_engineer": {
+      "model": "claude-opus-4-6",
+      "systemPromptFile": "prompts/senior_engineer.md",
+      "sections": ["Technical Design", "Decisions", "Implementation"]
+    },
+    "implementer": {
+      "model": "claude-sonnet-4-6",
+      "systemPromptFile": "prompts/senior_engineer.md",
+      "sections": []
+    },
+    "code_reviewer": {
+      "model": "claude-sonnet-4-6",
+      "systemPromptFile": "prompts/code_reviewer.md",
+      "sections": []
+    },
+    "qa": {
+      "model": "claude-opus-4-6",
+      "systemPromptFile": "prompts/qa.md",
+      "sections": []
+    }
+  },
+  "polling": {
+    "priorityFieldName": "priority",
+    "priorityOrder": ["P0", "P1", "P2"]
+  }
+}

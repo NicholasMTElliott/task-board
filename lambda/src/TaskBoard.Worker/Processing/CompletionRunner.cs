@@ -48,7 +48,8 @@ public sealed class CompletionRunner(
             return new AgentRunResult(AgentOutcome.ERROR, $"Failed to fetch card: {ex.Message}");
         }
 
-        if (!workflowConfig.States.TryGetValue(card.ColumnId, out var state))
+        var state = workflowConfig.ResolveState(card);
+        if (state is null)
             return new AgentRunResult(AgentOutcome.ERROR, $"Card column '{card.ColumnId}' not in workflow config");
 
         if (!string.Equals(state.GateType, GateTypes.ChildrenComplete, StringComparison.OrdinalIgnoreCase))
@@ -88,8 +89,8 @@ public sealed class CompletionRunner(
                 "No tracked children found. Card is in a children_complete state but has no child issues linked via task list.");
         }
 
-        // 4. Fetch each child and check terminal state
-        var terminalStates = workflowConfig.GetTerminalStateNames()
+        // 4. Fetch each child and check terminal state (compare against board column names)
+        var terminalStates = workflowConfig.GetTerminalColumnNames()
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var completed = new List<(string Id, string Title, string Column)>();

@@ -97,7 +97,7 @@ public class WorkflowConfigValidatorTests
 
         var errors = WorkflowConfigValidator.Validate(config);
 
-        Assert.Contains(errors, e => e.Contains("list-does-not-exist") && e.Contains("does not exist"));
+        Assert.Contains(errors, e => e.Contains("list-does-not-exist") && e.Contains("not mapped"));
     }
 
     [Fact]
@@ -342,7 +342,7 @@ public class WorkflowConfigValidatorTests
 
         var errors = WorkflowConfigValidator.Validate(config);
 
-        Assert.Contains(errors, e => e.Contains("NonExistentColumn") && e.Contains("not a known state"));
+        Assert.Contains(errors, e => e.Contains("NonExistentColumn") && e.Contains("not a known column"));
     }
 
     [Fact]

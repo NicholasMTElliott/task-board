@@ -14,6 +14,7 @@ internal static class CliDefinitions
         // CLI-only (not in appsettings, but routed through IConfiguration for uniform access)
         ["--mode"] = "Mode",
         ["--card-id"] = "CardId",
+        ["--state"] = "StateOverride",
         ["--config"] = "ConfigPath",
         ["--prompt-root"] = "PromptRoot",
 
@@ -109,6 +110,7 @@ internal static class CliDefinitions
         WriteSection("General", [
             ("--mode <mode>",             "Execution mode: agent, polling, metrics",           null),
             ("--card-id <id>",            "Card/issue number (required for agent mode)",       null),
+            ("--state <stateId>",         "Override state key for agent mode dispatch (bypasses filter-based resolution)", null),
             ("--config <path>",           "Additional JSON config file to layer in",           null),
             ("--prompt-root <path>",      "Base directory for prompt file resolution",         "exe directory"),
             ("--board-provider <name>",   "Board provider: stub, trello, github",              "stub"),

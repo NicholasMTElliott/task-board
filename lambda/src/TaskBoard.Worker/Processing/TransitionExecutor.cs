@@ -229,8 +229,8 @@ public static class TransitionExecutor
             return;
         }
 
-        // 4. Check terminal states
-        var terminalStates = workflowConfig.GetTerminalStateNames()
+        // 4. Check terminal states (compare against board column names)
+        var terminalStates = workflowConfig.GetTerminalColumnNames()
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var completed = new List<string>();
@@ -263,7 +263,7 @@ public static class TransitionExecutor
                 completed.Count, parentId);
 
             // Look up parent's current state and execute its COMPLETE transition
-            if (workflowConfig.States.TryGetValue(parentCard.ColumnId, out var parentState)
+            if (workflowConfig.ResolveState(parentCard) is { } parentState
                 && parentState.Transitions.TryGetValue(TransitionKeys.Complete, out var completeTarget))
             {
                 var comment = $"All {completed.Count} child tasks complete. Transitioning to Done.";

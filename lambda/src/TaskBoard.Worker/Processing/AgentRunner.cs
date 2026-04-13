@@ -53,7 +53,7 @@ public sealed partial class AgentRunner(
             runId, cardId, workspacePath);
 
         // 1. Fetch all board cards (exclude terminal states to keep the working set small)
-        var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalStateNames());
+        var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalColumnNames());
         logger.LogInformation("Fetched {Count} cards from board {BoardId}", cards.Count, boardId);
 
         // 2. Find the target card and determine its workflow state
@@ -64,7 +64,8 @@ public sealed partial class AgentRunner(
             return new AgentRunResult(AgentOutcome.ERROR, "Card not found on board");
         }
 
-        if (!workflowConfig.States.TryGetValue(targetCard.ColumnId, out var state))
+        var state = workflowConfig.ResolveState(targetCard);
+        if (state is null)
         {
             logger.LogError("Card {CardId} is in column {ColumnId} which is not in workflow config", cardId, targetCard.ColumnId);
             return new AgentRunResult(AgentOutcome.ERROR, "Card column not in workflow config");
@@ -1771,8 +1772,7 @@ public sealed partial class AgentRunner(
     {
         return allCards.Where(card =>
             card.Id == activeCardId
-            || (config.States.TryGetValue(card.ColumnId, out var state)
-                && state.IncludeInAgentContext)
+            || (config.ResolveState(card) is { IncludeInAgentContext: true })
             || (additionalCardIds?.Contains(card.Id) == true))
         .ToList();
     }
@@ -1973,7 +1973,7 @@ public sealed partial class AgentRunner(
     {
         var activeStateName = state.Transitions.TryGetValue(TransitionKeys.InProgress, out var inProgressTarget)
             && inProgressTarget.Column is string inProgressCol
-            && config.States.TryGetValue(inProgressCol, out var inProgressState)
+            && config.FindStatesByColumn(inProgressCol).FirstOrDefault() is { } inProgressState
             ? inProgressState.Name
             : state.Name;
 
