@@ -57,7 +57,7 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 ### Migration Tooling
 - Flyway via Docker (`redgate/flyway`) for SQL-first schema migrations
 - Scripts in `db/migrations`, applied via `scripts/migrate.ps1`
-- Migration chain: V1 (processed_events) → V2 (pgmq_core) → V3 (events_queue) → V4 (card_state) → V5 (run_log) → V6 (run_log step_name) → V7 (pgmq_pings_queue) → V8 (card_state_claimed_at) → V9 (agent_run) → V10 (step_result) → V11 (drop_run_log) → V12 (metrics: estimate column, started_at indexes, SQL views) → V13 (session timing: session_startup_ms on agent_run, session_exec_ms on step_result)
+- Migration chain: V1 (processed_events) → V2 (pgmq_core) → V3 (events_queue) → V4 (card_state) → V5 (run_log) → V6 (run_log step_name) → V7 (pgmq_pings_queue) → V8 (card_state_claimed_at) → V9 (agent_run) → V10 (step_result) → V11 (drop_run_log) → V12 (metrics: estimate column, started_at indexes, SQL views) → V13 (session timing: session_startup_ms on agent_run, session_exec_ms on step_result) → V14 (failure_reason: failure_reason TEXT NULL + CHECK constraint on agent_run; v_run_metrics updated to use failure_reason = 'RATE_LIMIT')
 
 ## Decided Architecture Items
 - ✅ Board abstraction: `ITaskBoardClient` with GitHub Projects and Trello implementations
@@ -73,6 +73,7 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ System merge (Approved → Done)
 - ✅ Merge conflict detection and resolution
 - ✅ Agent run tracking (IRunStore with PgRunStore/NullRunStore)
+- ✅ Structured failure classification: `FailureReason` enum (`RATE_LIMIT`, `AGENT_ERROR`, `INFRASTRUCTURE`, `TIMEOUT`) persisted to `agent_run.failure_reason`; replaces ILIKE string-matching in `v_run_metrics` and `PgMetricsStore`
 - ✅ Rate limit detection and recovery (Claude CLI stderr + GitHub API 429)
 - ✅ Child task generation (cardTypes, CompletionRunner, UpdateFileProcessor)
 - ✅ Estimation pipeline (estimator role, calibration-based sizing)
