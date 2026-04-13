@@ -18,7 +18,9 @@ public sealed partial class AgentRunner(
     IRunStore runStore,
     ImageDownloader imageDownloader,
     ILogger<AgentRunner> logger,
-    DockerAgentOptions? dockerOptions = null)
+    DockerAgentOptions? dockerOptions = null,
+    DockerMountBuilder? mountBuilder = null,
+    ShutdownCoordinator? shutdownCoordinator = null)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
 
@@ -252,14 +254,36 @@ public sealed partial class AgentRunner(
             await SafeDbCallAsync(() => runStore.CreateRunAsync(runRecord, cancellationToken));
             await WritePriorStepContextAsync(worktreePath, cardId, state.Name, cancellationToken);
 
-            // 5.5 Attempt to create a reusable container session (if a sessionable executor is available)
+            // 5.5 Build mount context for Docker workspace/credential mounts (if builder is available)
+            DockerMountContext? mountContext = null;
+            if (mountBuilder is not null && dockerOptions is not null)
+            {
+                try
+                {
+                    mountContext = await mountBuilder.BuildAsync(
+                        worktreePath, dockerOptions, cancellationToken);
+                    logger.LogDebug(
+                        "Mount context built for run {RunId} card {CardId}: {MountCount} mount(s)",
+                        runId, cardId, mountContext.Mounts.Count);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex,
+                        "Failed to build mount context for run {RunId} card {CardId} — " +
+                        "session will proceed without workspace mounts",
+                        runId, cardId);
+                }
+            }
+
+            // 5.6 Attempt to create a reusable container session (if a sessionable executor is available)
             IAgentExecutorSession? session = null;
             if (dockerOptions?.ReuseContainer == true)
             {
                 var sessionCreatedAt = DateTimeOffset.UtcNow;
                 try
                 {
-                    session = await TryCreateSessionAsync(state, cardId, runId, cancellationToken);
+                    session = await TryCreateSessionAsync(
+                        state, cardId, runId, mountContext, cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -303,6 +327,77 @@ public sealed partial class AgentRunner(
 
             for (var stepIndex = 0; stepIndex < state.Steps.Count; stepIndex++)
             {
+                // Inter-step shutdown check: if graceful shutdown was requested after at least one step
+                // completed, preserve partial work and restore the card to its trigger column so it can
+                // be re-processed. Only applies from step 1 onwards — if shutdown is requested before
+                // any work starts, the runner loop condition handles it without entering this path.
+                if (stepIndex > 0 && shutdownCoordinator?.IsShutdownRequested == true)
+                {
+                    logger.LogWarning(
+                        "Shutdown requested between steps at index {StepIndex}/{TotalSteps} for card {CardId} — " +
+                        "preserving partial work and restoring to trigger column",
+                        stepIndex, state.Steps.Count, cardId);
+
+                    // For commit_and_push stages: commit partial work and push so future runs can
+                    // resume from the existing branch (branch is found via FindBranchByPrefixAsync).
+                    if (gitBehavior == "commit_and_push")
+                    {
+                        try
+                        {
+                            var partialCommitMsg = await ReadCommitMessageAsync(worktreePath, targetCard, state, cancellationToken);
+                            await gitWorkspaceManager.CommitAsync(worktreePath, partialCommitMsg, cancellationToken);
+                            try
+                            {
+                                await gitWorkspaceManager.PushAsync(worktreePath, branchName, cancellationToken);
+                                logger.LogInformation(
+                                    "Partial work pushed to branch {Branch} for card {CardId}",
+                                    branchName, cardId);
+                            }
+                            catch (Exception pushEx)
+                            {
+                                logger.LogWarning(pushEx,
+                                    "Failed to push partial work for card {CardId} during shutdown — branch exists locally for manual recovery",
+                                    cardId);
+                            }
+                        }
+                        catch (Exception commitEx)
+                        {
+                            logger.LogWarning(commitEx,
+                                "Failed to commit partial work for card {CardId} during shutdown",
+                                cardId);
+                        }
+                    }
+                    else if (gitBehavior == "discard")
+                    {
+                        await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
+                    }
+
+                    // Restore card to trigger column (best effort — same pattern as rate-limit restore)
+                    try
+                    {
+                        await boardClient.MoveCardToColumnAsync(cardId, targetCard.ColumnId, cancellationToken);
+                        var shutdownComment = gitBehavior == "commit_and_push"
+                            ? $"{commentPrefix}\n\n**Shutdown requested** — {stepIndex}/{state.Steps.Count} steps completed. " +
+                              $"Partial work committed to branch `{branchName}`. " +
+                              $"Card returned to **{targetCard.ColumnId}** for re-processing."
+                            : $"{commentPrefix}\n\n**Shutdown requested** — {stepIndex}/{state.Steps.Count} steps completed. " +
+                              $"Card returned to **{targetCard.ColumnId}** for re-processing.";
+                        await boardClient.UpsertAgentCommentAsync(
+                            cardId, shutdownComment, $"<!-- agent-shutdown:{cardId} -->", cancellationToken);
+                    }
+                    catch (Exception restoreEx)
+                    {
+                        logger.LogWarning(restoreEx,
+                            "Failed to restore card {CardId} to trigger column during shutdown — card may be stuck in IN_PROGRESS",
+                            cardId);
+                    }
+
+                    await SafeDbCallAsync(() => runStore.CompleteRunAsync(
+                        runId, AgentOutcome.COMPLETE, "Shutdown requested — partial work preserved", null, cancellationToken));
+                    return new AgentRunResult(AgentOutcome.COMPLETE,
+                        "Shutdown requested — partial work preserved and card returned to trigger column for re-processing");
+                }
+
                 var step = state.Steps[stepIndex];
                 var stepRole = workflowConfig.Roles[step.Role];
 
@@ -465,7 +560,7 @@ public sealed partial class AgentRunner(
                     if (gitBehavior == "discard")
                         await CleanupWorktreeAsync(workspacePath, branchName, cancellationToken);
 
-                    await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, lastResult.Outcome, lastResult.Detail, cancellationToken));
+                    await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, lastResult.Outcome, lastResult.Detail, null, cancellationToken));
                     return new AgentRunResult(lastResult.Outcome, lastResult.Detail, lastResult.Questions);
                 }
             }
@@ -533,6 +628,10 @@ public sealed partial class AgentRunner(
                         "Session {SessionId} disposed for run {RunId} card {CardId}",
                         session.SessionId, runId, cardId);
                 }
+
+                // Dispose mount context after session (temp .git files must outlive the container)
+                if (mountContext is not null)
+                    await mountContext.DisposeAsync();
             }
 
             // 8. Handle git operations based on stage-specific behavior
@@ -546,7 +645,7 @@ public sealed partial class AgentRunner(
                 await boardClient.UpsertAgentCommentAsync(cardId, runComment, runMarker, cancellationToken);
             }
 
-            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, lastResult!.Outcome, null, cancellationToken));
+            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, lastResult!.Outcome, null, null, cancellationToken));
 
             var completeKey = lastResult!.Outcome.ToString();
             if (state.Transitions.TryGetValue(completeKey, out var completeTarget))
@@ -606,7 +705,7 @@ public sealed partial class AgentRunner(
                     cardId);
             }
 
-            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, AgentOutcome.ERROR, rateLimitEx.Message, cancellationToken));
+            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, AgentOutcome.ERROR, rateLimitEx.Message, FailureReason.RATE_LIMIT, cancellationToken));
 
             // Rethrow so PollingRunner can back off, or Program.cs can handle cleanly
             throw;
@@ -675,7 +774,7 @@ public sealed partial class AgentRunner(
                 logger.LogWarning(postEx, "Failed to post error feedback to board for card {CardId}", cardId);
             }
 
-            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, AgentOutcome.ERROR, ex.Message, cancellationToken));
+            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, AgentOutcome.ERROR, ex.Message, FailureReason.AGENT_ERROR, cancellationToken));
             return new AgentRunResult(AgentOutcome.ERROR, ex.Message);
         }
         } // using logger scope
@@ -708,6 +807,12 @@ public sealed partial class AgentRunner(
     /// Handles git operations based on the stage's gitBehavior config.
     /// Returns an optional note to include in the agent comment.
     /// </summary>
+    /// <remarks>
+    /// This method runs on the orchestrator host AFTER the agent (and any Docker container)
+    /// has exited. All git write operations (commit, push) are intentionally orchestrator-side —
+    /// agents must not run git write commands during execution. For Docker execution, the base
+    /// .git directory is mounted read-only, physically enforcing this constraint.
+    /// </remarks>
     private async Task<string?> HandleGitBehaviorAsync(
         string gitBehavior,
         string worktreePath,
@@ -1222,6 +1327,7 @@ public sealed partial class AgentRunner(
         WorkflowState state,
         string cardId,
         string runId,
+        DockerMountContext? mountContext,
         CancellationToken cancellationToken)
     {
         if (state.Steps is not { Count: > 0 })
@@ -1241,11 +1347,13 @@ public sealed partial class AgentRunner(
             CardId: cardId,
             RunId: runId,
             ContainerName: containerName,
-            ImageName: imageName);
+            ImageName: imageName,
+            Mounts: mountContext?.Mounts,
+            EnvironmentVariables: mountContext?.EnvironmentVariables);
 
         logger.LogInformation(
-            "Creating session for run {RunId} card {CardId} (container={ContainerName}, image={ImageName})",
-            runId, cardId, containerName, imageName);
+            "Creating session for run {RunId} card {CardId} (container={ContainerName}, image={ImageName}, mounts={MountCount})",
+            runId, cardId, containerName, imageName, request.Mounts?.Count ?? 0);
 
         return await sessionableExecutor.TryCreateSessionAsync(request, cancellationToken);
     }

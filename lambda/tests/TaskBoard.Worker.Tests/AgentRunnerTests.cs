@@ -59,6 +59,7 @@ public class AgentRunnerTests : IDisposable
         CleanupDirectory(_worktreeBase);
         try { RunGitSync(_tempDir, "worktree", "prune"); } catch { }
         CleanupDirectory(_tempDir);
+        CleanupDirectory(_tempDir + "-origin"); // bare remote created by SetupBareRemote (no-op if not created)
     }
 
     private static void CleanupDirectory(string path)
@@ -95,6 +96,70 @@ public class AgentRunnerTests : IDisposable
         var existingBranch = await _gitWorkspaceManager.FindBranchByPrefixAsync(
             _tempDir, TargetCardId, CancellationToken.None);
         Assert.NotNull(existingBranch);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CommitAndPush_Complete_CommitsWithMessageAndPushes()
+    {
+        // Arrange: bare remote so PushAsync has a valid origin
+        var bareRemotePath = SetupBareRemote(_tempDir);
+        SetupBoardCards(ImplListId);
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+
+        // Simulate agent writing code + a commit message file
+        _agentExecutor.OnExecute = (ctx, _) =>
+        {
+            // Write a real code file so CommitAsync has something to commit
+            File.WriteAllText(Path.Combine(ctx.WorkspacePath, "AuthMiddleware.cs"), "public class AuthMiddleware { }");
+            // Write the commit message
+            var commitDir = Path.Combine(ctx.WorkspacePath, ".aiboard");
+            Directory.CreateDirectory(commitDir);
+            File.WriteAllText(Path.Combine(commitDir, "commit.md"), "feat: implement auth middleware");
+        };
+
+        var runner = CreateRunnerWithConfig(BuildImplWorkflowConfig());
+
+        // Act
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Assert: run succeeded
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+
+        // Assert: branch was pushed to bare remote
+        var pushedBranches = RunGitSyncWithOutput(bareRemotePath, "branch");
+        Assert.Contains(TargetCardId, pushedBranches);
+
+        // Assert: commit message was used
+        var branch = await _gitWorkspaceManager.FindBranchByPrefixAsync(_tempDir, TargetCardId, CancellationToken.None);
+        Assert.NotNull(branch);
+        var (_, logOutput, _) = await GitWorkspaceManager.RunGitAsync(
+            _tempDir, ["log", branch, "--oneline", "-1"], CancellationToken.None);
+        Assert.Contains("feat: implement auth middleware", logOutput);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CommitAndPush_NeedsInfo_CommitsLocallyButDoesNotPush()
+    {
+        // Arrange: bare remote so we can verify no push occurred
+        var bareRemotePath = SetupBareRemote(_tempDir);
+        SetupBoardCards(ImplListId);
+        _agentExecutor.NextOutcome = AgentOutcome.NEEDS_INFO;
+
+        var runner = CreateRunnerWithConfig(BuildImplWorkflowConfig());
+
+        // Act
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Assert: run returned NEEDS_INFO
+        Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
+
+        // Assert: branch exists locally (commit was made)
+        var branch = await _gitWorkspaceManager.FindBranchByPrefixAsync(_tempDir, TargetCardId, CancellationToken.None);
+        Assert.NotNull(branch);
+
+        // Assert: branch was NOT pushed to bare remote
+        var remoteBranches = RunGitSyncWithOutput(bareRemotePath, "branch");
+        Assert.DoesNotContain(TargetCardId, remoteBranches);
     }
 
     [Fact]
@@ -635,6 +700,19 @@ public class AgentRunnerTests : IDisposable
             });
     }
 
+    /// <summary>
+    /// Creates a local bare git repository and adds it as "origin" on the given repo.
+    /// Returns the path to the bare repo so tests can inspect pushed branches.
+    /// </summary>
+    private static string SetupBareRemote(string repoPath)
+    {
+        var bareRemotePath = repoPath + "-origin";
+        Directory.CreateDirectory(bareRemotePath);
+        RunGitSync(bareRemotePath, "init", "--bare");
+        RunGitSync(repoPath, "remote", "add", "origin", bareRemotePath);
+        return bareRemotePath;
+    }
+
     private static WorkflowConfig BuildImplWorkflowConfig()
     {
         return new WorkflowConfig(
@@ -939,7 +1017,7 @@ public class AgentRunnerTests : IDisposable
             Arg.Is<StepResultRecord>(r => r.CardId == TargetCardId && r.Outcome == AgentOutcome.COMPLETE),
             Arg.Any<CancellationToken>());
         await mockRunStore.Received(1).CompleteRunAsync(
-            Arg.Any<string>(), AgentOutcome.COMPLETE, Arg.Is<string?>(s => s == null), Arg.Any<CancellationToken>());
+            Arg.Any<string>(), AgentOutcome.COMPLETE, Arg.Is<string?>(s => s == null), Arg.Is<FailureReason?>(r => r == null), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -1020,7 +1098,69 @@ public class AgentRunnerTests : IDisposable
         await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
 
         await mockRunStore.Received().CompleteRunAsync(
-            Arg.Any<string>(), AgentOutcome.ERROR, Arg.Any<string>(), Arg.Any<CancellationToken>());
+            Arg.Any<string>(), AgentOutcome.ERROR, Arg.Any<string>(), Arg.Is<FailureReason?>(r => r == null), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RateLimitException_RecordsRateLimitFailureReason()
+    {
+        SetupBoardCards();
+        var throwingExecutor = Substitute.For<IAgentExecutor>();
+        throwingExecutor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns<AgentResult>(_ => throw new RateLimitException("Claude rate limited", RateLimitSource.AgentCli));
+
+        var mockRunStore = Substitute.For<IRunStore>();
+        var runner = new AgentRunner(
+            _trelloClient, AgentExecutorResolver.ForSingleExecutor(throwingExecutor), _taskFileManager, _gitWorkspaceManager,
+            _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            mockRunStore,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
+            NullLogger<AgentRunner>.Instance);
+
+        await Assert.ThrowsAsync<RateLimitException>(() =>
+            runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None));
+
+        await mockRunStore.Received(1).CompleteRunAsync(
+            Arg.Any<string>(), AgentOutcome.ERROR, Arg.Any<string>(), FailureReason.RATE_LIMIT, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UnhandledException_RecordsAgentErrorFailureReason()
+    {
+        SetupBoardCards();
+        var throwingExecutor = Substitute.For<IAgentExecutor>();
+        throwingExecutor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns<AgentResult>(_ => throw new InvalidOperationException("Unexpected failure"));
+
+        var mockRunStore = Substitute.For<IRunStore>();
+        var runner = new AgentRunner(
+            _trelloClient, AgentExecutorResolver.ForSingleExecutor(throwingExecutor), _taskFileManager, _gitWorkspaceManager,
+            _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            mockRunStore,
+            new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
+            NullLogger<AgentRunner>.Instance);
+
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.ERROR, result.Outcome);
+        await mockRunStore.Received(1).CompleteRunAsync(
+            Arg.Any<string>(), AgentOutcome.ERROR, Arg.Any<string>(), FailureReason.AGENT_ERROR, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SuccessOutcome_RecordsNullFailureReason()
+    {
+        SetupBoardCards();
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+        var mockRunStore = Substitute.For<IRunStore>();
+
+        var runner = CreateRunnerWithRunStore(mockRunStore);
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        await mockRunStore.Received(1).CompleteRunAsync(
+            Arg.Any<string>(), AgentOutcome.COMPLETE, Arg.Any<string?>(), Arg.Is<FailureReason?>(r => r == null), Arg.Any<CancellationToken>());
     }
 
     [Fact]

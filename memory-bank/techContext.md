@@ -57,7 +57,7 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 ### Migration Tooling
 - Flyway via Docker (`redgate/flyway`) for SQL-first schema migrations
 - Scripts in `db/migrations`, applied via `scripts/migrate.ps1`
-- Migration chain: V1 (processed_events) → V2 (pgmq_core) → V3 (events_queue) → V4 (card_state) → V5 (run_log) → V6 (run_log step_name) → V7 (pgmq_pings_queue) → V8 (card_state_claimed_at) → V9 (agent_run) → V10 (step_result) → V11 (drop_run_log) → V12 (metrics: estimate column, started_at indexes, SQL views) → V13 (session timing: session_startup_ms on agent_run, session_exec_ms on step_result)
+- Migration chain: V1 (processed_events) → V2 (pgmq_core) → V3 (events_queue) → V4 (card_state) → V5 (run_log) → V6 (run_log step_name) → V7 (pgmq_pings_queue) → V8 (card_state_claimed_at) → V9 (agent_run) → V10 (step_result) → V11 (drop_run_log) → V12 (metrics: estimate column, started_at indexes, SQL views) → V13 (session timing: session_startup_ms on agent_run, session_exec_ms on step_result) → V14 (failure_reason: failure_reason TEXT NULL + CHECK constraint on agent_run; v_run_metrics updated to use failure_reason = 'RATE_LIMIT')
 
 ## Decided Architecture Items
 - ✅ Board abstraction: `ITaskBoardClient` with GitHub Projects and Trello implementations
@@ -73,6 +73,7 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ System merge (Approved → Done)
 - ✅ Merge conflict detection and resolution
 - ✅ Agent run tracking (IRunStore with PgRunStore/NullRunStore)
+- ✅ Structured failure classification: `FailureReason` enum (`RATE_LIMIT`, `AGENT_ERROR`, `INFRASTRUCTURE`, `TIMEOUT`) persisted to `agent_run.failure_reason`; replaces ILIKE string-matching in `v_run_metrics` and `PgMetricsStore`
 - ✅ Rate limit detection and recovery (Claude CLI stderr + GitHub API 429)
 - ✅ Child task generation (cardTypes, CompletionRunner, UpdateFileProcessor)
 - ✅ Estimation pipeline (estimator role, calibration-based sizing)
@@ -91,9 +92,13 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ GetCardAsync now includes project field metadata (priority, estimate) via gh project item-list
 - ✅ Agent sandbox Docker image (`docker/agent-sandbox/Dockerfile`): node:22-slim base, Claude CLI via npm, git, ripgrep, curl, non-root `agent` user (UID 1000, configurable), `/workspace` mount target; build via `scripts/build-sandbox.ps1` or `docker compose --profile build up agent-sandbox`; image tag `aiboard-agent-sandbox:latest`
 - ✅ Container reuse for multi-step runs (`IAgentExecutorSession` / `ISessionableAgentExecutor`); `DockerAgentOptions.ReuseContainer` (default: true); session spans steps + gate checks + specialist reviews; transparent fallback to per-step execution; orphaned container detection at startup via `PrerequisiteValidator`
-- ✅ `DockerAgentExecutor` (`IAgentExecutor`, provider key `docker-claude-cli`): Claude CLI wrapped in `docker run -i --rm`; system prompt dir mounted read-only; exit code classification (Docker 125/126/127/137 vs Claude CLI 0–124); `CLAUDECODE` env var stripped; extensible `AdditionalMounts` for workspace/credential mounts (#65); auto-registered when Docker daemon detected; `AgentOutputParser.ParseStreamOutput` extracted as shared static for reuse by both `ClaudeAgentExecutor` and `DockerAgentExecutor`
-- ✅ `DockerAgentOptions` DI registration and `AGENT_EXECUTOR=docker-claude-cli` selection: three-mode startup (`stub` / `docker-claude-cli` / auto-detect); docker-claude-cli mode registers executor under both `docker-claude-cli` and `claude-cli` keys for transparent substitution; fail-fast startup error when `docker-claude-cli` requested but Docker unavailable; full config model (`ContainerUser`, `MemoryLimit`, `CpuLimit`, `NetworkMode`, `CredentialPath`, `AdditionalMounts`) bound from `Docker` appsettings section
+- ✅ `DockerAgentExecutor` (`IAgentExecutor`, provider key `docker-claude-cli`): Claude CLI wrapped in `docker run -i --rm`; system prompt dir mounted read-only; exit code classification (Docker 125/126/127/137 vs Claude CLI 0–124); `CLAUDECODE` env var stripped; workspace/credential mounts via `DockerMountBuilder`; extensible `AdditionalMounts` for operator-supplied static mounts; auto-registered when Docker daemon detected; `AgentOutputParser.ParseStreamOutput` extracted as shared static for reuse by both `ClaudeAgentExecutor` and `DockerAgentExecutor`
+- ✅ `DockerAgentOptions` DI registration and `AGENT_EXECUTOR=docker-claude-cli` selection: three-mode startup (`stub` / `docker-claude-cli` / auto-detect); docker-claude-cli mode registers executor under both `docker-claude-cli` and `claude-cli` keys for transparent substitution; fail-fast startup error when `docker-claude-cli` requested but Docker unavailable; full config model (`ContainerUser`, `MemoryLimit`, `CpuLimit`, `NetworkMode`, `CredentialPath`, `CredentialMountPoint`, `AdditionalMounts`) bound from `Docker` appsettings section
+- ✅ Docker workspace and credential mounting: `DockerMountBuilder` produces 4 bind mounts (worktree RW at `/workspace`, base `.git` RO at `/repo/.git`, `.git` file override for container-internal gitdir path, credentials RO); `DockerMountContext` injects `GIT_OPTIONAL_LOCKS=0` and provides path translation; agents do NO git writes — always-RO `.git` enforces this at mount level; `NormalizeHostPath` handles Windows backslash paths
+- ✅ Explicit container stop/kill on `DockerAgentExecutor` timeout or cancellation: `docker stop -t 30` (30s grace) then `docker rm -f` fallback; best-effort (never throws); `CancellationToken.None` for cleanup commands
 - ✅ Image download authentication via `gh auth token` for GitHub user-attachment URLs
+- ✅ Orchestrator-owns-git-writes: all git write operations (commit, push) are performed by `AgentRunner.HandleGitBehaviorAsync` on the host after agent/container exit; agents must not run git write commands; Docker enforces via RO `.git` mount; all 7 system prompts enforce via "Git Policy" section; agents may use read-only git commands freely
+- ✅ Two-phase graceful shutdown (`ShutdownCoordinator`): first Ctrl+C sets `IsShutdownRequested` flag and cancels `IdleToken` (interrupts idle delays); second Ctrl+C fires hard `CancellationToken` cancel; runner loops check flag before claiming new work; `AgentRunner` inter-step check commits+pushes partial work and restores card on shutdown; applies to polling and queue modes only
 
 ## Open Technical Decisions
 - [ ] Webhook/event-driven triggers (currently manual CLI or polling)

@@ -10,7 +10,8 @@ public sealed class PollingRunner(
     CompletionRunner completionRunner,
     WorkflowConfig workflowConfig,
     IAgentExecutorResolver executorResolver,
-    ILogger<PollingRunner> logger)
+    ILogger<PollingRunner> logger,
+    ShutdownCoordinator? shutdownCoordinator = null)
 {
     // Adaptive polling constants
     private const int MaxConsecutiveIdleCycles = 10;   // idle stretch before hitting max delay
@@ -35,7 +36,15 @@ public sealed class PollingRunner(
         var consecutiveErrors = 0;
         var consecutiveIdleCycles = 0;
 
-        while (!cancellationToken.IsCancellationRequested)
+        // Create a linked token that is cancelled by either the hard-cancel token or the shutdown idle
+        // token. Used for idle/error delays so they are interrupted promptly when graceful shutdown
+        // is requested. Agent execution still receives only cancellationToken (hard-cancel only).
+        using var idleCts = shutdownCoordinator is not null
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, shutdownCoordinator.IdleToken)
+            : null;
+        var idleToken = idleCts?.Token ?? cancellationToken;
+
+        while (!cancellationToken.IsCancellationRequested && shutdownCoordinator?.IsShutdownRequested != true)
         {
             totalCycles++;
             try
@@ -60,7 +69,7 @@ public sealed class PollingRunner(
                     logger.LogInformation(
                         "No eligible cards found (cycle {Cycle}, idle streak {IdleStreak}), waiting {DelaySec}s",
                         totalCycles, consecutiveIdleCycles, idleDelay.TotalSeconds);
-                    await Task.Delay(idleDelay, cancellationToken);
+                    await Task.Delay(idleDelay, idleToken);
                 }
                 else
                 {
@@ -91,7 +100,7 @@ public sealed class PollingRunner(
                         consecutiveErrors = 0;
 
                     // After completing work, poll again quickly to pick up any queued cards
-                    await Task.Delay(pollInterval, cancellationToken);
+                    await Task.Delay(pollInterval, idleToken);
                 }
             }
             catch (OperationCanceledException)
@@ -109,7 +118,7 @@ public sealed class PollingRunner(
                     "Backing off for {DelaySec}s",
                     ex.Source, totalCycles, consecutiveErrors, rateLimitDelay.TotalSeconds);
 
-                try { await Task.Delay(rateLimitDelay, cancellationToken); }
+                try { await Task.Delay(rateLimitDelay, idleToken); }
                 catch (OperationCanceledException) { break; }
             }
             catch (Exception ex)
@@ -121,12 +130,13 @@ public sealed class PollingRunner(
                     "Waiting {DelaySec}s before retry",
                     totalCycles, consecutiveErrors, errorDelay.TotalSeconds);
 
-                try { await Task.Delay(errorDelay, cancellationToken); }
+                try { await Task.Delay(errorDelay, idleToken); }
                 catch (OperationCanceledException) { break; }
             }
         }
 
-        logger.LogInformation("Polling stopped after {TotalCycles} cycles", totalCycles);
+        var stopReason = shutdownCoordinator?.IsShutdownRequested == true ? "graceful shutdown" : "cancellation";
+        logger.LogInformation("Polling stopped after {TotalCycles} cycles ({StopReason})", totalCycles, stopReason);
     }
 
     /// <summary>

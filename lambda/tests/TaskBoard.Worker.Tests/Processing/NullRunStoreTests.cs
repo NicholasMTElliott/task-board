@@ -26,7 +26,14 @@ public class NullRunStoreTests
     [Fact]
     public async Task CompleteRunAsync_CompletesWithoutError()
     {
-        await _store.CompleteRunAsync("run-1", AgentOutcome.COMPLETE, null, CancellationToken.None);
+        await _store.CompleteRunAsync("run-1", AgentOutcome.COMPLETE, null, null, CancellationToken.None);
+        // No exception = pass
+    }
+
+    [Fact]
+    public async Task CompleteRunAsync_WithFailureReason_CompletesWithoutError()
+    {
+        await _store.CompleteRunAsync("run-1", AgentOutcome.ERROR, "Rate limited", FailureReason.RATE_LIMIT, CancellationToken.None);
         // No exception = pass
     }
 

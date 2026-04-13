@@ -130,6 +130,19 @@ Agent execution uses git worktrees for isolated working directories:
 - `.aiboard/` task files are gitignored and ephemeral — not committed to git
 - Main repo working tree is never modified during agent execution
 
+### Orchestrator-Owns-Git-Writes
+All git write operations (commit, push) are performed by the orchestrator on the host AFTER the agent (and any Docker container) has exited. Agents must not run git write commands.
+
+- `AgentRunner.HandleGitBehaviorAsync` is the primary git write path; runs post-execution after session disposal
+- `gitBehavior: "commit_and_push"` — orchestrator commits then pushes on COMPLETE; commits locally only on non-COMPLETE
+- `gitBehavior: "commit_only"` — orchestrator commits without pushing
+- `gitBehavior: "discard"` — no git writes; unexpected agent changes are discarded with a warning
+- Agent commit message is read from `.aiboard/commit.md` in the worktree; falls back to auto-generated message
+- **Docker enforcement:** base `.git` directory mounted read-only — git writes physically impossible inside container
+- **Non-Docker enforcement:** "Git Policy" section in all system prompts prohibits write commands
+- All system prompts include "Git Policy" prohibiting: `git commit`, `git push`, `git checkout`, `git reset`, `git merge`, `git rebase`, `git branch -d`, `git rm`, `git clean`
+- Read-only commands (`git log`, `git status`, `git diff`, `git show`, `git blame`) are allowed inside the container
+
 ### Cross-Reference Resolution
 Task files can reference other cards (e.g., `#5`, `#12`). The `CrossReferenceResolver` parses these, fetches referenced cards, and includes them in the agent's workspace. This creates tracked relationships so dependent context flows through the pipeline.
 
@@ -151,11 +164,13 @@ Agent executors are registered via `AgentExecutorResolver` which resolves by pro
 - Standalone class (no inheritance from `ClaudeAgentExecutor`) — differences in process surface are too large
 - System prompt file translated: host directory mounted read-only at `DockerAgentOptions.PromptMountPoint` (`/mnt/aiboard/prompts`); container path computed from `Path.GetFileName`
 - Container named `{prefix}-{cardId}-{random8}` (prefix: `aiboard-run`); random suffix prevents collisions, `--rm` cleans up on normal exit
+- On timeout (`TimeoutException`) or cancellation (`OperationCanceledException`), `ExecuteAsync` issues explicit `docker stop -t 30` (30s SIGTERM grace, then SIGKILL) followed by `docker rm -f` fallback; cleanup is best-effort (never throws, never masks original exception); uses `CancellationToken.None` since caller token may already be cancelled
 - Exit codes classified: Docker daemon errors (125/126/127/137) vs. Claude CLI errors (0–124) via `IsDockerExitCode`
 - `CLAUDECODE` env var stripped from subprocess environment
 - Rate-limit detection via `ClaudeAgentExecutor.IsRateLimited(stderr)` (same as host executor)
 - NDJSON parsing via shared `AgentOutputParser.ParseStreamOutput`
-- Extensible volume mounts (`DockerAgentOptions.AdditionalMounts` dictionary) for workspace/credential mounts (#65)
+- Workspace/credential mounts built by `DockerMountBuilder` (injected optionally); workspace mounts and env vars passed to `docker run` args and `SessionRequest`
+- Extensible static mounts (`DockerAgentOptions.AdditionalMounts` dictionary) — operator-supplied overrides beyond the standard workspace/credential set
 - Registered automatically when Docker daemon is detected at startup (`PrerequisiteValidator.IsDockerAvailableAsync` runs `docker info`)
 
 ### Container Session Reuse (IAgentExecutorSession)
@@ -164,7 +179,7 @@ To avoid per-step container startup overhead, executors that support Docker can 
 **Interfaces:**
 - `IAgentExecutorSession` (`IAsyncDisposable`) — represents a live container; `SessionId`, `ProviderKey`, `IsAlive`, `ExecuteInSessionAsync`
 - `ISessionableAgentExecutor : IAgentExecutor` — adds `ProviderKey` and `TryCreateSessionAsync(SessionRequest, CancellationToken)`
-- `SessionRequest` record — `CardId`, `RunId`, `ContainerName` (`aiboard-{cardId}`), `ImageName`, optional `Mounts` and `EnvironmentVariables`
+- `SessionRequest` record — `CardId`, `RunId`, `ContainerName` (`aiboard-{cardId}`), `ImageName`, optional `Mounts` (`IReadOnlyList<DockerMount>?`) and `EnvironmentVariables`
 
 **Lifecycle in `AgentRunner.ExecuteAsync`:**
 1. Before the step loop, attempt `TryCreateSessionAsync` if the resolved executor implements `ISessionableAgentExecutor` and `DockerAgentOptions.ReuseContainer` is `true`.
@@ -186,14 +201,38 @@ To avoid per-step container startup overhead, executors that support Docker can 
 - `MemoryLimit` (string?, default: `null`) — optional memory limit, e.g. `"4g"`
 - `CpuLimit` (string?, default: `null`) — optional CPU limit, e.g. `"2.0"`
 - `NetworkMode` (string, default: `"host"`) — container network mode; `"none"` for full isolation
-- `CredentialPath` (string, default: `""`) — host path to Claude CLI credentials; auto-detected from `~/.claude` if empty
-- `AdditionalMounts` (Dictionary, default: `{}`) — extensible volume mounts for workspace/credentials (#65)
+- `CredentialPath` (string, default: `""`) — host path to Claude CLI credentials; auto-detected from `~/.claude` if empty; used by `DockerMountBuilder`
+- `CredentialMountPoint` (string?, default: `null`) — container path for credentials; defaults to `/home/agent/.claude` (matches `agent` user home in sandbox image)
+- `AdditionalMounts` (Dictionary, default: `{}`) — operator-supplied static volume mounts (beyond standard workspace/credential set)
 
 **Fallback strategy:** If `TryCreateSessionAsync` returns `null` (image not found, Docker unavailable), the run proceeds without a session — all steps use `executor.ExecuteAsync` directly.
 
 **Orphaned container detection:** `PrerequisiteValidator.DetectOrphanedContainersAsync` runs `docker ps --filter name=aiboard-` at startup and logs a warning if any `aiboard-*` containers are found (prior crash cleanup). Cleanup is manual.
 
 **Non-session executors** (`ClaudeAgentExecutor`, `CodexAgentExecutor`, `StubAgentExecutor`) do not implement `ISessionableAgentExecutor` and are completely unaffected.
+
+### Docker Workspace and Credential Mounting
+
+`DockerMountBuilder` produces up to four bind mounts per run:
+
+| Mount | Host path | Container path | Access |
+|-------|-----------|----------------|--------|
+| Worktree | `{worktreePath}` | `/workspace` | RW (agent's working dir; `-w /workspace`) |
+| Base `.git` | `{baseRepoPath}/.git` | `/repo/.git` | RO (shared object store + refs) |
+| `.git` file override | temp file | `/workspace/.git` | RO (shadows host-path gitdir reference) |
+| Credentials | `~/.claude/` (or `CredentialPath`) | `/home/agent/.claude` (or `CredentialMountPoint`) | RO (non-interactive auth) |
+
+System prompt files use the pre-existing `DockerAgentOptions.PromptMountPoint` mount (unchanged).
+
+**`.git` file override:** Git worktrees contain a `.git` file with an absolute host path (`gitdir: /host/path/.git/worktrees/{name}`). Inside the container this path doesn't exist. The override is a temp file containing the container-internal path (`gitdir: /repo/.git/worktrees/{name}`), bind-mounted over `/workspace/.git`. The `commondir` relative path (`../..`) resolves correctly without modification.
+
+**Always-RO `.git`:** Agents do **no git writes** — commits, pushes, and index modifications are orchestrator responsibilities (see #67). The base `.git` is always mounted read-only. `GIT_OPTIONAL_LOCKS=0` env var (injected via `DockerMountContext`) allows git read commands to skip index lock acquisition.
+
+**Path translation:** `DockerMountContext.TranslatePath(hostPath)` maps host absolute paths to container equivalents (e.g., `{worktreePath}/.aiboard/tasks/42.md` → `/workspace/.aiboard/tasks/42.md`). Used for `--append-system-prompt-file` and task file path arguments passed to the Claude CLI.
+
+**Windows paths:** `DockerMountBuilder.NormalizeHostPath` converts Windows backslashes to forward slashes for Docker Desktop compatibility.
+
+`DockerMountContext` is `IAsyncDisposable`; disposal deletes the temp `.git` override file after the container session ends.
 
 ### Claude CLI Subprocess Pattern
 The .NET worker invokes the Claude CLI (`claude`) as a subprocess via `ClaudeAgentExecutor`.
@@ -289,6 +328,28 @@ Ready for Design → Designed → Ready for Implementation → ... → Approved 
 - `AgentRunner` catches `RateLimitException`, restores card to trigger column for retry
 - `PollingRunner` applies aggressive backoff: board API = 2min base, agent CLI = 30min base (cap 2hr)
 
+### Two-Phase Graceful Shutdown
+Applies to `--mode polling` and `--mode queue` (not agent mode — single card, exits naturally).
+
+**`ShutdownCoordinator`** — thread-safe singleton injected into `Program.cs`, `PollingRunner`, `QueueDrivenRunner`, and `AgentRunner`:
+- `RequestShutdown()` — sets flag via `Interlocked.CompareExchange`; returns `true` only on first call; also cancels `IdleToken`
+- `IsShutdownRequested` — read by runner loops before claiming new work
+- `IdleToken` — `CancellationToken` cancelled on first Ctrl+C; used only for idle/backoff delays (not agent work)
+- `Dispose()` — disposes internal `CancellationTokenSource`
+
+**Two-phase Ctrl+C (in `Program.cs`):**
+1. First Ctrl+C → `coordinator.RequestShutdown()` + log "Shutdown requested — finishing current work, press Ctrl+C again to force quit"
+2. Second Ctrl+C → `cts.Cancel()` (hard cancel, existing behavior) + log "Force shutdown initiated."
+
+**Runner loop behaviour:**
+- `PollingRunner` / `QueueDrivenRunner`: loop condition checks `!shutdownCoordinator.IsShutdownRequested`; idle/backoff delays use a linked token (main token + `IdleToken`) so they abort immediately on first Ctrl+C
+- `QueueDrivenRunner`: claim loop also checks `IsShutdownRequested` to prevent new claims; already in-flight `Task.WhenAll` tasks finish naturally
+
+**`AgentRunner` inter-step check (`stepIndex > 0` guard):**
+- Before each step after the first, checks `IsShutdownRequested`
+- If set: for `commit_and_push` stages — commits and pushes partial work (best-effort, failure is logged as warning); for all stages — restores card to trigger column so it can be re-processed; returns `AgentOutcome.COMPLETE` (controlled interruption, not a failure)
+- Nested try/catch isolates push failure (inner) → commit failure (outer) → card restore failure (outermost); card restore failure still returns COMPLETE
+
 ## Component Relationships
 
 | Component | Responsibility |
@@ -303,7 +364,9 @@ Ready for Design → Designed → Ready for Implementation → ... → Approved 
 | PollingRunner | Automatic card pickup via priority-sorted polling |
 | ClaudeAgentExecutor | Claude CLI subprocess with `--json-schema` structured output |
 | DockerAgentExecutor | Claude CLI inside `docker run -i --rm`; provider key `docker-claude-cli`; auto-registered when Docker daemon detected |
-| DockerAgentOptions / DockerMount | Config: image, user, memory/CPU limits, network mode, credential path, prompt mount, budget, timeout, extensible mounts |
+| DockerMountBuilder | Builds workspace/credential bind mount specifications for containerized agent execution |
+| DockerMountContext | Disposable context: mount list, `GIT_OPTIONAL_LOCKS=0` env var, path translation map, temp file cleanup |
+| DockerAgentOptions / DockerMount | Config: image, user, memory/CPU limits, network mode, credential path/mount point, prompt mount, budget, timeout, extensible mounts |
 | CodexAgentExecutor | OpenAI Codex CLI subprocess (secondary/legacy) |
 | AgentExecutorResolver | Multi-executor registry; resolves by provider key (`claude-cli`, `docker-claude-cli`, `codex`, `stub`) |
 | GitWorkspaceManager | Git worktree lifecycle for isolated agent execution |
@@ -317,6 +380,7 @@ Ready for Design → Designed → Ready for Implementation → ... → Approved 
 | SinceParser | Parses `--since` time strings (e.g., `7d`, `24h`, `1w`) into UTC DateTime offsets |
 | PrerequisiteValidator | Startup validation of providers, board config, and prompt files |
 | CardSelector / CardFilterEvaluator | Polling card selection and filtering logic |
+| ShutdownCoordinator | Thread-safe two-phase Ctrl+C shutdown: `IsShutdownRequested` flag + `IdleToken`; singleton shared by `Program.cs`, runners, and `AgentRunner` |
 | SystemSleepInhibitor | Prevents OS sleep during polling (Windows/Mac/Linux) |
 | PromptBuilder | Assembles system + task prompts for agent execution |
 | workflow.github.json | Workflow config for GitHub Projects (active) |
@@ -434,6 +498,7 @@ Schema:
 | started_at_utc | Run start time |
 | completed_at_utc | Run end time (nullable) |
 | outcome | COMPLETE / NEEDS_INFO / ERROR (nullable) |
+| failure_reason | Structured failure category for ERROR outcomes: `RATE_LIMIT`, `AGENT_ERROR`, `INFRASTRUCTURE`, `TIMEOUT` (nullable; NULL for non-error outcomes) |
 | estimate | Story point estimate captured from the estimation step (nullable) |
 | session_startup_ms | Time (ms) to create and start the Docker container for a session-based run (nullable; NULL = no session) |
 
@@ -450,15 +515,15 @@ Schema:
 | completed_at_utc | Step end time (nullable) |
 | session_exec_ms | Time (ms) for this step's execution via `docker exec` (nullable; NULL = no session or non-Docker executor) |
 
-### SQL Views (metrics, V12)
+### SQL Views (metrics, V12/V14)
 | View | Description |
 |------|-------------|
-| `v_run_metrics` | One row per completed run; derived `duration_seconds`, `is_complete`, `is_error`, `is_rate_limited` |
+| `v_run_metrics` | One row per completed run; derived `duration_seconds`, `is_complete`, `is_error`, `is_rate_limited`; `failure_reason` projected; `is_rate_limited` uses `failure_reason = 'RATE_LIMIT'` (V14) |
 | `v_step_duration` | One row per completed step; `duration_seconds` derived |
 | `v_card_metrics` | Per-card aggregates: cycle time, working time, waiting time |
 | `v_card_rework` | Cards/states re-entered more than once; `WHERE outcome IS NOT NULL` to exclude in-progress runs |
 
-Rate-limit detection in `v_run_metrics` uses `error_detail ILIKE '%rate limit%' OR error_detail ILIKE '%overloaded%'` (string matching; structured `failure_reason` column deferred to a follow-up ticket).
+Rate-limit detection in `v_run_metrics` and `PgMetricsStore.GetRunSummaryAsync` uses `failure_reason = 'RATE_LIMIT'` (structured enum; V14 replaced the prior ILIKE string-matching approach). Note: `is_rate_limited` returns NULL (not FALSE) for legacy rows where `failure_reason IS NULL` — `COUNT FILTER` treats NULL as false, so aggregates are unaffected.
 
 ### queue tables (PGMQ, legacy)
 | Table | Purpose |
