@@ -155,7 +155,8 @@ Agent executors are registered via `AgentExecutorResolver` which resolves by pro
 - `CLAUDECODE` env var stripped from subprocess environment
 - Rate-limit detection via `ClaudeAgentExecutor.IsRateLimited(stderr)` (same as host executor)
 - NDJSON parsing via shared `AgentOutputParser.ParseStreamOutput`
-- Extensible volume mounts (`DockerAgentOptions.AdditionalMounts` dictionary) for workspace/credential mounts (#65)
+- Workspace/credential mounts built by `DockerMountBuilder` (injected optionally); workspace mounts and env vars passed to `docker run` args and `SessionRequest`
+- Extensible static mounts (`DockerAgentOptions.AdditionalMounts` dictionary) — operator-supplied overrides beyond the standard workspace/credential set
 - Registered automatically when Docker daemon is detected at startup (`PrerequisiteValidator.IsDockerAvailableAsync` runs `docker info`)
 
 ### Container Session Reuse (IAgentExecutorSession)
@@ -164,7 +165,7 @@ To avoid per-step container startup overhead, executors that support Docker can 
 **Interfaces:**
 - `IAgentExecutorSession` (`IAsyncDisposable`) — represents a live container; `SessionId`, `ProviderKey`, `IsAlive`, `ExecuteInSessionAsync`
 - `ISessionableAgentExecutor : IAgentExecutor` — adds `ProviderKey` and `TryCreateSessionAsync(SessionRequest, CancellationToken)`
-- `SessionRequest` record — `CardId`, `RunId`, `ContainerName` (`aiboard-{cardId}`), `ImageName`, optional `Mounts` and `EnvironmentVariables`
+- `SessionRequest` record — `CardId`, `RunId`, `ContainerName` (`aiboard-{cardId}`), `ImageName`, optional `Mounts` (`IReadOnlyList<DockerMount>?`) and `EnvironmentVariables`
 
 **Lifecycle in `AgentRunner.ExecuteAsync`:**
 1. Before the step loop, attempt `TryCreateSessionAsync` if the resolved executor implements `ISessionableAgentExecutor` and `DockerAgentOptions.ReuseContainer` is `true`.
@@ -186,14 +187,38 @@ To avoid per-step container startup overhead, executors that support Docker can 
 - `MemoryLimit` (string?, default: `null`) — optional memory limit, e.g. `"4g"`
 - `CpuLimit` (string?, default: `null`) — optional CPU limit, e.g. `"2.0"`
 - `NetworkMode` (string, default: `"host"`) — container network mode; `"none"` for full isolation
-- `CredentialPath` (string, default: `""`) — host path to Claude CLI credentials; auto-detected from `~/.claude` if empty
-- `AdditionalMounts` (Dictionary, default: `{}`) — extensible volume mounts for workspace/credentials (#65)
+- `CredentialPath` (string, default: `""`) — host path to Claude CLI credentials; auto-detected from `~/.claude` if empty; used by `DockerMountBuilder`
+- `CredentialMountPoint` (string?, default: `null`) — container path for credentials; defaults to `/home/agent/.claude` (matches `agent` user home in sandbox image)
+- `AdditionalMounts` (Dictionary, default: `{}`) — operator-supplied static volume mounts (beyond standard workspace/credential set)
 
 **Fallback strategy:** If `TryCreateSessionAsync` returns `null` (image not found, Docker unavailable), the run proceeds without a session — all steps use `executor.ExecuteAsync` directly.
 
 **Orphaned container detection:** `PrerequisiteValidator.DetectOrphanedContainersAsync` runs `docker ps --filter name=aiboard-` at startup and logs a warning if any `aiboard-*` containers are found (prior crash cleanup). Cleanup is manual.
 
 **Non-session executors** (`ClaudeAgentExecutor`, `CodexAgentExecutor`, `StubAgentExecutor`) do not implement `ISessionableAgentExecutor` and are completely unaffected.
+
+### Docker Workspace and Credential Mounting
+
+`DockerMountBuilder` produces up to four bind mounts per run:
+
+| Mount | Host path | Container path | Access |
+|-------|-----------|----------------|--------|
+| Worktree | `{worktreePath}` | `/workspace` | RW (agent's working dir; `-w /workspace`) |
+| Base `.git` | `{baseRepoPath}/.git` | `/repo/.git` | RO (shared object store + refs) |
+| `.git` file override | temp file | `/workspace/.git` | RO (shadows host-path gitdir reference) |
+| Credentials | `~/.claude/` (or `CredentialPath`) | `/home/agent/.claude` (or `CredentialMountPoint`) | RO (non-interactive auth) |
+
+System prompt files use the pre-existing `DockerAgentOptions.PromptMountPoint` mount (unchanged).
+
+**`.git` file override:** Git worktrees contain a `.git` file with an absolute host path (`gitdir: /host/path/.git/worktrees/{name}`). Inside the container this path doesn't exist. The override is a temp file containing the container-internal path (`gitdir: /repo/.git/worktrees/{name}`), bind-mounted over `/workspace/.git`. The `commondir` relative path (`../..`) resolves correctly without modification.
+
+**Always-RO `.git`:** Agents do **no git writes** — commits, pushes, and index modifications are orchestrator responsibilities (see #67). The base `.git` is always mounted read-only. `GIT_OPTIONAL_LOCKS=0` env var (injected via `DockerMountContext`) allows git read commands to skip index lock acquisition.
+
+**Path translation:** `DockerMountContext.TranslatePath(hostPath)` maps host absolute paths to container equivalents (e.g., `{worktreePath}/.aiboard/tasks/42.md` → `/workspace/.aiboard/tasks/42.md`). Used for `--append-system-prompt-file` and task file path arguments passed to the Claude CLI.
+
+**Windows paths:** `DockerMountBuilder.NormalizeHostPath` converts Windows backslashes to forward slashes for Docker Desktop compatibility.
+
+`DockerMountContext` is `IAsyncDisposable`; disposal deletes the temp `.git` override file after the container session ends.
 
 ### Claude CLI Subprocess Pattern
 The .NET worker invokes the Claude CLI (`claude`) as a subprocess via `ClaudeAgentExecutor`.
@@ -303,7 +328,9 @@ Ready for Design → Designed → Ready for Implementation → ... → Approved 
 | PollingRunner | Automatic card pickup via priority-sorted polling |
 | ClaudeAgentExecutor | Claude CLI subprocess with `--json-schema` structured output |
 | DockerAgentExecutor | Claude CLI inside `docker run -i --rm`; provider key `docker-claude-cli`; auto-registered when Docker daemon detected |
-| DockerAgentOptions / DockerMount | Config: image, user, memory/CPU limits, network mode, credential path, prompt mount, budget, timeout, extensible mounts |
+| DockerMountBuilder | Builds workspace/credential bind mount specifications for containerized agent execution |
+| DockerMountContext | Disposable context: mount list, `GIT_OPTIONAL_LOCKS=0` env var, path translation map, temp file cleanup |
+| DockerAgentOptions / DockerMount | Config: image, user, memory/CPU limits, network mode, credential path/mount point, prompt mount, budget, timeout, extensible mounts |
 | CodexAgentExecutor | OpenAI Codex CLI subprocess (secondary/legacy) |
 | AgentExecutorResolver | Multi-executor registry; resolves by provider key (`claude-cli`, `docker-claude-cli`, `codex`, `stub`) |
 | GitWorkspaceManager | Git worktree lifecycle for isolated agent execution |
