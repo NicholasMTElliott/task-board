@@ -45,6 +45,13 @@ builder.Logging.AddSimpleConsole(options =>
     options.TimestampFormat = "HH:mm:ss ";
 });
 
+// Project-local overrides: {cwd}/.aiboard/appsettings[.user].json
+var cwdAiboardDir = Path.Combine(Directory.GetCurrentDirectory(), ".aiboard");
+builder.Configuration.AddJsonFile(
+    Path.Combine(cwdAiboardDir, "appsettings.json"), optional: true, reloadOnChange: false);
+builder.Configuration.AddJsonFile(
+    Path.Combine(cwdAiboardDir, "appsettings.user.json"), optional: true, reloadOnChange: false);
+
 if (configFilePath is not null)
     builder.Configuration.AddJsonFile(CliDefinitions.ResolvePath(configFilePath), optional: false, reloadOnChange: false);
 
@@ -64,18 +71,34 @@ var promptBaseDir = promptRootArg is not null
 
 // ── 4. Resolve workflow config path from merged configuration ────────────────
 var workflowPathRaw = builder.Configuration["WorkflowConfigPath"];
-var workflowPath = string.IsNullOrEmpty(workflowPathRaw)
-    ? Path.Combine(AppContext.BaseDirectory, "workflow.v1.json")
-    : CliDefinitions.ResolvePath(workflowPathRaw);
+string? workflowPath;
+string[] workflowProbed;
+if (!string.IsNullOrEmpty(workflowPathRaw))
+{
+    workflowPath = CliDefinitions.ResolvePath(workflowPathRaw);
+    workflowProbed = new[] { workflowPath };
+}
+else
+{
+    workflowProbed = new[]
+    {
+        Path.Combine(Directory.GetCurrentDirectory(), ".aiboard", "workflow.json"),
+        Path.Combine(AppContext.BaseDirectory, "workflow.json"),
+        Path.Combine(AppContext.BaseDirectory, "workflow.v1.json"),
+    };
+    workflowPath = Array.Find(workflowProbed, File.Exists);
+}
 
 builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
 {
     var logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("WorkflowConfig");
 
-    if (!File.Exists(workflowPath))
+    if (workflowPath is null || !File.Exists(workflowPath))
     {
         throw new InvalidOperationException(
-            $"Workflow config not found at '{workflowPath}'. Set WorkflowConfigPath in appsettings.json, env var, or --workflow-config.");
+            "Workflow config not found. Probed locations:\n  " +
+            string.Join("\n  ", workflowProbed) +
+            "\nSet WorkflowConfigPath in appsettings.json, env var, or --workflow-config.");
     }
 
     logger.LogInformation("Loading workflow config from {WorkflowPath}", workflowPath);
