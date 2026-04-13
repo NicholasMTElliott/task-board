@@ -448,6 +448,179 @@ public class DockerAgentExecutorTests
         Assert.Contains(expectedPayload, stdout);
     }
 
+    // ── StopGracePeriod constants ─────────────────────────────────────────────
+
+    [Fact]
+    public void StopCleanup_Constants_TimeoutExceedsGracePeriod()
+    {
+        // ProcessRunner timeout for docker stop must be > grace period so docker stop
+        // has time to complete its full SIGTERM window before being killed.
+        Assert.True(
+            DockerAgentExecutor.StopCommandTimeoutSeconds > DockerAgentExecutor.StopGracePeriodSeconds,
+            "StopCommandTimeoutSeconds must exceed StopGracePeriodSeconds");
+        Assert.Equal(30, DockerAgentExecutor.StopGracePeriodSeconds);
+        Assert.True(DockerAgentExecutor.RemoveCommandTimeoutSeconds > 0,
+            "RemoveCommandTimeoutSeconds must be positive");
+    }
+
+    // ── Integration: StopAndRemoveContainerAsync ──────────────────────────────
+
+    /// <summary>
+    /// Verifies that <see cref="DockerAgentExecutor.StopAndRemoveContainerAsync"/> stops
+    /// a running container without throwing.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task StopAndRemoveContainerAsync_RunningContainer_ContainerStops()
+    {
+        if (!await IsDockerAvailableAsync())
+            return;
+
+        var executor = CreateExecutor();
+        var containerName = $"aiboard-test-stop-{Guid.NewGuid():N}"[..30];
+
+        // Start a long-running container without --rm so we control its lifecycle
+        await StartDetachedContainerAsync(containerName, "alpine", ["sleep", "60"]);
+
+        try
+        {
+            Assert.True(await IsContainerRunningAsync(containerName),
+                "Container should be running before cleanup");
+
+            // Act: cleanup should stop the container without throwing
+            await executor.StopAndRemoveContainerAsync(containerName);
+
+            // Assert: container is no longer running
+            Assert.False(await IsContainerRunningAsync(containerName),
+                "Container should not be running after StopAndRemoveContainerAsync");
+        }
+        finally
+        {
+            await RemoveContainerAsync(containerName);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that <see cref="DockerAgentExecutor.StopAndRemoveContainerAsync"/> does
+    /// not throw when the container does not exist.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task StopAndRemoveContainerAsync_NonExistentContainer_DoesNotThrow()
+    {
+        if (!await IsDockerAvailableAsync())
+            return;
+
+        var executor = CreateExecutor();
+
+        // Should not throw for a container that was never created
+        var ex = await Record.ExceptionAsync(() =>
+            executor.StopAndRemoveContainerAsync("aiboard-test-nonexistent-0000000000"));
+
+        Assert.Null(ex);
+    }
+
+    /// <summary>
+    /// Verifies that <see cref="DockerAgentExecutor.StopAndRemoveContainerAsync"/> does
+    /// not throw when the container is already stopped.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task StopAndRemoveContainerAsync_AlreadyStoppedContainer_DoesNotThrow()
+    {
+        if (!await IsDockerAvailableAsync())
+            return;
+
+        var executor = CreateExecutor();
+        var containerName = $"aiboard-test-stopped-{Guid.NewGuid():N}"[..32];
+
+        // Create a container that exits immediately (no --rm, so it stays as stopped)
+        await RunContainerToCompletionAsync(containerName, "alpine", ["true"]);
+
+        try
+        {
+            var ex = await Record.ExceptionAsync(() =>
+                executor.StopAndRemoveContainerAsync(containerName));
+
+            Assert.Null(ex);
+        }
+        finally
+        {
+            await RemoveContainerAsync(containerName);
+        }
+    }
+
+    // ── Docker test helpers ───────────────────────────────────────────────────
+
+    private static async Task StartDetachedContainerAsync(
+        string containerName, string image, string[] command)
+    {
+        using var process = new System.Diagnostics.Process();
+        process.StartInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "docker",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var arg in new[] { "run", "-d", "--name", containerName, image }.Concat(command))
+            process.StartInfo.ArgumentList.Add(arg);
+        process.Start();
+        await process.WaitForExitAsync();
+    }
+
+    private static async Task RunContainerToCompletionAsync(
+        string containerName, string image, string[] command)
+    {
+        using var process = new System.Diagnostics.Process();
+        process.StartInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "docker",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var arg in new[] { "run", "--name", containerName, image }.Concat(command))
+            process.StartInfo.ArgumentList.Add(arg);
+        process.Start();
+        await process.WaitForExitAsync();
+    }
+
+    private static async Task<bool> IsContainerRunningAsync(string containerName)
+    {
+        using var process = new System.Diagnostics.Process();
+        process.StartInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "docker",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var arg in new[] { "ps", "--filter", $"name=^/{containerName}$", "--format", "{{.Names}}" })
+            process.StartInfo.ArgumentList.Add(arg);
+        process.Start();
+        var output = await process.StandardOutput.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        return output.Trim() == containerName;
+    }
+
+    private static async Task RemoveContainerAsync(string containerName)
+    {
+        using var process = new System.Diagnostics.Process();
+        process.StartInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "docker",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var arg in new[] { "rm", "-f", containerName })
+            process.StartInfo.ArgumentList.Add(arg);
+        process.Start();
+        await process.WaitForExitAsync();
+    }
+
     private static async Task<bool> IsDockerAvailableAsync()
     {
         try
