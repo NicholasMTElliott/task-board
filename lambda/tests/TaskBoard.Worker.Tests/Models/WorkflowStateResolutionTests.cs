@@ -463,7 +463,7 @@ public class WorkflowStateResolutionTests
         // Verify the example config can be loaded from disk and has no config-level validation errors
         var configPath = Path.Combine(
             AppContext.BaseDirectory,
-            "..", "..", "..", "..", "..", "..", "..", "..",
+            "..", "..", "..", "..", "..", "..",
             "workflow.simple.example.json");
         configPath = Path.GetFullPath(configPath);
 
@@ -489,10 +489,10 @@ public class WorkflowStateResolutionTests
         var readyStates = config.FindStatesByColumn("Ready");
         Assert.Equal(5, readyStates.Count);
 
-        // Terminal column is "Done", not "done" (state key)
+        // Terminal column is "Done" (column name), not "done" (state key)
         var terminalCols = config.GetTerminalColumnNames();
-        Assert.Contains("Done", terminalCols, StringComparer.OrdinalIgnoreCase);
-        Assert.DoesNotContain("done", terminalCols, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("Done", terminalCols);           // case-sensitive: column name is present
+        Assert.DoesNotContain("done", terminalCols);     // case-sensitive: state key is absent
     }
 
     [Fact]
