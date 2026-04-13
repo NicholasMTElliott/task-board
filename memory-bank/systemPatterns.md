@@ -151,6 +151,7 @@ Agent executors are registered via `AgentExecutorResolver` which resolves by pro
 - Standalone class (no inheritance from `ClaudeAgentExecutor`) — differences in process surface are too large
 - System prompt file translated: host directory mounted read-only at `DockerAgentOptions.PromptMountPoint` (`/mnt/aiboard/prompts`); container path computed from `Path.GetFileName`
 - Container named `{prefix}-{cardId}-{random8}` (prefix: `aiboard-run`); random suffix prevents collisions, `--rm` cleans up on normal exit
+- On timeout (`TimeoutException`) or cancellation (`OperationCanceledException`), `ExecuteAsync` issues explicit `docker stop -t 30` (30s SIGTERM grace, then SIGKILL) followed by `docker rm -f` fallback; cleanup is best-effort (never throws, never masks original exception); uses `CancellationToken.None` since caller token may already be cancelled
 - Exit codes classified: Docker daemon errors (125/126/127/137) vs. Claude CLI errors (0–124) via `IsDockerExitCode`
 - `CLAUDECODE` env var stripped from subprocess environment
 - Rate-limit detection via `ClaudeAgentExecutor.IsRateLimited(stderr)` (same as host executor)
