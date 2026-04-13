@@ -141,7 +141,7 @@ public class MergeRunnerTests : IDisposable
     // ── Merge conflict ──────────────────────────────────────────────────
 
     [Fact]
-    public async Task ExecuteAsync_MergeConflict_ReturnsErrorAndAbortsCleanly()
+    public async Task ExecuteAsync_MergeConflict_ResolutionFails_TransitionsToMergeConflict()
     {
         SetupBareRepoWithWorkBranch();
 
@@ -165,13 +165,17 @@ public class MergeRunnerTests : IDisposable
 
         SetupBoardCards(AcceptedCol);
 
+        // Merge resolution will fail (system prompt file doesn't exist in merge worktree)
+        // so it should fall through to MERGE_CONFLICT transition
         var runner = CreateRunner();
         var result = await runner.ExecuteAsync(CardId, BoardId, _workspaceDir, CancellationToken.None);
 
         Assert.Equal(AgentOutcome.ERROR, result.Outcome);
         Assert.Contains("conflict", result.ErrorDetail, StringComparison.OrdinalIgnoreCase);
 
-        await _boardClient.Received().MoveCardToColumnAsync(CardId, ErrorCol, Arg.Any<CancellationToken>());
+        // Should use MERGE_CONFLICT transition (→ ReadyForImplCol), not ERROR (→ ErrorCol)
+        await _boardClient.Received().MoveCardToColumnAsync(CardId, ReadyForImplCol, Arg.Any<CancellationToken>());
+        await _boardClient.DidNotReceive().MoveCardToColumnAsync(CardId, ErrorCol, Arg.Any<CancellationToken>());
     }
 
     // ── Card not found ──────────────────────────────────────────────────
@@ -212,7 +216,7 @@ public class MergeRunnerTests : IDisposable
                 ["se"] = new("model", "prompt", new List<string>()),
             });
 
-        var runner = new MergeRunner(_boardClient, _gitManager, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<MergeRunner>.Instance);
+        var runner = new MergeRunner(_boardClient, _gitManager, config, new AgentIdentity("Test", "Agent", "TestMachine"), Substitute.For<ICrossReferenceResolver>(), Substitute.For<IAgentExecutorResolver>(), NullLogger<MergeRunner>.Instance);
         var result = await runner.ExecuteAsync(CardId, BoardId, "C:/fake/path", CancellationToken.None);
 
         Assert.Equal(AgentOutcome.ERROR, result.Outcome);
@@ -247,8 +251,13 @@ public class MergeRunnerTests : IDisposable
 
     // ── Helpers ──────────────────────────────────────────────────────────
 
-    private MergeRunner CreateRunner() =>
-        new(_boardClient, _gitManager, _config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<MergeRunner>.Instance);
+    private const string ReadyForImplCol = "ReadyForImpl";
+
+    private MergeRunner CreateRunner(IAgentExecutorResolver? executorResolver = null) =>
+        new(_boardClient, _gitManager, _config, new AgentIdentity("Test", "Agent", "TestMachine"),
+            Substitute.For<ICrossReferenceResolver>(),
+            executorResolver ?? Substitute.For<IAgentExecutorResolver>(),
+            NullLogger<MergeRunner>.Instance);
 
     private void SetupBoardCards(string column)
     {
@@ -319,9 +328,10 @@ public class MergeRunnerTests : IDisposable
                     null,
                     new Dictionary<string, TransitionTarget>
                     {
-                        ["IN_PROGRESS"] = TransitionTarget.ForColumn(MergingCol),
-                        ["COMPLETE"]    = TransitionTarget.ForColumn(DoneCol),
-                        ["ERROR"]       = TransitionTarget.ForColumn(ErrorCol),
+                        ["IN_PROGRESS"]    = TransitionTarget.ForColumn(MergingCol),
+                        ["COMPLETE"]       = TransitionTarget.ForColumn(DoneCol),
+                        ["ERROR"]          = TransitionTarget.ForColumn(ErrorCol),
+                        ["MERGE_CONFLICT"] = TransitionTarget.ForColumn(ReadyForImplCol),
                     },
                     ProviderParams: new Dictionary<string, string> { ["maxRetries"] = "3" },
                     PipelineOrder: 4),
@@ -331,8 +341,14 @@ public class MergeRunnerTests : IDisposable
                     null, new Dictionary<string, TransitionTarget>()),
                 [ErrorCol] = new("Error", null, "holding",
                     null, new Dictionary<string, TransitionTarget>()),
+                [ReadyForImplCol] = new("Ready for Implementation", null, "agent_run",
+                    null, new Dictionary<string, TransitionTarget>()),
             },
-            Roles: new Dictionary<string, WorkflowRole>());
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["merge_resolver"] = new("claude-sonnet-4-6", "You are a merge resolver.", new List<string>()),
+            },
+            MergeResolution: new MergeResolutionConfig("merge_resolver"));
     }
 
     private static void CleanupDirectory(string path)

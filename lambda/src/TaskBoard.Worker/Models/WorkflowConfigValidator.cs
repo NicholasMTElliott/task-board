@@ -118,7 +118,8 @@ public static class WorkflowConfigValidator
                 foreach (var action in target.Actions)
                 {
                     if (action.Type is not (ActionTypes.MoveToColumn or ActionTypes.AddLabel or ActionTypes.RemoveLabel
-                        or ActionTypes.Assign or ActionTypes.Unassign or ActionTypes.SetField or ActionTypes.ClearField))
+                        or ActionTypes.Assign or ActionTypes.Unassign or ActionTypes.SetField or ActionTypes.ClearField
+                        or ActionTypes.UpdateParentSum or ActionTypes.CompleteParentIfReady))
                     {
                         errors.Add($"State '{stateId}' ({state.Name}) transition '{outcome}' has unknown action type '{action.Type}'.");
                     }
@@ -130,7 +131,7 @@ public static class WorkflowConfigValidator
                         errors.Add($"State '{stateId}' ({state.Name}) transition '{outcome}' action '{action.Type}' requires a value.");
                     }
 
-                    if (action.Type is ActionTypes.SetField or ActionTypes.ClearField
+                    if (action.Type is ActionTypes.SetField or ActionTypes.ClearField or ActionTypes.UpdateParentSum
                         && string.IsNullOrEmpty(action.Field))
                     {
                         errors.Add($"State '{stateId}' ({state.Name}) transition '{outcome}' action '{action.Type}' requires a field name.");

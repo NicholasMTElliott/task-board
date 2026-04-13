@@ -796,6 +796,263 @@ public class UpdateFileProcessorTests : IDisposable
         Assert.NotNull(result.ReferenceContent);
     }
 
+    // ── Estimate front matter parsing ─────────────────────────────────────
+
+    [Fact]
+    public void ParseNewTicketFile_WithEstimate_ParsesEstimateField()
+    {
+        var content = "---\ntitle: Task A\nestimate: 4\n---\n\nBody.";
+        var parsed = UpdateFileProcessor.ParseNewTicketFile(content);
+
+        Assert.NotNull(parsed);
+        Assert.Equal("Task A", parsed!.Title);
+        Assert.Equal("4", parsed.Estimate);
+    }
+
+    [Fact]
+    public void ParseNewTicketFile_WithoutEstimate_EstimateIsNull()
+    {
+        var content = "---\ntitle: Task B\n---\n\nBody.";
+        var parsed = UpdateFileProcessor.ParseNewTicketFile(content);
+
+        Assert.NotNull(parsed);
+        Assert.Null(parsed!.Estimate);
+    }
+
+    [Fact]
+    public void ParseNewTicketFile_WithAllFields_ParsesEverything()
+    {
+        var content = "---\ntitle: Full Task\ntype: task\nparent: 5\ntargetColumn: Backlog\nestimate: 2\n---\n\nBody.";
+        var parsed = UpdateFileProcessor.ParseNewTicketFile(content);
+
+        Assert.NotNull(parsed);
+        Assert.Equal("Full Task", parsed!.Title);
+        Assert.Equal("task", parsed.Type);
+        Assert.Equal("5", parsed.Parent);
+        Assert.Equal("Backlog", parsed.TargetColumn);
+        Assert.Equal("2", parsed.Estimate);
+    }
+
+    // ── Estimate field values on created cards ─────────────────────────────
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_EstimateInFrontMatter_SetsFieldValueOnCard()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-est-task.md"),
+            "---\ntitle: Estimated Task\nestimate: 4\n---\n\nBody.");
+
+        await _processor.ProcessUpdatesAsync(
+            _tempDir, "10", "step", [], CancellationToken.None);
+
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r =>
+                r.Title == "Estimated Task"
+                && r.FieldValues != null
+                && r.FieldValues.ContainsKey("Estimate")
+                && r.FieldValues["Estimate"] == "4"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_NoEstimate_FieldValuesIsNull()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-no-est.md"),
+            "---\ntitle: No Estimate\n---\n\nBody.");
+
+        await _processor.ProcessUpdatesAsync(
+            _tempDir, "10", "step", [], CancellationToken.None);
+
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r =>
+                r.Title == "No Estimate"
+                && r.FieldValues == null),
+            Arg.Any<CancellationToken>());
+    }
+
+    // ── TotalEstimate aggregation ──────────────────────────────────────────
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_MultipleTicketsWithEstimates_SumsTotal()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-task-a.md"),
+            "---\ntitle: Task A\nestimate: 2\n---\n\nBody.");
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-task-b.md"),
+            "---\ntitle: Task B\nestimate: 4\n---\n\nBody.");
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "10", "step", [], CancellationToken.None);
+
+        Assert.Equal(2, result.CreatedTickets.Count);
+        Assert.Equal(6.0, result.TotalEstimate);
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_NoEstimates_TotalEstimateIsNull()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-task-c.md"),
+            "---\ntitle: Task C\n---\n\nBody.");
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "10", "step", [], CancellationToken.None);
+
+        Assert.Null(result.TotalEstimate);
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_MixedEstimates_SumsOnlyProvided()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-task-d.md"),
+            "---\ntitle: Task D\nestimate: 8\n---\n\nBody.");
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-task-e.md"),
+            "---\ntitle: Task E\n---\n\nBody."); // no estimate
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, "10", "step", [], CancellationToken.None);
+
+        Assert.Equal(8.0, result.TotalEstimate);
+    }
+
+    // ── CopyFields from parent ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_CopyFields_CopiesPriorityFromParent()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-copy-task.md"),
+            "---\ntitle: Copy Task\n---\n\nBody.");
+
+        _boardClient.GetCardAsync("20", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BoardCard("20", "Parent Story", "", "Backlog",
+                Metadata: new Dictionary<string, string> { ["priority"] = "P0" },
+                Labels: ["type:story"])));
+
+        var genConfig = new GenerationConfig("task", "Backlog", true,
+            CopyFields: ["priority"]);
+
+        await _processor.ProcessUpdatesAsync(
+            _tempDir, "20", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r =>
+                r.FieldValues != null
+                && r.FieldValues.ContainsKey("priority")
+                && r.FieldValues["priority"] == "P0"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_CopyFields_ParentMissingField_SkipsField()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-missing-field.md"),
+            "---\ntitle: Missing Field Task\n---\n\nBody.");
+
+        _boardClient.GetCardAsync("20", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BoardCard("20", "Parent", "", "Backlog",
+                Metadata: new Dictionary<string, string>(), // no priority
+                Labels: ["type:story"])));
+
+        var genConfig = new GenerationConfig("task", "Backlog", true,
+            CopyFields: ["priority"]);
+
+        await _processor.ProcessUpdatesAsync(
+            _tempDir, "20", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        // Card should be created but without priority in FieldValues
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r =>
+                r.FieldValues == null || !r.FieldValues.ContainsKey("priority")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_CopyFieldsAndEstimate_MergesBoth()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-merged.md"),
+            "---\ntitle: Merged Task\nestimate: 2\n---\n\nBody.");
+
+        _boardClient.GetCardAsync("20", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BoardCard("20", "Parent", "", "Backlog",
+                Metadata: new Dictionary<string, string> { ["priority"] = "P1" },
+                Labels: ["type:story"])));
+
+        var genConfig = new GenerationConfig("task", "Backlog", true,
+            CopyFields: ["priority"]);
+
+        await _processor.ProcessUpdatesAsync(
+            _tempDir, "20", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r =>
+                r.FieldValues != null
+                && r.FieldValues["priority"] == "P1"
+                && r.FieldValues["Estimate"] == "2"),
+            Arg.Any<CancellationToken>());
+    }
+
+    // ── Skip notification comments for structured generation ────────────
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_GenerationConfig_SkipsNotificationComment()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-gen-task.md"),
+            "---\ntitle: Gen Task\n---\n\nBody.");
+
+        _boardClient.GetCardAsync("20", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BoardCard("20", "Parent", "", "Backlog",
+                Labels: ["type:story"])));
+
+        var genConfig = new GenerationConfig("task", "Backlog", true);
+
+        await _processor.ProcessUpdatesAsync(
+            _tempDir, "20", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        // Card created but NO notification comment posted
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
+        await _boardClient.DidNotReceive().UpsertAgentCommentAsync(
+            "20", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_NoGenerationConfig_PostsNotificationComment()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-adhoc-task.md"),
+            "---\ntitle: Ad-Hoc Task\n---\n\nBody.");
+
+        _boardClient.CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>())
+            .Returns("77");
+
+        await _processor.ProcessUpdatesAsync(
+            _tempDir, "10", "step", [], CancellationToken.None, generationConfig: null);
+
+        // Notification comment IS posted for ad-hoc creation
+        await _boardClient.Received(1).UpsertAgentCommentAsync(
+            "10", Arg.Any<string>(),
+            Arg.Is<string>(s => s.Contains("agent-created-ticket:adhoc-task")),
+            Arg.Any<CancellationToken>());
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private string CreateUpdatesDir()

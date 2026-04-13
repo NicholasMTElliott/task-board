@@ -36,4 +36,7 @@ public sealed class NullRunStore : IRunStore
 
     public Task UpdateRunEstimateAsync(string runId, double estimate, CancellationToken ct)
         => Task.CompletedTask;
+
+    public Task UpdateRunSessionStartupMsAsync(string runId, int startupMs, CancellationToken ct)
+        => Task.CompletedTask;
 }

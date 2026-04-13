@@ -64,6 +64,9 @@ Legacy single-step states (top-level `role` + `taskPrompt`) are auto-normalized 
 3. `review_design_conflicts` — verify no cross-ticket conflicts
 4. `estimate_ticket` — calibration-based size estimation (haiku via `estimator`)
 
+**Ready for Tasking** (1 step: opus 4.6 via `senior_engineer`):
+1. `generate_tasks` — decompose user story into child tasks with best-guess estimates; `generationConfig` creates `type:task` cards in "Ready for Design" linked to parent, copies priority field
+
 **Ready for Implementation** (2 steps):
 1. `implement` — write code (sonnet 4.6 via `implementer`)
 2. `code_review` — review changes (sonnet 4.6 via `code_reviewer`)
@@ -130,8 +133,93 @@ Agent execution uses git worktrees for isolated working directories:
 ### Cross-Reference Resolution
 Task files can reference other cards (e.g., `#5`, `#12`). The `CrossReferenceResolver` parses these, fetches referenced cards, and includes them in the agent's workspace. This creates tracked relationships so dependent context flows through the pipeline.
 
+### Image Downloading
+`ImageDownloader` downloads images referenced in card bodies (markdown `![](url)` and HTML `<img src>`) to `.aiboard/images/{cardId}/` in the worktree. Images are passed to the agent as local files via `TaskFileManager`.
+- Named HttpClient `"ImageDownloader"` configured at startup with `User-Agent: TaskBoard-Worker/1.0`
+- When `boardProvider == "github"`, a GitHub token is obtained via `gh auth token` at startup and set as a Bearer Authorization header (required for `github.com/user-attachments/assets/` URLs which return 404 without auth)
+- Max 20 images per card, 10 MB per image
+- Filenames: SHA256(url)[0:12] + extension (deterministic, deduplicating)
+- Failures are logged and silently skipped — never block agent execution
+
 ### Agent Executor Pattern
-Agent executors are registered via `AgentExecutorResolver` which resolves by provider key (`claude-cli`, `codex`, `stub`). Selection via `AGENT_EXECUTOR` env var. Multiple executors can coexist; the resolver auto-detects available providers at startup.
+Agent executors are registered via `AgentExecutorResolver` which resolves by provider key (`claude-cli`, `codex`, `stub`, `docker-claude-cli`). `AGENT_EXECUTOR` env var has three modes:
+- `stub` — all providers mapped to stub (testing/dev)
+- `docker-claude-cli` — Docker executor registered under both `docker-claude-cli` and `claude-cli` keys; `claude-cli` workflow roles transparently route to Docker without config changes; fails fast at startup if Docker unavailable
+- unset / any other value — production auto-detect mode: real providers detected at startup (docker-available → registered under `docker-claude-cli`; other values trigger a deprecation warning)
+
+**DockerAgentExecutor** (`IAgentExecutor`, provider key `docker-claude-cli`) wraps Claude CLI invocation inside `docker run -i --rm`. Key design:
+- Standalone class (no inheritance from `ClaudeAgentExecutor`) — differences in process surface are too large
+- System prompt file translated: host directory mounted read-only at `DockerAgentOptions.PromptMountPoint` (`/mnt/aiboard/prompts`); container path computed from `Path.GetFileName`
+- Container named `{prefix}-{cardId}-{random8}` (prefix: `aiboard-run`); random suffix prevents collisions, `--rm` cleans up on normal exit
+- On timeout (`TimeoutException`) or cancellation (`OperationCanceledException`), `ExecuteAsync` issues explicit `docker stop -t 30` (30s SIGTERM grace, then SIGKILL) followed by `docker rm -f` fallback; cleanup is best-effort (never throws, never masks original exception); uses `CancellationToken.None` since caller token may already be cancelled
+- Exit codes classified: Docker daemon errors (125/126/127/137) vs. Claude CLI errors (0–124) via `IsDockerExitCode`
+- `CLAUDECODE` env var stripped from subprocess environment
+- Rate-limit detection via `ClaudeAgentExecutor.IsRateLimited(stderr)` (same as host executor)
+- NDJSON parsing via shared `AgentOutputParser.ParseStreamOutput`
+- Workspace/credential mounts built by `DockerMountBuilder` (injected optionally); workspace mounts and env vars passed to `docker run` args and `SessionRequest`
+- Extensible static mounts (`DockerAgentOptions.AdditionalMounts` dictionary) — operator-supplied overrides beyond the standard workspace/credential set
+- Registered automatically when Docker daemon is detected at startup (`PrerequisiteValidator.IsDockerAvailableAsync` runs `docker info`)
+
+### Container Session Reuse (IAgentExecutorSession)
+To avoid per-step container startup overhead, executors that support Docker can implement `ISessionableAgentExecutor`, which creates a long-lived container session spanning the full agent run pipeline (main steps + gate check + optional specialist reviews).
+
+**Interfaces:**
+- `IAgentExecutorSession` (`IAsyncDisposable`) — represents a live container; `SessionId`, `ProviderKey`, `IsAlive`, `ExecuteInSessionAsync`
+- `ISessionableAgentExecutor : IAgentExecutor` — adds `ProviderKey` and `TryCreateSessionAsync(SessionRequest, CancellationToken)`
+- `SessionRequest` record — `CardId`, `RunId`, `ContainerName` (`aiboard-{cardId}`), `ImageName`, optional `Mounts` (`IReadOnlyList<DockerMount>?`) and `EnvironmentVariables`
+
+**Lifecycle in `AgentRunner.ExecuteAsync`:**
+1. Before the step loop, attempt `TryCreateSessionAsync` if the resolved executor implements `ISessionableAgentExecutor` and `DockerAgentOptions.ReuseContainer` is `true`.
+2. All LLM invocations (steps, gate check, optional specialist reviews) go through `ExecuteWithSessionAsync`, which routes through `session.ExecuteInSessionAsync` if the session is alive and the step's provider matches.
+3. Provider mismatch (e.g., haiku gate check on `claude-cli` while session is `docker`) bypasses the session and calls `executor.ExecuteAsync` directly — logged at Debug.
+4. If the session dies between steps, the invocation falls back to `executor.ExecuteAsync` transparently (logged at Warning).
+5. `await using` on the session guarantees disposal on all exit paths (success, step failure, cancellation, exceptions). Disposal calls `docker stop` + `docker rm`.
+
+**Container naming:** `aiboard-{cardId}` — one per card, mutual exclusion enforced by IN_PROGRESS column transition.
+
+**Configuration:** `DockerAgentOptions` section (key `Docker`) in `appsettings.json`:
+- `ReuseContainer` (bool, default: `true`) — set to `false` to revert to per-step `docker run`
+- `ImageName` (string, default: `"aiboard-agent-sandbox:latest"`) — Docker image
+- `ContainerNamePrefix` (string, default: `"aiboard-run"`) — prefix for `{prefix}-{cardId}-{random8}` container names
+- `PromptMountPoint` (string, default: `"/mnt/aiboard/prompts"`) — read-only mount for system prompt files
+- `MaxBudgetUsd` (decimal, default: `10.00`) — max Claude CLI budget per invocation
+- `TimeoutSeconds` (int, default: `900`) — container kill timeout
+- `ContainerUser` (string, default: `""`) — user to run as inside container (empty = image default)
+- `MemoryLimit` (string?, default: `null`) — optional memory limit, e.g. `"4g"`
+- `CpuLimit` (string?, default: `null`) — optional CPU limit, e.g. `"2.0"`
+- `NetworkMode` (string, default: `"host"`) — container network mode; `"none"` for full isolation
+- `CredentialPath` (string, default: `""`) — host path to Claude CLI credentials; auto-detected from `~/.claude` if empty; used by `DockerMountBuilder`
+- `CredentialMountPoint` (string?, default: `null`) — container path for credentials; defaults to `/home/agent/.claude` (matches `agent` user home in sandbox image)
+- `AdditionalMounts` (Dictionary, default: `{}`) — operator-supplied static volume mounts (beyond standard workspace/credential set)
+
+**Fallback strategy:** If `TryCreateSessionAsync` returns `null` (image not found, Docker unavailable), the run proceeds without a session — all steps use `executor.ExecuteAsync` directly.
+
+**Orphaned container detection:** `PrerequisiteValidator.DetectOrphanedContainersAsync` runs `docker ps --filter name=aiboard-` at startup and logs a warning if any `aiboard-*` containers are found (prior crash cleanup). Cleanup is manual.
+
+**Non-session executors** (`ClaudeAgentExecutor`, `CodexAgentExecutor`, `StubAgentExecutor`) do not implement `ISessionableAgentExecutor` and are completely unaffected.
+
+### Docker Workspace and Credential Mounting
+
+`DockerMountBuilder` produces up to four bind mounts per run:
+
+| Mount | Host path | Container path | Access |
+|-------|-----------|----------------|--------|
+| Worktree | `{worktreePath}` | `/workspace` | RW (agent's working dir; `-w /workspace`) |
+| Base `.git` | `{baseRepoPath}/.git` | `/repo/.git` | RO (shared object store + refs) |
+| `.git` file override | temp file | `/workspace/.git` | RO (shadows host-path gitdir reference) |
+| Credentials | `~/.claude/` (or `CredentialPath`) | `/home/agent/.claude` (or `CredentialMountPoint`) | RO (non-interactive auth) |
+
+System prompt files use the pre-existing `DockerAgentOptions.PromptMountPoint` mount (unchanged).
+
+**`.git` file override:** Git worktrees contain a `.git` file with an absolute host path (`gitdir: /host/path/.git/worktrees/{name}`). Inside the container this path doesn't exist. The override is a temp file containing the container-internal path (`gitdir: /repo/.git/worktrees/{name}`), bind-mounted over `/workspace/.git`. The `commondir` relative path (`../..`) resolves correctly without modification.
+
+**Always-RO `.git`:** Agents do **no git writes** — commits, pushes, and index modifications are orchestrator responsibilities (see #67). The base `.git` is always mounted read-only. `GIT_OPTIONAL_LOCKS=0` env var (injected via `DockerMountContext`) allows git read commands to skip index lock acquisition.
+
+**Path translation:** `DockerMountContext.TranslatePath(hostPath)` maps host absolute paths to container equivalents (e.g., `{worktreePath}/.aiboard/tasks/42.md` → `/workspace/.aiboard/tasks/42.md`). Used for `--append-system-prompt-file` and task file path arguments passed to the Claude CLI.
+
+**Windows paths:** `DockerMountBuilder.NormalizeHostPath` converts Windows backslashes to forward slashes for Docker Desktop compatibility.
+
+`DockerMountContext` is `IAsyncDisposable`; disposal deletes the temp `.git` override file after the container session ends.
 
 ### Claude CLI Subprocess Pattern
 The .NET worker invokes the Claude CLI (`claude`) as a subprocess via `ClaudeAgentExecutor`.
@@ -182,17 +270,46 @@ The design pipeline includes a calibration-based estimation step (step 4). Confi
 - `AgentRunner` logs a warning when estimation is configured but no step returned a structured `estimate` field (the estimator agent may have described the estimate in `detail` text only)
 - `TransitionExecutor` validates that template variables are resolved before dispatching actions: if `{{...}}` patterns remain after substitution, the action is **skipped with a warning** instead of failing silently. Guard is active only when a `templateContext` is provided.
 
-### Child Task Generation
+### Child Task Generation (Story → Task Decomposition)
 User stories can generate child task tickets via the `cardTypes` config:
 ```json
 "cardTypes": { "story": { "name": "User Story", "labelPrefix": "type", "allowedChildren": ["task"] }, "task": { "name": "Task", "allowedChildren": [] } }
 ```
-- `UpdateFileProcessor` processes `.aiboard/updates/new-{slug}.md` files to create child tickets on the board
-- `generate_children.md` prompt step guides agents to produce child task definitions
-- `CompletionRunner` handles `children_complete` gate type — polls child cards until all reach terminal state
+
+**Card type labels:** Issues are labeled `type:story`, `type:task`, or `type:bug` to identify their card type. The `labelPrefix` field in `cardTypes` controls the label format.
+
+**Pipeline flow for stories:**
+Backlog → Ready for Design → Designed → **Ready for Tasking** → Tasking → **Waiting for Tasks** → Done
+
+**Pipeline flow for tasks:**
+Ready for Design → Designed → Ready for Implementation → ... → Approved → Done
+
+**Tasking step** ("Ready for Tasking" state):
+- `generate_tasks` step uses `senior_engineer` role with `generate_children.md` prompt
+- `generationConfig` on the step: `targetType: "task"`, `targetColumn: "Ready for Design"`, `linkToParent: true`, `copyFields: ["priority"]`
+- Agent writes `new-{slug}.md` files to `.aiboard/updates/` with `estimate` in front matter (best-guess from scale [1, 2, 4, 8])
+- `UpdateFileProcessor` creates child tickets with type label, parent link, target column, copied priority field, and estimate
+- Notification comments are skipped during structured generation (redundant with parent task list)
+- Story estimate set to sum of child estimates via `setField` transition action
+
+**Priority propagation:**
+`GenerationConfig.CopyFields` specifies fields to copy from parent to child. `UpdateFileProcessor` fetches the parent card's metadata and passes matching values via `CreateCardRequest.FieldValues`. Currently used to copy `priority`.
+
+**Estimate rollup:**
+- `updateParentSum` transition action: finds the card's parent via `trackedInIssues` cross-refs, sums the specified field across all `sub_item` children, and sets the result on the parent card
+- Configured on "Ready for Design" COMPLETE transition (updates story estimate after each child's design refines its estimate) and on "Waiting for Tasks" COMPLETE transition (final sum when story completes)
+- No-op if card has no parent or cross-ref resolver is unavailable
+
+**Completion tracking (event-driven, not polled):**
+- "Waiting for Tasks" is a `holding` state — the poller ignores it entirely, avoiding deadlock
+- When a child task completes merge (Approved → Done), the `completeParentIfReady` transition action fires
+- It finds the parent via `trackedInIssues` cross-refs, fetches all siblings via `trackedIssues`, and checks terminal states
+- If all siblings are Done → transitions parent to Done via its COMPLETE transition target
+- If siblings are pending → posts/updates a progress comment on the parent (stable marker, upserted in place)
+- `CompletionRunner` still exists for other `children_complete` use cases but is not used in the story-to-task flow
 
 ### Rate Limiting
-- `ClaudeAgentExecutor` detects rate limits via stderr analysis (checks for "rate limit" / "overloaded")
+- `ClaudeAgentExecutor` and `DockerAgentExecutor` detect rate limits via stderr analysis (checks for "rate limit" / "overloaded")
 - `GitHubProjectsClient` detects GitHub API rate limits (HTTP 429, "abuse detection", "secondary rate")
 - Both throw `RateLimitException` with `RateLimitSource` (BoardApi or AgentCli)
 - `AgentRunner` catches `RateLimitException`, restores card to trigger column for retry
@@ -211,9 +328,14 @@ User stories can generate child task tickets via the `cardTypes` config:
 | CompletionRunner | Polls child cards for `children_complete` gate type |
 | PollingRunner | Automatic card pickup via priority-sorted polling |
 | ClaudeAgentExecutor | Claude CLI subprocess with `--json-schema` structured output |
+| DockerAgentExecutor | Claude CLI inside `docker run -i --rm`; provider key `docker-claude-cli`; auto-registered when Docker daemon detected |
+| DockerMountBuilder | Builds workspace/credential bind mount specifications for containerized agent execution |
+| DockerMountContext | Disposable context: mount list, `GIT_OPTIONAL_LOCKS=0` env var, path translation map, temp file cleanup |
+| DockerAgentOptions / DockerMount | Config: image, user, memory/CPU limits, network mode, credential path/mount point, prompt mount, budget, timeout, extensible mounts |
 | CodexAgentExecutor | OpenAI Codex CLI subprocess (secondary/legacy) |
-| AgentExecutorResolver | Multi-executor registry; resolves by provider key (`claude-cli`, `codex`, `stub`) |
+| AgentExecutorResolver | Multi-executor registry; resolves by provider key (`claude-cli`, `docker-claude-cli`, `codex`, `stub`) |
 | GitWorkspaceManager | Git worktree lifecycle for isolated agent execution |
+| ImageDownloader | Downloads card-referenced images to `.aiboard/images/{cardId}/`; authenticated via `gh auth token` for GitHub |
 | TaskFileManager | Write board cards as `.aiboard/tasks/{id}.md` files + comments files |
 | UpdateFileProcessor | Processes `.aiboard/updates/` files for child ticket creation and cross-card comments |
 | CrossReferenceResolver | Parse card references, fetch dependent cards |
@@ -243,7 +365,8 @@ Schema:
       "includeInAgentContext": true,
       "pipelineOrder": 1,
       "steps": [
-        { "name": "<step_name>", "role": "<role_key>", "taskPromptFile": "<path>" }
+        { "name": "<step_name>", "role": "<role_key>", "taskPromptFile": "<path>",
+          "generationConfig": { "targetType": "<cardType>", "targetColumn": "<state>", "linkToParent": true, "copyFields": ["<field>"] } }
       ],
       "gateCheck": {
         "role": "<role_key>",
@@ -254,7 +377,7 @@ Schema:
       ],
       "transitions": {
         "IN_PROGRESS": "<column>",
-        "COMPLETE": "<column> | [{ \"type\": \"moveToColumn\", \"value\": \"...\" }, { \"type\": \"setField\", \"field\": \"...\", \"value\": \"...\" }]",
+        "COMPLETE": "<column> | [{ \"type\": \"moveToColumn\", \"value\": \"...\" }, { \"type\": \"setField\", \"field\": \"...\", \"value\": \"...\" }, { \"type\": \"updateParentSum\", \"field\": \"...\" }]",
         "NEEDS_INFO": "<column>",
         "ERROR": "<column>",
         "GATE_FAIL": "<column>",
@@ -281,6 +404,11 @@ Schema:
 - `systemPromptFile` takes precedence over `systemPrompt`
 - `providerParams` are state-level (shared across all steps)
 - `sections` can be empty for roles that only produce comments (gate_checker, code_reviewer)
+- `generationConfig` on a step configures child ticket creation: `targetType`, `targetColumn`, `linkToParent`, `copyFields`
+- `copyFields` copies specified field values from parent card metadata to created children (e.g., `["priority"]`)
+- `updateParentSum` transition action sums a field across all `sub_item` children and sets the result on the parent
+- `completeParentIfReady` transition action checks if the card's parent has all children in terminal states and transitions the parent if so; posts a progress comment otherwise
+- New ticket front matter supports `estimate:` field — value is set on the created card and summed for parent rollup
 - State keys are column names for GitHub Projects or list IDs for Trello
 
 ## Roles
@@ -335,6 +463,7 @@ Schema:
 | completed_at_utc | Run end time (nullable) |
 | outcome | COMPLETE / NEEDS_INFO / ERROR (nullable) |
 | estimate | Story point estimate captured from the estimation step (nullable) |
+| session_startup_ms | Time (ms) to create and start the Docker container for a session-based run (nullable; NULL = no session) |
 
 ### step_result (step tracking)
 | Column | Description |
@@ -347,6 +476,7 @@ Schema:
 | detail | Step output detail (nullable) |
 | started_at_utc | Step start time |
 | completed_at_utc | Step end time (nullable) |
+| session_exec_ms | Time (ms) for this step's execution via `docker exec` (nullable; NULL = no session or non-Docker executor) |
 
 ### SQL Views (metrics, V12)
 | View | Description |

@@ -81,7 +81,7 @@ public sealed class CompletionRunner(
             if (state.Transitions.TryGetValue(TransitionKeys.Error, out var errorTarget))
             {
                 var templateContext = await BuildTemplateContextAsync(ct);
-                await TransitionExecutor.ExecuteAsync(cardId, errorTarget, boardClient, logger, ct, templateContext);
+                await TransitionExecutor.ExecuteAsync(cardId, errorTarget, boardClient, logger, ct, templateContext, crossReferenceResolver, workflowConfig);
             }
 
             return new AgentRunResult(AgentOutcome.ERROR,
@@ -126,7 +126,7 @@ public sealed class CompletionRunner(
             if (state.Transitions.TryGetValue(TransitionKeys.Complete, out var completeTarget))
             {
                 var templateContext = await BuildTemplateContextAsync(ct);
-                await TransitionExecutor.ExecuteAsync(cardId, completeTarget, boardClient, logger, ct, templateContext);
+                await TransitionExecutor.ExecuteAsync(cardId, completeTarget, boardClient, logger, ct, templateContext, crossReferenceResolver, workflowConfig);
             }
 
             return new AgentRunResult(AgentOutcome.COMPLETE,

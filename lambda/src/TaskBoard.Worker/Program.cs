@@ -148,9 +148,13 @@ switch (boardProvider)
 }
 
 // ── 6. Agent executor selection ──────────────────────────────────────────────
-// AGENT_EXECUTOR=stub → all providers mapped to stub (testing/dev)
-// Any other value (or unset) → production mode: real providers are auto-detected
+// AGENT_EXECUTOR=stub              → all providers mapped to stub (testing/dev)
+// AGENT_EXECUTOR=docker-claude-cli → Docker executor registered under both
+//                                    "docker-claude-cli" and "claude-cli" keys
+//                                    (transparent substitution; fails if Docker unavailable)
+// Any other value (or unset)       → production mode: real providers are auto-detected
 var agentExecutorMode = builder.Configuration["AgentExecutor"]?.ToLowerInvariant() ?? "stub";
+var dockerModeRequested = agentExecutorMode == "docker-claude-cli";
 
 // Always register StubAgentExecutor (used in stub mode and tests)
 builder.Services.AddSingleton<StubAgentExecutor>();
@@ -159,13 +163,15 @@ HashSet<string> detectedProviders;
 if (agentExecutorMode == "stub")
 {
     // Stub mode: all providers map to stub, all considered available
-    detectedProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli", "codex", "stub" };
+    detectedProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli", "codex", "stub", "docker-claude-cli" };
 }
 else
 {
     detectedProviders = await PrerequisiteValidator.DetectAvailableProvidersAsync();
 
-    if (detectedProviders.Contains("claude-cli"))
+    // In docker-claude-cli mode, claude-cli is intentionally routed through Docker —
+    // do not register ClaudeAgentExecutor for direct (non-Docker) use.
+    if (detectedProviders.Contains("claude-cli") && !dockerModeRequested)
     {
         builder.Services.Configure<ClaudeCliLlmOptions>(builder.Configuration.GetSection(ClaudeCliLlmOptions.SectionName));
         builder.Services.PostConfigure<ClaudeCliLlmOptions>(opts =>
@@ -184,6 +190,34 @@ else
         });
         builder.Services.AddSingleton<CodexAgentExecutor>();
     }
+
+    if (detectedProviders.Contains("docker") || dockerModeRequested)
+    {
+        // Ensure ClaudeCliLlmOptions is available for Docker-only environments
+        // (budget/timeout config is shared with the containerized claude invocation)
+        if (dockerModeRequested && !detectedProviders.Contains("claude-cli"))
+        {
+            builder.Services.Configure<ClaudeCliLlmOptions>(builder.Configuration.GetSection(ClaudeCliLlmOptions.SectionName));
+        }
+
+        builder.Services.Configure<DockerAgentOptions>(builder.Configuration.GetSection(DockerAgentOptions.SectionName));
+        builder.Services.PostConfigure<DockerAgentOptions>(opts =>
+        {
+            if (string.IsNullOrEmpty(opts.CredentialPath))
+            {
+                var credPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+                if (Directory.Exists(credPath))
+                    opts.CredentialPath = credPath;
+            }
+        });
+        builder.Services.AddSingleton<DockerAgentExecutor>();
+
+        // Only mark docker-claude-cli as available when Docker is actually detected.
+        // If dockerModeRequested but docker is absent, the fail-fast check below fires.
+        if (dockerModeRequested && detectedProviders.Contains("docker"))
+            detectedProviders.Add("docker-claude-cli");
+    }
 }
 
 builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
@@ -195,10 +229,24 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
     }
 
     var executors = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase);
-    if (detectedProviders.Contains("claude-cli"))
+
+    if (detectedProviders.Contains("claude-cli") && !dockerModeRequested)
         executors["claude-cli"] = sp.GetRequiredService<ClaudeAgentExecutor>();
+
     if (detectedProviders.Contains("codex"))
         executors["codex"] = sp.GetRequiredService<CodexAgentExecutor>();
+
+    if (detectedProviders.Contains("docker") || detectedProviders.Contains("docker-claude-cli"))
+    {
+        var dockerExecutor = sp.GetRequiredService<DockerAgentExecutor>();
+        executors["docker-claude-cli"] = dockerExecutor;
+
+        // In docker-claude-cli mode, transparently redirect "claude-cli" roles to Docker
+        // so workflow configs don't need modification.
+        if (dockerModeRequested)
+            executors["claude-cli"] = dockerExecutor;
+    }
+
     return new AgentExecutorResolver(executors);
 });
 
@@ -206,8 +254,43 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
 var agentIdentity = AgentIdentity.Generate();
 builder.Services.AddSingleton(agentIdentity);
 
-// Agent mode services
-builder.Services.AddHttpClient("ImageDownloader");
+// Docker agent options (always registered; defaults used when section is absent)
+builder.Services.Configure<DockerAgentOptions>(builder.Configuration.GetSection(DockerAgentOptions.SectionName));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<DockerAgentOptions>>().Value);
+
+// Mount builder: builds workspace/credential mounts for Docker container execution
+builder.Services.AddSingleton<DockerMountBuilder>();
+
+// Agent mode services — resolve GitHub token for authenticated image downloads
+string? ghImageToken = null;
+if (boardProvider == "github")
+{
+    try
+    {
+        using var ghTokenProc = System.Diagnostics.Process.Start(
+            new System.Diagnostics.ProcessStartInfo("gh", "auth token")
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+        if (ghTokenProc is not null)
+        {
+            ghImageToken = (await ghTokenProc.StandardOutput.ReadToEndAsync()).Trim();
+            await ghTokenProc.WaitForExitAsync();
+            if (ghTokenProc.ExitCode != 0) ghImageToken = null;
+        }
+    }
+    catch { /* gh not available — image downloads will be best-effort */ }
+}
+
+builder.Services.AddHttpClient("ImageDownloader", client =>
+{
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("TaskBoard-Worker/1.0");
+    if (!string.IsNullOrEmpty(ghImageToken))
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", ghImageToken);
+});
 builder.Services.AddSingleton<ImageDownloader>();
 builder.Services.AddSingleton<TaskFileManager>();
 
@@ -248,15 +331,27 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
 
 // ── 7. Runtime prerequisite validation ───────────────────────────────────────
 {
-    // Warn if AGENT_EXECUTOR is set to a real provider name (now deprecated for provider selection)
     var rawAgentExec = builder.Configuration["AgentExecutor"];
+
+    // docker-claude-cli is a recognized selection mode — no warning needed
     if (rawAgentExec is not null
-        && !string.Equals(rawAgentExec, "stub", StringComparison.OrdinalIgnoreCase))
+        && !string.Equals(rawAgentExec, "stub", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(rawAgentExec, "docker-claude-cli", StringComparison.OrdinalIgnoreCase))
     {
+        // Warn if AGENT_EXECUTOR is set to a real provider name (now deprecated for provider selection)
         logger.LogWarning(
             "AGENT_EXECUTOR is set to '{Value}' but this value is no longer used for provider selection — " +
-            "real providers are now auto-detected. Only 'stub' retains special meaning.",
+            "real providers are now auto-detected. Only 'stub' and 'docker-claude-cli' retain special meaning.",
             rawAgentExec);
+    }
+
+    // Fail fast when docker-claude-cli is explicitly requested but Docker is unavailable
+    if (dockerModeRequested && !detectedProviders.Contains("docker-claude-cli"))
+    {
+        logger.LogError(
+            "AGENT_EXECUTOR=docker-claude-cli is configured but Docker is not available. " +
+            "Ensure the Docker CLI is installed and the Docker daemon is running ('docker info' must succeed).");
+        return;
     }
 
     var config = host.Services.GetRequiredService<WorkflowConfig>();
@@ -284,6 +379,18 @@ var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pr
     logger.LogInformation("Available AI providers: {Providers}",
         string.Join(", ", detectedProviders.Where(p => p != "stub").Order()));
 
+    // Check for orphaned aiboard-* containers from prior crashed runs
+    var orphanedContainers = await PrerequisiteValidator.DetectOrphanedContainersAsync();
+    if (orphanedContainers.Count > 0)
+    {
+        logger.LogWarning(
+            "Found {Count} orphaned aiboard container(s) from prior runs: {Names}. " +
+            "These may consume resources. Run 'docker rm -f {JoinedNames}' to clean up.",
+            orphanedContainers.Count,
+            string.Join(", ", orphanedContainers),
+            string.Join(" ", orphanedContainers));
+    }
+
     if (!string.IsNullOrWhiteSpace(dbConnectionString))
     {
         var (pgOk, pgError) = await PrerequisiteValidator.ValidatePostgresAsync(
@@ -309,12 +416,19 @@ logger.LogInformation("Content root: {ContentRoot}", builder.Environment.Content
 logger.LogInformation("AppContext.BaseDirectory: {BaseDir}", AppContext.BaseDirectory);
 logger.LogInformation("Raw config ClaudeCli:TimeoutSeconds = {RawTimeout}",
     builder.Configuration["ClaudeCli:TimeoutSeconds"] ?? "(not set)");
-if (detectedProviders.Contains("claude-cli") && agentExecutorMode != "stub")
+if (detectedProviders.Contains("claude-cli") && agentExecutorMode != "stub" && !dockerModeRequested)
 {
     var claudeOpts = host.Services.GetRequiredService<IOptions<ClaudeCliLlmOptions>>().Value;
     logger.LogInformation(
         "ClaudeCliLlmOptions: ExecutablePath={Exe}, TimeoutSeconds={Timeout}, MaxBudgetUsd={Budget}, MaxTurns={Turns}",
         claudeOpts.ExecutablePath, claudeOpts.TimeoutSeconds, claudeOpts.MaxBudgetUsd, claudeOpts.MaxTurns);
+}
+if (dockerModeRequested && detectedProviders.Contains("docker-claude-cli"))
+{
+    var dockerOpts = host.Services.GetRequiredService<IOptions<DockerAgentOptions>>().Value;
+    logger.LogInformation(
+        "DockerAgentOptions: ImageName={Image}, NetworkMode={Network}, MemoryLimit={Memory}, CredentialPath={Creds}",
+        dockerOpts.ImageName, dockerOpts.NetworkMode, dockerOpts.MemoryLimit ?? "(none)", dockerOpts.CredentialPath);
 }
 
 // ── 8. Resolve shared runtime parameters from merged configuration ───────────

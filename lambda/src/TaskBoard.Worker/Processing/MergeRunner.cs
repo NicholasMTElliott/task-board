@@ -1,3 +1,4 @@
+using System.Text;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 
@@ -8,6 +9,8 @@ public sealed class MergeRunner(
     GitWorkspaceManager gitWorkspaceManager,
     WorkflowConfig workflowConfig,
     AgentIdentity agentIdentity,
+    ICrossReferenceResolver crossReferenceResolver,
+    IAgentExecutorResolver executorResolver,
     ILogger<MergeRunner> logger)
 {
     private const int DefaultMaxRetries = 3;
@@ -55,7 +58,8 @@ public sealed class MergeRunner(
         if (state.Transitions.TryGetValue(TransitionKeys.InProgress, out var inProgressTarget))
         {
             await TransitionExecutor.ExecuteAsync(
-                cardId, inProgressTarget, boardClient, logger, cancellationToken);
+                cardId, inProgressTarget, boardClient, logger, cancellationToken,
+                crossRefResolver: crossReferenceResolver, workflowConfig: workflowConfig);
             logger.LogInformation("Moved card {CardId} to in-progress via {Count} action(s)",
                 cardId, inProgressTarget.Actions.Count);
         }
@@ -98,7 +102,7 @@ public sealed class MergeRunner(
                     attempt, maxRetries, cardId);
 
                 var mergeBranch = $"merge/{cardId}";
-                var mergePath = GitWorkspaceManager.GetWorktreePath(workspacePath, mergeBranch);
+                var mergePath = gitWorkspaceManager.ResolveWorktreePath(workspacePath, mergeBranch);
 
                 try
                 {
@@ -115,15 +119,30 @@ public sealed class MergeRunner(
 
                     if (mergeResult == MergeStatus.Conflict)
                     {
-                        logger.LogError("Merge conflicts between {WorkBranch} and {DefaultBranch}", workBranch, defaultBranch);
-                        try { await gitWorkspaceManager.AbortMergeAsync(mergePath, cancellationToken); }
-                        catch (GitOperationException) { /* best effort */ }
-                        await CleanupMergeWorktreeAsync(workspacePath, mergePath, mergeBranch, cancellationToken);
+                        logger.LogInformation("Merge conflicts between {WorkBranch} and {DefaultBranch} — attempting resolution",
+                            workBranch, defaultBranch);
 
-                        var detail = $"Merge conflicts between `{workBranch}` and `{defaultBranch}`. Resolve conflicts and retry.";
-                        await PostComment(cardId, detail, card, runMarker, cancellationToken);
-                        await TransitionBestEffort(cardId, state, TransitionKeys.Error, cancellationToken);
-                        return new AgentRunResult(AgentOutcome.ERROR, detail);
+                        // Attempt merge resolution via agent before giving up
+                        var resolved = await TryResolveMergeConflictsAsync(
+                            mergePath, cardId, card, workBranch, defaultBranch, cancellationToken);
+
+                        if (!resolved)
+                        {
+                            try { await gitWorkspaceManager.AbortMergeAsync(mergePath, cancellationToken); }
+                            catch (GitOperationException) { /* best effort */ }
+                            await CleanupMergeWorktreeAsync(workspacePath, mergePath, mergeBranch, cancellationToken);
+
+                            var transitionKey = state.Transitions.ContainsKey(TransitionKeys.MergeConflict)
+                                ? TransitionKeys.MergeConflict
+                                : TransitionKeys.Error;
+
+                            var detail = $"Merge conflicts between `{workBranch}` and `{defaultBranch}` could not be resolved automatically.";
+                            await PostComment(cardId, detail, card, runMarker, cancellationToken);
+                            await TransitionBestEffort(cardId, state, transitionKey, cancellationToken);
+                            return new AgentRunResult(AgentOutcome.ERROR, detail);
+                        }
+
+                        logger.LogInformation("Merge conflicts resolved by agent for {WorkBranch}", workBranch);
                     }
 
                     // Push merge result to main
@@ -208,6 +227,96 @@ public sealed class MergeRunner(
         await GitWorkspaceManager.RunGitAsync(repoPath,
             ["worktree", "add", fullMergePath, "-b", mergeBranch, $"origin/{defaultBranch}"],
             cancellationToken);
+    }
+
+    private async Task<bool> TryResolveMergeConflictsAsync(
+        string mergePath, string cardId, BoardCard card,
+        string workBranch, string defaultBranch, CancellationToken cancellationToken)
+    {
+        var mergeResolution = workflowConfig.MergeResolution;
+        if (mergeResolution is null)
+        {
+            logger.LogWarning("No mergeResolution config — cannot attempt merge conflict resolution");
+            return false;
+        }
+
+        if (!workflowConfig.Roles.TryGetValue(mergeResolution.Role, out var mergeRole))
+        {
+            logger.LogError("Merge resolution role {Role} not found in workflow config", mergeResolution.Role);
+            return false;
+        }
+
+        // Gather conflict file list from the merge worktree
+        IReadOnlyList<string> conflictFiles;
+        try
+        {
+            var (_, conflictOutput, _) = await GitWorkspaceManager.RunGitAsync(mergePath,
+                ["diff", "--name-only", "--diff-filter=U"], cancellationToken);
+            conflictFiles = conflictOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(f => f.Trim()).ToArray();
+        }
+        catch (GitOperationException ex)
+        {
+            logger.LogWarning(ex, "Failed to enumerate conflict files — skipping resolution");
+            return false;
+        }
+
+        try
+        {
+            var systemPromptPath = await AgentRunner.ResolveSystemPromptFileAsync(
+                mergeRole, mergeResolution.Role, mergePath, workflowConfig.ConfigDirectory, cancellationToken);
+
+            var taskPrompt = BuildMergeResolutionTaskPrompt(workBranch, defaultBranch, conflictFiles);
+
+            var context = new AgentExecutionContext(
+                TargetCardId: cardId,
+                TargetCardTitle: card.Title,
+                WorkspacePath: mergePath,
+                TaskPrompt: taskPrompt,
+                SystemPromptFilePath: systemPromptPath,
+                Model: mergeRole.Model,
+                ProviderParams: mergeResolution.ProviderParams,
+                CommentsFilePath: null);
+
+            logger.LogInformation("Running merge resolution agent for card {CardId} ({ConflictCount} conflicts)",
+                cardId, conflictFiles.Count);
+
+            var mergeExecutor = executorResolver.Resolve(mergeRole.Provider);
+            var result = await mergeExecutor.ExecuteAsync(context, cancellationToken);
+
+            if (result.Outcome == AgentOutcome.COMPLETE)
+            {
+                // Agent resolved conflicts — stage and commit the resolution
+                await GitWorkspaceManager.RunGitAsync(mergePath, ["add", "."], cancellationToken);
+                await GitWorkspaceManager.RunGitAsync(mergePath,
+                    ["commit", "--no-edit"], cancellationToken);
+                return true;
+            }
+
+            logger.LogWarning("Merge resolution agent returned {Outcome} for card {CardId}: {Detail}",
+                result.Outcome, cardId, result.Detail);
+            return false;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Merge resolution failed for card {CardId} — falling back to conflict transition", cardId);
+            return false;
+        }
+    }
+
+    private static string BuildMergeResolutionTaskPrompt(
+        string workBranch, string defaultBranch, IReadOnlyList<string> conflictFiles)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"A merge of `{workBranch}` into `{defaultBranch}` resulted in conflicts.");
+        sb.AppendLine();
+        sb.AppendLine("Conflicted files:");
+        foreach (var f in conflictFiles)
+            sb.AppendLine($"- {f}");
+        sb.AppendLine();
+        sb.AppendLine("Resolve all conflict markers (<<<<<<< / ======= / >>>>>>>), verify the build passes, and confirm the merged result is correct.");
+        return sb.ToString();
     }
 
     private async Task CleanupMergeWorktreeAsync(
@@ -295,7 +404,8 @@ public sealed class MergeRunner(
 
         try
         {
-            await TransitionExecutor.ExecuteAsync(cardId, target, boardClient, logger, cancellationToken);
+            await TransitionExecutor.ExecuteAsync(cardId, target, boardClient, logger, cancellationToken,
+                crossRefResolver: crossReferenceResolver, workflowConfig: workflowConfig);
             logger.LogInformation("Executed {Outcome} transition actions for card {CardId}", outcome, cardId);
         }
         catch (Exception ex)

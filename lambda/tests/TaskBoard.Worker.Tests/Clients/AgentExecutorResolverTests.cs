@@ -96,5 +96,45 @@ public class AgentExecutorResolverTests
         Assert.Contains("claude-cli", resolver.AvailableProviders);
         Assert.Contains("codex", resolver.AvailableProviders);
         Assert.Contains("stub", resolver.AvailableProviders);
+        Assert.Contains("docker-claude-cli", resolver.AvailableProviders);
+    }
+
+    [Fact]
+    public void ForSingleExecutor_DockerClaudeCliKey_ReturnsSameExecutor()
+    {
+        var executor = Substitute.For<IAgentExecutor>();
+        var resolver = AgentExecutorResolver.ForSingleExecutor(executor);
+
+        Assert.Same(executor, resolver.Resolve("docker-claude-cli"));
+    }
+
+    [Fact]
+    public void Resolve_DockerClaudeCliKey_ReturnsDockerExecutor()
+    {
+        var claudeExecutor = Substitute.For<IAgentExecutor>();
+        var dockerExecutor = Substitute.For<IAgentExecutor>();
+        var resolver = new AgentExecutorResolver(new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["claude-cli"] = claudeExecutor,
+            ["docker-claude-cli"] = dockerExecutor,
+        });
+
+        Assert.Same(dockerExecutor, resolver.Resolve("docker-claude-cli"));
+        Assert.Same(claudeExecutor, resolver.Resolve("claude-cli"));
+    }
+
+    [Fact]
+    public void Resolve_DockerModeOverridesClaude_BothKeysReturnDockerExecutor()
+    {
+        // In docker-claude-cli mode, both "claude-cli" and "docker-claude-cli" point to Docker
+        var dockerExecutor = Substitute.For<IAgentExecutor>();
+        var resolver = new AgentExecutorResolver(new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["claude-cli"] = dockerExecutor,
+            ["docker-claude-cli"] = dockerExecutor,
+        });
+
+        Assert.Same(dockerExecutor, resolver.Resolve("claude-cli"));
+        Assert.Same(dockerExecutor, resolver.Resolve("docker-claude-cli"));
     }
 }

@@ -80,8 +80,8 @@ public sealed class PgRunStore(
             INSERT INTO step_result
                 (run_id, card_id, state_name, step_name, step_index, role, model,
                  outcome, summary, detail, reference_content, conversation_log,
-                 questions, requested_steps, started_at_utc, completed_at_utc)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $16)
+                 questions, requested_steps, started_at_utc, completed_at_utc, session_exec_ms)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $16, $17)
             ON CONFLICT (run_id, step_name) DO NOTHING
             """;
         cmd.Parameters.AddWithValue(result.RunId);
@@ -105,6 +105,7 @@ public sealed class PgRunStore(
 
         cmd.Parameters.AddWithValue(result.StartedAtUtc);
         cmd.Parameters.AddWithValue(result.CompletedAtUtc);
+        cmd.Parameters.AddWithValue(result.SessionExecMs.HasValue ? (object)result.SessionExecMs.Value : DBNull.Value);
 
         await cmd.ExecuteNonQueryAsync(ct);
 
@@ -119,7 +120,7 @@ public sealed class PgRunStore(
         cmd.CommandText = """
             SELECT id, run_id, card_id, state_name, step_name, step_index, role, model,
                    outcome, summary, detail, reference_content, conversation_log,
-                   questions, requested_steps, started_at_utc, completed_at_utc
+                   questions, requested_steps, started_at_utc, completed_at_utc, session_exec_ms
             FROM step_result
             WHERE card_id = $1
               AND ($2::text IS NULL OR state_name = $2)
@@ -140,7 +141,7 @@ public sealed class PgRunStore(
         cmd.CommandText = """
             SELECT sr.id, sr.run_id, sr.card_id, sr.state_name, sr.step_name, sr.step_index, sr.role, sr.model,
                    sr.outcome, sr.summary, sr.detail, sr.reference_content, sr.conversation_log,
-                   sr.questions, sr.requested_steps, sr.started_at_utc, sr.completed_at_utc
+                   sr.questions, sr.requested_steps, sr.started_at_utc, sr.completed_at_utc, sr.session_exec_ms
             FROM step_result sr
             INNER JOIN (
                 SELECT run_id FROM agent_run
@@ -190,7 +191,8 @@ public sealed class PgRunStore(
                 Questions: questions,
                 RequestedSteps: requestedSteps,
                 StartedAtUtc: reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("started_at_utc")),
-                CompletedAtUtc: reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("completed_at_utc"))));
+                CompletedAtUtc: reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("completed_at_utc")),
+                SessionExecMs: reader.IsDBNull(reader.GetOrdinal("session_exec_ms")) ? null : reader.GetInt32(reader.GetOrdinal("session_exec_ms"))));
         }
         return results;
     }
@@ -205,5 +207,17 @@ public sealed class PgRunStore(
         await cmd.ExecuteNonQueryAsync(ct);
 
         logger.LogDebug("Updated estimate for run {RunId}: {Estimate}", runId, estimate);
+    }
+
+    public async Task UpdateRunSessionStartupMsAsync(string runId, int startupMs, CancellationToken ct)
+    {
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE agent_run SET session_startup_ms = $2 WHERE run_id = $1";
+        cmd.Parameters.AddWithValue(runId);
+        cmd.Parameters.AddWithValue(startupMs);
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        logger.LogDebug("Updated session_startup_ms for run {RunId}: {StartupMs}ms", runId, startupMs);
     }
 }

@@ -260,6 +260,31 @@ public class AgentRunnerMergeStepTests : IDisposable
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
     }
 
+    // ── Test 8: Discard state with existing branch → merge step skipped ──
+
+    [Fact]
+    public async Task MergeStep_DiscardState_WithExistingBranch_SkipsMergeStep()
+    {
+        // Design stage (gitBehavior=discard) with an existing branch from prior implementation.
+        // The merge step should be skipped entirely — no merge, no merge resolver, no kick-back.
+        SetupBareRepoWithWorkBranch();
+        AddConflictingChangeToMain(); // Would cause conflict if merge ran
+        SetupBoardCards(DesignColumnId);
+
+        var executor = new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance);
+        executor.NextOutcome = AgentOutcome.COMPLETE;
+        var runner = CreateRunner(BuildDesignDiscardConfig(), executor);
+
+        var result = await runner.ExecuteAsync(CardId, BoardId, _workspaceDir, CancellationToken.None);
+
+        // Agent should complete normally — merge step was skipped despite existing branch
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+
+        // No kick-back to implementation
+        await _boardClient.DidNotReceive().MoveCardToColumnAsync(
+            CardId, ReadyForImplCol, Arg.Any<CancellationToken>());
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private void SetupBoardCards(string columnId)
@@ -422,7 +447,7 @@ public class AgentRunnerMergeStepTests : IDisposable
                         ["ERROR"] = TransitionTarget.ForColumn(ErrorCol),
                         ["MERGE_CONFLICT"] = TransitionTarget.ForColumn(ReadyForImplCol),
                     },
-                    GitBehavior: "discard"),
+                    GitBehavior: "commit_and_push"),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -432,6 +457,31 @@ public class AgentRunnerMergeStepTests : IDisposable
                     new List<string>()),
             },
             MergeResolution: new MergeResolutionConfig("merge_resolver")).Normalised();
+    }
+
+    /// <summary>
+    /// Design stage: gitBehavior=discard. Merge step should be skipped for discard states.
+    /// </summary>
+    private static WorkflowConfig BuildDesignDiscardConfig()
+    {
+        return new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                [DesignColumnId] = new("Ready for Design", "senior_engineer", "agent_run",
+                    "Design {TaskName}",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn(CompleteCol),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn(QuestionsCol),
+                        ["ERROR"] = TransitionTarget.ForColumn(ErrorCol),
+                    },
+                    GitBehavior: "discard"),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
+                    new List<string> { "Technical Design" }),
+            }).Normalised();
     }
 
     // ── Git helpers ──────────────────────────────────────────────────────

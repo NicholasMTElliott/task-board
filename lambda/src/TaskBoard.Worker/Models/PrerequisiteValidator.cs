@@ -27,6 +27,9 @@ public static class PrerequisiteValidator
                 cancellationToken))
             available.Add("codex");
 
+        if (await IsDockerAvailableAsync(cancellationToken))
+            available.Add("docker");
+
         return available;
     }
 
@@ -124,7 +127,8 @@ public static class PrerequisiteValidator
         if (availableProviders.Count == 0)
         {
             errors.Add("No AI agent providers are available. " +
-                "At least one of claude-cli (Claude CLI) or codex (Codex CLI) must be installed and on PATH.");
+                "At least one of claude-cli (Claude CLI), codex (Codex CLI), " +
+                "or docker (Docker daemon) must be installed and available.");
         }
 
         // Prompt file checks
@@ -143,6 +147,29 @@ public static class PrerequisiteValidator
         var errors = new List<string>();
         ValidatePromptFiles(errors, config, promptBaseDirectory);
         return errors;
+    }
+
+    /// <summary>
+    /// Checks for orphaned aiboard-* containers left by prior runs that crashed mid-cleanup.
+    /// Returns the names of any running containers that match the aiboard- prefix.
+    /// Callers should log a warning if the result is non-empty.
+    /// Safe to call before host build (no DI dependencies).
+    /// </summary>
+    public static async Task<IReadOnlyList<string>> DetectOrphanedContainersAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var (success, output) = await TryRunCommandAsync(
+            "docker",
+            ["ps", "--filter", "name=aiboard-", "--format", "{{.Names}}"],
+            cancellationToken: cancellationToken);
+
+        if (!success || string.IsNullOrWhiteSpace(output))
+            return [];
+
+        return output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList();
     }
 
     /// <summary>
@@ -170,6 +197,21 @@ public static class PrerequisiteValidator
     }
 
     // --- Private helpers ---
+
+    /// <summary>
+    /// Returns true if the Docker CLI is on PATH and the daemon is responsive.
+    /// Uses <c>docker info</c> so a running daemon is required (not just the client).
+    /// </summary>
+    private static async Task<bool> IsDockerAvailableAsync(CancellationToken cancellationToken)
+    {
+        // First confirm the docker executable is on PATH
+        if (!await IsCliAvailableAsync("docker", cancellationToken))
+            return false;
+
+        // Then verify the daemon is running
+        var (success, _) = await TryRunCommandAsync("docker", ["info"], cancellationToken: cancellationToken);
+        return success;
+    }
 
     private static async Task<bool> IsCliAvailableAsync(
         string fileName, CancellationToken cancellationToken)

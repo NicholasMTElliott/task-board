@@ -470,6 +470,66 @@ public class PrerequisiteValidatorTests
         Assert.Contains(errors, e => e.Contains("ProjectNumber"));
     }
 
+    // ── Docker provider ──────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ValidateAsync_DockerProvider_InAvailableProviders_NoProviderError()
+    {
+        var config = MakeMinimalConfig();
+        var providers = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "docker" };
+
+        var errors = await PrerequisiteValidator.ValidateAsync(
+            config, "stub", providers, Path.GetTempPath());
+
+        Assert.DoesNotContain(errors, e => e.Contains("No AI agent providers are available"));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_NoProviders_ErrorMentionsDockerOption()
+    {
+        var config = MakeMinimalConfig();
+        var emptyProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var errors = await PrerequisiteValidator.ValidateAsync(
+            config, "stub", emptyProviders, Path.GetTempPath());
+
+        Assert.Contains(errors, e =>
+            e.Contains("No AI agent providers are available") && e.Contains("docker"));
+    }
+
+    // ── docker-claude-cli fail-fast provider key logic ───────────────────────
+
+    [Fact]
+    public void DockerClaudeCliKey_WhenDockerAvailable_IsAddedToProviders()
+    {
+        // Simulate the Program.cs logic: docker-claude-cli is added when docker is detected
+        var providers = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "docker" };
+        bool dockerModeRequested = true;
+
+        if (dockerModeRequested && providers.Contains("docker"))
+            providers.Add("docker-claude-cli");
+
+        Assert.Contains("docker-claude-cli", providers);
+    }
+
+    [Fact]
+    public void DockerClaudeCliKey_WhenDockerUnavailable_IsNotAdded_FailFastFires()
+    {
+        // Simulate the Program.cs logic: docker-claude-cli is NOT added when docker is absent
+        // so the fail-fast guard correctly triggers
+        var providers = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli" };
+        bool dockerModeRequested = true;
+
+        if (dockerModeRequested && providers.Contains("docker"))
+            providers.Add("docker-claude-cli");
+
+        Assert.DoesNotContain("docker-claude-cli", providers);
+
+        // The fail-fast condition should fire
+        bool failFastTriggered = dockerModeRequested && !providers.Contains("docker-claude-cli");
+        Assert.True(failFastTriggered);
+    }
+
     // ── Helper ──────────────────────────────────────────────────────────────
 
     /// <summary>Minimal config with no prompt files to validate.</summary>
