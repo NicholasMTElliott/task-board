@@ -264,7 +264,7 @@ The default connection string in `appsettings.json` connects to this local insta
 
 ### Build the agent sandbox image (optional)
 
-Only needed if using Docker-based agent execution (in progress — see story #47).
+Only needed if using Docker-based agent execution. See [docs/DockerSandbox.md](docs/DockerSandbox.md) for the full enable-and-verify how-to.
 
 ```powershell
 .\scripts\build-sandbox.ps1
@@ -277,6 +277,8 @@ docker compose --profile build up agent-sandbox
 ```
 
 Build args: `-BaseImage`, `-AgentUid`, `-AgentGid`, `-ClaudeCliVersion`, `-Tag`, `-NoCache`.
+
+To enable the sandbox at runtime, set `AGENT_EXECUTOR=docker`. It is off by default.
 
 ### Run an agent on a card
 
