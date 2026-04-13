@@ -57,7 +57,10 @@ public sealed record SessionRequest(
     string ContainerName,
     /// <summary>Docker image name to start the container from.</summary>
     string ImageName,
-    /// <summary>Volume mounts to attach (host path → container path). Populated by workspace/credential config.</summary>
-    IReadOnlyDictionary<string, string>? Mounts = null,
-    /// <summary>Environment variables to inject into the container.</summary>
+    /// <summary>
+    /// Volume mounts to attach to the container. Populated by <see cref="DockerMountBuilder"/>
+    /// with workspace, base .git, .git override, and credential mounts.
+    /// </summary>
+    IReadOnlyList<DockerMount>? Mounts = null,
+    /// <summary>Environment variables to inject into the container (e.g., GIT_OPTIONAL_LOCKS=0).</summary>
     IReadOnlyDictionary<string, string>? EnvironmentVariables = null);

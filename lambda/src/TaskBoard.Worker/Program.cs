@@ -254,9 +254,18 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
 var agentIdentity = AgentIdentity.Generate();
 builder.Services.AddSingleton(agentIdentity);
 
+// Graceful shutdown coordinator — shared across runners and the Ctrl+C signal handler
+// First Ctrl+C sets IsShutdownRequested (finish current work, then exit)
+// Second Ctrl+C cancels the main CancellationToken for hard abort
+var shutdownCoordinator = new ShutdownCoordinator();
+builder.Services.AddSingleton(shutdownCoordinator);
+
 // Docker agent options (always registered; defaults used when section is absent)
 builder.Services.Configure<DockerAgentOptions>(builder.Configuration.GetSection(DockerAgentOptions.SectionName));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<DockerAgentOptions>>().Value);
+
+// Mount builder: builds workspace/credential mounts for Docker container execution
+builder.Services.AddSingleton<DockerMountBuilder>();
 
 // Agent mode services — resolve GitHub token for authenticated image downloads
 string? ghImageToken = null;
@@ -538,7 +547,19 @@ if (mode == "polling")
     Console.CancelKeyPress += (_, e) =>
     {
         e.Cancel = true;
-        cts.Cancel();
+        if (shutdownCoordinator.RequestShutdown())
+        {
+            // First Ctrl+C — graceful shutdown
+            logger.LogWarning(
+                "Shutdown requested — finishing current work before exiting. " +
+                "Press Ctrl+C again to force quit immediately.");
+        }
+        else
+        {
+            // Second Ctrl+C — hard abort
+            logger.LogWarning("Force shutdown initiated.");
+            cts.Cancel();
+        }
     };
 
     using var scope = host.Services.CreateScope();
@@ -588,7 +609,19 @@ if (mode == "queue")
     Console.CancelKeyPress += (_, e) =>
     {
         e.Cancel = true;
-        cts.Cancel();
+        if (shutdownCoordinator.RequestShutdown())
+        {
+            // First Ctrl+C — graceful shutdown
+            logger.LogWarning(
+                "Shutdown requested — finishing current work before exiting. " +
+                "Press Ctrl+C again to force quit immediately.");
+        }
+        else
+        {
+            // Second Ctrl+C — hard abort
+            logger.LogWarning("Force shutdown initiated.");
+            cts.Cancel();
+        }
     };
 
     using var scope = host.Services.CreateScope();

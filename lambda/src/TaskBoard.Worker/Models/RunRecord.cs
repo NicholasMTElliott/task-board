@@ -14,5 +14,6 @@ public sealed record RunRecord(
     int CompletedSteps = 0,
     TaskBoard.Worker.Clients.AgentOutcome? Outcome = null,
     string? ErrorDetail = null,
+    FailureReason? FailureReason = null,
     DateTimeOffset? StartedAtUtc = null,
     DateTimeOffset? CompletedAtUtc = null);

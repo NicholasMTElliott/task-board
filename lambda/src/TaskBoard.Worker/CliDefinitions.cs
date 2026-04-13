@@ -101,6 +101,11 @@ internal static class CliDefinitions
         Console.WriteLine("  bare/path              relative to the aiboard executable directory");
         Console.WriteLine();
 
+        Console.WriteLine("Shutdown behavior (polling and queue modes):");
+        Console.WriteLine("  Ctrl+C (first)   Graceful shutdown — finishes the current card, then exits.");
+        Console.WriteLine("  Ctrl+C (second)  Force quit — cancels the active operation immediately.");
+        Console.WriteLine();
+
         WriteSection("General", [
             ("--mode <mode>",             "Execution mode: agent, polling, metrics",           null),
             ("--card-id <id>",            "Card/issue number (required for agent mode)",       null),

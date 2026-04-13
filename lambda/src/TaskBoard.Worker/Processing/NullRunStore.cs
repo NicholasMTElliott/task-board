@@ -20,7 +20,7 @@ public sealed class NullRunStore : IRunStore
     public Task UpdateRunProgressAsync(string runId, int completedSteps, CancellationToken ct)
         => Task.CompletedTask;
 
-    public Task CompleteRunAsync(string runId, AgentOutcome outcome, string? errorDetail, CancellationToken ct)
+    public Task CompleteRunAsync(string runId, AgentOutcome outcome, string? errorDetail, FailureReason? failureReason, CancellationToken ct)
         => Task.CompletedTask;
 
     public Task SaveStepResultAsync(StepResultRecord result, CancellationToken ct)

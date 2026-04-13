@@ -290,6 +290,11 @@ Build args: `-BaseImage`, `-AgentUid`, `-AgentGid`, `-ClaudeCliVersion`, `-Tag`,
 .\scripts\run_polling.ps1
 ```
 
+### Graceful shutdown (polling and queue modes)
+
+Press **Ctrl+C once** to request a graceful shutdown — the runner finishes the current card and exits cleanly.
+Press **Ctrl+C twice** to force quit immediately (may leave a card stuck in an in-progress column).
+
 ### Manual invocation with env vars
 
 ```powershell

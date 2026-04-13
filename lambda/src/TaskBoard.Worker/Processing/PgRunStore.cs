@@ -49,16 +49,17 @@ public sealed class PgRunStore(
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task CompleteRunAsync(string runId, AgentOutcome outcome, string? errorDetail, CancellationToken ct)
+    public async Task CompleteRunAsync(string runId, AgentOutcome outcome, string? errorDetail, FailureReason? failureReason, CancellationToken ct)
     {
         await using var conn = await dataSource.OpenConnectionAsync(ct);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            UPDATE agent_run SET outcome = $2, error_detail = $3, completed_at_utc = NOW() WHERE run_id = $1
+            UPDATE agent_run SET outcome = $2, error_detail = $3, failure_reason = $4, completed_at_utc = NOW() WHERE run_id = $1
             """;
         cmd.Parameters.AddWithValue(runId);
         cmd.Parameters.AddWithValue(outcome.ToString());
         cmd.Parameters.AddWithValue(errorDetail is null ? DBNull.Value : (object)errorDetail);
+        cmd.Parameters.AddWithValue(failureReason is null ? DBNull.Value : (object)failureReason.Value.ToString());
         await cmd.ExecuteNonQueryAsync(ct);
 
         logger.LogDebug("Completed agent_run {RunId} with outcome {Outcome}", runId, outcome);

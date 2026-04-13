@@ -17,7 +17,7 @@ public class DockerAgentOptionsTests
         Assert.Equal("", opts.ContainerUser);
         Assert.Null(opts.MemoryLimit);
         Assert.Null(opts.CpuLimit);
-        Assert.Equal("", opts.CredentialPath);
+        Assert.Null(opts.CredentialPath);
         Assert.True(opts.ReuseContainer);
         Assert.Equal("aiboard-run", opts.ContainerNamePrefix);
         Assert.Equal("/mnt/aiboard/prompts", opts.PromptMountPoint);
