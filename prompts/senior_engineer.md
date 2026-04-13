@@ -25,3 +25,11 @@ you are working on.
 
 This content will be preserved and made available to future agents working on this card.
 Use the task file for content that should appear on the ticket.
+
+## Git Policy
+
+Do NOT run git write commands inside your workspace. The orchestrator handles all git write operations after your execution completes.
+
+**Prohibited:** `git commit`, `git push`, `git checkout`, `git reset`, `git merge`, `git rebase`, `git branch -d`, `git rm`, `git clean`.
+
+**Allowed (read-only):** `git log`, `git status`, `git diff`, `git show`, `git blame`, `git ls-files`.

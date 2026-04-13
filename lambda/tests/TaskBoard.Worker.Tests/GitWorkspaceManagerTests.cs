@@ -321,6 +321,80 @@ public class GitWorkspaceManagerTests : IDisposable
         Assert.Contains("new file", diff);
     }
 
+    // ── Git read command tests ────────────────────────────────────────
+    // Verify that read-only git commands work inside a worktree.
+    // The orchestrator-owns-git-writes principle requires that agents
+    // can still read history/state but must not run write commands.
+
+    [Fact]
+    public async Task RunGitAsync_LogInWorktree_ReturnsCommitHistory()
+    {
+        var worktreePath = await _manager.CreateWorktreeAsync(_tempDir, "aiboard/log-test", CancellationToken.None);
+        await File.WriteAllTextAsync(Path.Combine(worktreePath, "feature.cs"), "public class Feature { }");
+        await _manager.CommitAsync(worktreePath, "feat: add feature for log test", CancellationToken.None);
+
+        var (exitCode, stdout, _) = await GitWorkspaceManager.RunGitAsync(
+            worktreePath, ["log", "--oneline", "-1"], CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("feat: add feature for log test", stdout);
+    }
+
+    [Fact]
+    public async Task RunGitAsync_StatusInWorktree_ShowsModifiedFiles()
+    {
+        var worktreePath = await _manager.CreateWorktreeAsync(_tempDir, "aiboard/status-test", CancellationToken.None);
+        await File.WriteAllTextAsync(Path.Combine(worktreePath, "modified.cs"), "// uncommitted change");
+
+        var (exitCode, stdout, _) = await GitWorkspaceManager.RunGitAsync(
+            worktreePath, ["status", "--short"], CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("modified.cs", stdout);
+    }
+
+    [Fact]
+    public async Task RunGitAsync_DiffInWorktree_ShowsChanges()
+    {
+        var worktreePath = await _manager.CreateWorktreeAsync(_tempDir, "aiboard/diff-read-test", CancellationToken.None);
+        await File.WriteAllTextAsync(Path.Combine(worktreePath, ".gitkeep"), "new content here");
+
+        var (exitCode, stdout, _) = await GitWorkspaceManager.RunGitAsync(
+            worktreePath, ["diff"], CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("new content here", stdout);
+    }
+
+    [Fact]
+    public async Task RunGitAsync_ShowInWorktree_ReturnsCommitDetails()
+    {
+        var worktreePath = await _manager.CreateWorktreeAsync(_tempDir, "aiboard/show-test", CancellationToken.None);
+        await File.WriteAllTextAsync(Path.Combine(worktreePath, "show-me.cs"), "public class ShowMe { }");
+        await _manager.CommitAsync(worktreePath, "feat: commit for show test", CancellationToken.None);
+
+        var (exitCode, stdout, _) = await GitWorkspaceManager.RunGitAsync(
+            worktreePath, ["show", "--stat", "HEAD"], CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("show-me.cs", stdout);
+    }
+
+    [Fact]
+    public async Task RunGitAsync_BlameInWorktree_ReturnsLineAnnotations()
+    {
+        var worktreePath = await _manager.CreateWorktreeAsync(_tempDir, "aiboard/blame-test", CancellationToken.None);
+        await File.WriteAllTextAsync(Path.Combine(worktreePath, "blame-me.cs"), "line one\nline two\n");
+        await _manager.CommitAsync(worktreePath, "feat: commit for blame test", CancellationToken.None);
+
+        var (exitCode, stdout, _) = await GitWorkspaceManager.RunGitAsync(
+            worktreePath, ["blame", "blame-me.cs"], CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("line one", stdout);
+        Assert.Contains("line two", stdout);
+    }
+
     // ── Test infrastructure ───────────────────────────────────────────
 
     private static void InitGitRepo(string path)

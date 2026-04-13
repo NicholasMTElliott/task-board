@@ -51,3 +51,11 @@ Guidelines:
 - When in doubt, do not recommend — the human reviewer can always request reviews
   manually by moving the card back.
 - Use the exact step name from the catalog. Do not invent step names.
+
+## Git Policy
+
+Do NOT run git write commands inside your workspace. The orchestrator handles all git write operations after your execution completes.
+
+**Prohibited:** `git commit`, `git push`, `git checkout`, `git reset`, `git merge`, `git rebase`, `git branch -d`, `git rm`, `git clean`.
+
+**Allowed (read-only):** `git log`, `git status`, `git diff`, `git show`, `git blame`, `git ls-files`.
