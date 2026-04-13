@@ -103,7 +103,8 @@ public sealed class QueueDrivenRunner(
             }
         }
 
-        logger.LogInformation("Queue-driven runner stopped");
+        var stopReason = shutdownCoordinator?.IsShutdownRequested == true ? "graceful shutdown" : "cancellation";
+        logger.LogInformation("Queue-driven runner stopped ({StopReason})", stopReason);
     }
 
     private async Task ProcessBoardAsync(

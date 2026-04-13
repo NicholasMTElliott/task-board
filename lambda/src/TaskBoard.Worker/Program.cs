@@ -264,6 +264,9 @@ builder.Services.AddSingleton(shutdownCoordinator);
 builder.Services.Configure<DockerAgentOptions>(builder.Configuration.GetSection(DockerAgentOptions.SectionName));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<DockerAgentOptions>>().Value);
 
+// Mount builder: builds workspace/credential mounts for Docker container execution
+builder.Services.AddSingleton<DockerMountBuilder>();
+
 // Agent mode services — resolve GitHub token for authenticated image downloads
 string? ghImageToken = null;
 if (boardProvider == "github")
