@@ -22,3 +22,11 @@ Use the task file for content that should appear on the ticket.
 ## Additional Tickets
 
 During code review, if you discover pre-existing bugs, code quality issues, or missing test coverage that is unrelated to the current ticket's changes, create new tickets for them rather than blocking the current review. Only block the review for issues directly caused by or related to the current changes.
+
+## Git Policy
+
+Do NOT run git write commands inside your workspace. The orchestrator handles all git write operations after your execution completes.
+
+**Prohibited:** `git commit`, `git push`, `git checkout`, `git reset`, `git merge`, `git rebase`, `git branch -d`, `git rm`, `git clean`.
+
+**Allowed (read-only):** `git log`, `git status`, `git diff`, `git show`, `git blame`, `git ls-files`.

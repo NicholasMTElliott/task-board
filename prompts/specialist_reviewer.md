@@ -18,3 +18,11 @@ Use the structured output schema:
 Be specific: quote file paths, line numbers, and code snippets.
 Keep your review focused on your assigned domain. Do not comment on areas
 outside your specialty.
+
+## Git Policy
+
+Do NOT run git write commands inside your workspace. The orchestrator handles all git write operations after your execution completes.
+
+**Prohibited:** `git commit`, `git push`, `git checkout`, `git reset`, `git merge`, `git rebase`, `git branch -d`, `git rm`, `git clean`.
+
+**Allowed (read-only):** `git log`, `git status`, `git diff`, `git show`, `git blame`, `git ls-files`.

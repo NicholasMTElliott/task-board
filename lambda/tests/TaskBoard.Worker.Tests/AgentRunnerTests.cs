@@ -59,6 +59,7 @@ public class AgentRunnerTests : IDisposable
         CleanupDirectory(_worktreeBase);
         try { RunGitSync(_tempDir, "worktree", "prune"); } catch { }
         CleanupDirectory(_tempDir);
+        CleanupDirectory(_tempDir + "-origin"); // bare remote created by SetupBareRemote (no-op if not created)
     }
 
     private static void CleanupDirectory(string path)
@@ -95,6 +96,70 @@ public class AgentRunnerTests : IDisposable
         var existingBranch = await _gitWorkspaceManager.FindBranchByPrefixAsync(
             _tempDir, TargetCardId, CancellationToken.None);
         Assert.NotNull(existingBranch);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CommitAndPush_Complete_CommitsWithMessageAndPushes()
+    {
+        // Arrange: bare remote so PushAsync has a valid origin
+        var bareRemotePath = SetupBareRemote(_tempDir);
+        SetupBoardCards(ImplListId);
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+
+        // Simulate agent writing code + a commit message file
+        _agentExecutor.OnExecute = (ctx, _) =>
+        {
+            // Write a real code file so CommitAsync has something to commit
+            File.WriteAllText(Path.Combine(ctx.WorkspacePath, "AuthMiddleware.cs"), "public class AuthMiddleware { }");
+            // Write the commit message
+            var commitDir = Path.Combine(ctx.WorkspacePath, ".aiboard");
+            Directory.CreateDirectory(commitDir);
+            File.WriteAllText(Path.Combine(commitDir, "commit.md"), "feat: implement auth middleware");
+        };
+
+        var runner = CreateRunnerWithConfig(BuildImplWorkflowConfig());
+
+        // Act
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Assert: run succeeded
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+
+        // Assert: branch was pushed to bare remote
+        var pushedBranches = RunGitSyncWithOutput(bareRemotePath, "branch");
+        Assert.Contains(TargetCardId, pushedBranches);
+
+        // Assert: commit message was used
+        var branch = await _gitWorkspaceManager.FindBranchByPrefixAsync(_tempDir, TargetCardId, CancellationToken.None);
+        Assert.NotNull(branch);
+        var (_, logOutput, _) = await GitWorkspaceManager.RunGitAsync(
+            _tempDir, ["log", branch, "--oneline", "-1"], CancellationToken.None);
+        Assert.Contains("feat: implement auth middleware", logOutput);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CommitAndPush_NeedsInfo_CommitsLocallyButDoesNotPush()
+    {
+        // Arrange: bare remote so we can verify no push occurred
+        var bareRemotePath = SetupBareRemote(_tempDir);
+        SetupBoardCards(ImplListId);
+        _agentExecutor.NextOutcome = AgentOutcome.NEEDS_INFO;
+
+        var runner = CreateRunnerWithConfig(BuildImplWorkflowConfig());
+
+        // Act
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Assert: run returned NEEDS_INFO
+        Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
+
+        // Assert: branch exists locally (commit was made)
+        var branch = await _gitWorkspaceManager.FindBranchByPrefixAsync(_tempDir, TargetCardId, CancellationToken.None);
+        Assert.NotNull(branch);
+
+        // Assert: branch was NOT pushed to bare remote
+        var remoteBranches = RunGitSyncWithOutput(bareRemotePath, "branch");
+        Assert.DoesNotContain(TargetCardId, remoteBranches);
     }
 
     [Fact]
@@ -633,6 +698,19 @@ public class AgentRunnerTests : IDisposable
                 ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
                     new List<string> { "Technical Design", "Decisions" }),
             });
+    }
+
+    /// <summary>
+    /// Creates a local bare git repository and adds it as "origin" on the given repo.
+    /// Returns the path to the bare repo so tests can inspect pushed branches.
+    /// </summary>
+    private static string SetupBareRemote(string repoPath)
+    {
+        var bareRemotePath = repoPath + "-origin";
+        Directory.CreateDirectory(bareRemotePath);
+        RunGitSync(bareRemotePath, "init", "--bare");
+        RunGitSync(repoPath, "remote", "add", "origin", bareRemotePath);
+        return bareRemotePath;
     }
 
     private static WorkflowConfig BuildImplWorkflowConfig()

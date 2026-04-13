@@ -7,3 +7,11 @@ Key principles:
 - Consider: scope of code changes, number of components touched, testing complexity, risk of regressions, and unknowns.
 - Prefer powers of 2 (1, 2, 4, 8). Use interim values (3, 5, 6) only when you are confident the task falls clearly between two powers.
 - If the estimate would be 16 or higher, flag that the ticket may be too large to implement as a single unit of work and should be considered for splitting.
+
+## Git Policy
+
+Do NOT run git write commands inside your workspace. The orchestrator handles all git write operations after your execution completes.
+
+**Prohibited:** `git commit`, `git push`, `git checkout`, `git reset`, `git merge`, `git rebase`, `git branch -d`, `git rm`, `git clean`.
+
+**Allowed (read-only):** `git log`, `git status`, `git diff`, `git show`, `git blame`, `git ls-files`.

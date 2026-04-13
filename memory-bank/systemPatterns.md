@@ -130,6 +130,19 @@ Agent execution uses git worktrees for isolated working directories:
 - `.aiboard/` task files are gitignored and ephemeral — not committed to git
 - Main repo working tree is never modified during agent execution
 
+### Orchestrator-Owns-Git-Writes
+All git write operations (commit, push) are performed by the orchestrator on the host AFTER the agent (and any Docker container) has exited. Agents must not run git write commands.
+
+- `AgentRunner.HandleGitBehaviorAsync` is the primary git write path; runs post-execution after session disposal
+- `gitBehavior: "commit_and_push"` — orchestrator commits then pushes on COMPLETE; commits locally only on non-COMPLETE
+- `gitBehavior: "commit_only"` — orchestrator commits without pushing
+- `gitBehavior: "discard"` — no git writes; unexpected agent changes are discarded with a warning
+- Agent commit message is read from `.aiboard/commit.md` in the worktree; falls back to auto-generated message
+- **Docker enforcement:** base `.git` directory mounted read-only — git writes physically impossible inside container
+- **Non-Docker enforcement:** "Git Policy" section in all system prompts prohibits write commands
+- All system prompts include "Git Policy" prohibiting: `git commit`, `git push`, `git checkout`, `git reset`, `git merge`, `git rebase`, `git branch -d`, `git rm`, `git clean`
+- Read-only commands (`git log`, `git status`, `git diff`, `git show`, `git blame`) are allowed inside the container
+
 ### Cross-Reference Resolution
 Task files can reference other cards (e.g., `#5`, `#12`). The `CrossReferenceResolver` parses these, fetches referenced cards, and includes them in the agent's workspace. This creates tracked relationships so dependent context flows through the pipeline.
 

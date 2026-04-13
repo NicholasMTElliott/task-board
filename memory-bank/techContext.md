@@ -97,6 +97,7 @@ Requires: `gh` CLI authenticated with `project` + `repo` scopes.
 - ✅ Docker workspace and credential mounting: `DockerMountBuilder` produces 4 bind mounts (worktree RW at `/workspace`, base `.git` RO at `/repo/.git`, `.git` file override for container-internal gitdir path, credentials RO); `DockerMountContext` injects `GIT_OPTIONAL_LOCKS=0` and provides path translation; agents do NO git writes — always-RO `.git` enforces this at mount level; `NormalizeHostPath` handles Windows backslash paths
 - ✅ Explicit container stop/kill on `DockerAgentExecutor` timeout or cancellation: `docker stop -t 30` (30s grace) then `docker rm -f` fallback; best-effort (never throws); `CancellationToken.None` for cleanup commands
 - ✅ Image download authentication via `gh auth token` for GitHub user-attachment URLs
+- ✅ Orchestrator-owns-git-writes: all git write operations (commit, push) are performed by `AgentRunner.HandleGitBehaviorAsync` on the host after agent/container exit; agents must not run git write commands; Docker enforces via RO `.git` mount; all 7 system prompts enforce via "Git Policy" section; agents may use read-only git commands freely
 - ✅ Two-phase graceful shutdown (`ShutdownCoordinator`): first Ctrl+C sets `IsShutdownRequested` flag and cancels `IdleToken` (interrupts idle delays); second Ctrl+C fires hard `CancellationToken` cancel; runner loops check flag before claiming new work; `AgentRunner` inter-step check commits+pushes partial work and restores card on shutdown; applies to polling and queue modes only
 
 ## Open Technical Decisions

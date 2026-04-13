@@ -393,7 +393,7 @@ public sealed partial class AgentRunner(
                     }
 
                     await SafeDbCallAsync(() => runStore.CompleteRunAsync(
-                        runId, AgentOutcome.COMPLETE, "Shutdown requested — partial work preserved", cancellationToken));
+                        runId, AgentOutcome.COMPLETE, "Shutdown requested — partial work preserved", null, cancellationToken));
                     return new AgentRunResult(AgentOutcome.COMPLETE,
                         "Shutdown requested — partial work preserved and card returned to trigger column for re-processing");
                 }
@@ -807,6 +807,12 @@ public sealed partial class AgentRunner(
     /// Handles git operations based on the stage's gitBehavior config.
     /// Returns an optional note to include in the agent comment.
     /// </summary>
+    /// <remarks>
+    /// This method runs on the orchestrator host AFTER the agent (and any Docker container)
+    /// has exited. All git write operations (commit, push) are intentionally orchestrator-side —
+    /// agents must not run git write commands during execution. For Docker execution, the base
+    /// .git directory is mounted read-only, physically enforcing this constraint.
+    /// </remarks>
     private async Task<string?> HandleGitBehaviorAsync(
         string gitBehavior,
         string worktreePath,

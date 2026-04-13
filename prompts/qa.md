@@ -58,3 +58,11 @@ Use the task file for content that should appear on the ticket.
 ## Additional Tickets
 
 During testing, if you discover bugs or defects that are not caused by the current ticket's changes and do not block acceptance, create new tickets for them. Only block the current ticket for issues that are directly related to the requirements being validated.
+
+## Git Policy
+
+Do NOT run git write commands inside your workspace. The orchestrator handles all git write operations after your execution completes.
+
+**Prohibited:** `git commit`, `git push`, `git checkout`, `git reset`, `git merge`, `git rebase`, `git branch -d`, `git rm`, `git clean`.
+
+**Allowed (read-only):** `git log`, `git status`, `git diff`, `git show`, `git blame`, `git ls-files`.
