@@ -19,6 +19,16 @@ public sealed class DockerAgentExecutor(
     // Claude CLI is installed at this path inside the aiboard-sandbox image (#61).
     private const string ContainerClaudeExecutable = "claude";
 
+    // Grace period passed to `docker stop -t` (seconds before SIGKILL is sent).
+    internal const int StopGracePeriodSeconds = 30;
+
+    // ProcessRunner timeout for the `docker stop` command itself — must exceed
+    // StopGracePeriodSeconds so the docker CLI has time to complete its grace period.
+    internal const int StopCommandTimeoutSeconds = StopGracePeriodSeconds + 5;
+
+    // ProcessRunner timeout for the `docker rm -f` fallback command.
+    internal const int RemoveCommandTimeoutSeconds = 10;
+
     public async Task<AgentResult> ExecuteAsync(
         AgentExecutionContext context, CancellationToken cancellationToken)
     {
@@ -56,7 +66,20 @@ public sealed class DockerAgentExecutor(
                 envVarsToRemove: ["CLAUDECODE"],
                 agentName: $"Docker agent ({containerName})");
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (TimeoutException)
+        {
+            await StopAndRemoveContainerAsync(containerName);
+            AgentOutputParser.LogReproductionInfo(
+                logger, "Docker/Claude", DockerExecutable, dockerArgs,
+                userPrompt, context.WorkspacePath);
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            await StopAndRemoveContainerAsync(containerName);
+            throw;
+        }
+        catch (Exception)
         {
             AgentOutputParser.LogReproductionInfo(
                 logger, "Docker/Claude", DockerExecutable, dockerArgs,
@@ -140,6 +163,84 @@ public sealed class DockerAgentExecutor(
             "Docker agent complete, outcome={Outcome}, detail={Detail}, questions={QuestionCount}",
             resultWithLog.Outcome, resultWithLog.Detail ?? "(none)", resultWithLog.Questions?.Count ?? 0);
         return resultWithLog;
+    }
+
+    /// <summary>
+    /// Best-effort container cleanup: issues <c>docker stop -t {StopGracePeriodSeconds}</c>
+    /// and, if that fails, falls back to <c>docker rm -f</c>. Uses
+    /// <see cref="CancellationToken.None"/> because the caller's token may already be
+    /// cancelled. Never throws — failures are logged as warnings.
+    /// </summary>
+    internal async Task StopAndRemoveContainerAsync(string containerName)
+    {
+        logger.LogWarning(
+            "Issuing explicit docker stop for container {ContainerName} after timeout/cancellation",
+            containerName);
+        try
+        {
+            int stopExitCode;
+            try
+            {
+                (stopExitCode, _, _) = await ProcessRunner.RunProcessAsync(
+                    DockerExecutable,
+                    ["stop", "-t", StopGracePeriodSeconds.ToString(), containerName],
+                    Path.GetTempPath(),
+                    StopCommandTimeoutSeconds,
+                    CancellationToken.None,
+                    agentName: $"docker stop {containerName}");
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "docker stop for container {ContainerName} threw an exception; proceeding to docker rm -f",
+                    containerName);
+                stopExitCode = -1;
+            }
+
+            if (stopExitCode == 0)
+            {
+                // Container stopped cleanly; --rm will remove it automatically on exit.
+                logger.LogWarning(
+                    "Container {ContainerName} stopped successfully", containerName);
+                return;
+            }
+
+            logger.LogWarning(
+                "docker stop for container {ContainerName} exited {ExitCode}; issuing docker rm -f",
+                containerName, stopExitCode);
+
+            int rmExitCode;
+            try
+            {
+                (rmExitCode, _, _) = await ProcessRunner.RunProcessAsync(
+                    DockerExecutable,
+                    ["rm", "-f", containerName],
+                    Path.GetTempPath(),
+                    RemoveCommandTimeoutSeconds,
+                    CancellationToken.None,
+                    agentName: $"docker rm -f {containerName}");
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "docker rm -f for container {ContainerName} threw an exception; container may be orphaned",
+                    containerName);
+                return;
+            }
+
+            if (rmExitCode == 0)
+                logger.LogWarning("Container {ContainerName} removed via docker rm -f", containerName);
+            else
+                logger.LogWarning(
+                    "docker rm -f for container {ContainerName} exited {ExitCode}; container may be orphaned",
+                    containerName, rmExitCode);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Unexpected error during cleanup for container {ContainerName}; container may be orphaned",
+                containerName);
+        }
     }
 
     /// <summary>
