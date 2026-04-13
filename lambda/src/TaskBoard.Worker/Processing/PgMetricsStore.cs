@@ -22,9 +22,7 @@ public sealed class PgMetricsStore(
                 COUNT(*) FILTER (WHERE outcome = 'COMPLETE')                         AS complete_runs,
                 COUNT(*) FILTER (WHERE outcome = 'NEEDS_INFO')                       AS needs_info_runs,
                 COUNT(*) FILTER (WHERE outcome = 'ERROR')                            AS error_runs,
-                COUNT(*) FILTER (WHERE outcome = 'ERROR' AND (
-                    error_detail ILIKE '%rate limit%' OR
-                    error_detail ILIKE '%overloaded%'))                              AS rate_limited_runs
+                COUNT(*) FILTER (WHERE failure_reason = 'RATE_LIMIT')               AS rate_limited_runs
             FROM agent_run
             WHERE completed_at_utc IS NOT NULL
               AND ($1::timestamptz IS NULL OR started_at_utc >= $1)

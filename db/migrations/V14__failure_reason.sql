@@ -1,4 +1,4 @@
--- V13: Add failure_reason enum column to agent_run
+-- V14: Add failure_reason enum column to agent_run
 -- Adds a structured failure_reason column to replace ILIKE string matching
 -- in v_run_metrics for categorising error types.
 
