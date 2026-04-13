@@ -88,6 +88,7 @@ public class PollingRunnerTests
             TestConfig,
             new AgentIdentity("Test", "Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
+            Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var pollingRunner = new PollingRunner(
@@ -139,6 +140,7 @@ public class PollingRunnerTests
             TestConfig,
             new AgentIdentity("Test", "Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
+            Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var pollingRunner = new PollingRunner(
@@ -196,6 +198,7 @@ public class PollingRunnerTests
             TestConfig,
             new AgentIdentity("Test", "Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
+            Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var pollingRunner = new PollingRunner(
@@ -272,6 +275,7 @@ public class PollingRunnerTests
             config,
             new AgentIdentity("Test", "Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
+            Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         // Resolver only has "claude-cli", not "codex"
@@ -357,6 +361,7 @@ public class PollingRunnerTests
             config,
             new AgentIdentity("Test", "Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
+            Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var resolverWithClaudeOnly = new AgentExecutorResolver(
@@ -438,6 +443,7 @@ public class PollingRunnerTests
             TestConfig,
             new AgentIdentity("Test", "Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
+            Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var completionRunner = new CompletionRunner(
@@ -492,6 +498,7 @@ public class PollingRunnerTests
             TestConfig,
             new AgentIdentity("Test", "Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
+            Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var completionRunner2 = new CompletionRunner(
@@ -546,6 +553,7 @@ public class PollingRunnerTests
             TestConfig,
             new AgentIdentity("Test", "Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
+            Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var fakeLogger = new FakeLogger<PollingRunner>();
@@ -625,6 +633,7 @@ public class PollingRunnerTests
             config,
             new AgentIdentity("Test", "Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
+            Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
 
         var completionRunner = new CompletionRunner(

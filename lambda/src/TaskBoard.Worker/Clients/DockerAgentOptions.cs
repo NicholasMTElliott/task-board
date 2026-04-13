@@ -5,7 +5,7 @@ namespace TaskBoard.Worker.Clients;
 /// </summary>
 public sealed class DockerAgentOptions
 {
-    public const string SectionName = "DockerAgent";
+    public const string SectionName = "Docker";
 
     /// <summary>
     /// When true (default), a Docker container is created before the first step and reused
@@ -14,11 +14,8 @@ public sealed class DockerAgentOptions
     /// </summary>
     public bool ReuseContainer { get; set; } = true;
 
-    /// <summary>
-    /// Docker image name to use when creating agent execution containers.
-    /// Must include Claude CLI and required tooling.
-    /// </summary>
-    public string ImageName { get; set; } = "aiboard-agent:latest";
+    /// <summary>Docker image to use for the agent container.</summary>
+    public string ImageName { get; set; } = "aiboard-agent-sandbox:latest";
 
     /// <summary>Prefix for auto-generated container names: {prefix}-{cardId}-{suffix}.</summary>
     public string ContainerNamePrefix { get; set; } = "aiboard-run";
@@ -34,6 +31,21 @@ public sealed class DockerAgentOptions
 
     /// <summary>Timeout in seconds before the container is killed.</summary>
     public int TimeoutSeconds { get; set; } = 900;
+
+    /// <summary>User to run as inside the container. Empty = use image default.</summary>
+    public string ContainerUser { get; set; } = "";
+
+    /// <summary>Optional container memory limit (e.g., "4g"). Null = no limit.</summary>
+    public string? MemoryLimit { get; set; }
+
+    /// <summary>Optional CPU limit (e.g., "2.0"). Null = no limit.</summary>
+    public string? CpuLimit { get; set; }
+
+    /// <summary>
+    /// Container network mode. Default "host" allows web access.
+    /// Use "none" for full network isolation.
+    /// </summary>
+    public string NetworkMode { get; set; } = "host";
 
     /// <summary>
     /// Additional volume mounts passed to <c>docker run -v</c>.

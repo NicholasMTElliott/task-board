@@ -202,6 +202,27 @@ public class GitWorkspaceManagerTests : IDisposable
     }
 
     [Fact]
+    public void ResolveWorktreePath_UsesConfiguredBase()
+    {
+        var managerWithBase = new GitWorkspaceManager(
+            NullLogger<GitWorkspaceManager>.Instance,
+            worktreeBasePath: "/custom/worktrees");
+
+        var path = managerWithBase.ResolveWorktreePath("/repo/root", "aiboard/card-123");
+        var expected = Path.Combine("/custom/worktrees", "aiboard", "card-123");
+        Assert.Equal(expected, path);
+    }
+
+    [Fact]
+    public void ResolveWorktreePath_FallsBackToDefault_WhenNoBaseConfigured()
+    {
+        // _manager was created without a worktreeBasePath
+        var path = _manager.ResolveWorktreePath("/repo/root", "aiboard/card-123");
+        var expected = Path.Combine("/repo/root-worktrees", "aiboard", "card-123");
+        Assert.Equal(expected, path);
+    }
+
+    [Fact]
     public async Task HasStagedChangesAsync_NoChanges_ReturnsFalse()
     {
         var result = await _manager.HasStagedChangesAsync(_tempDir, CancellationToken.None);

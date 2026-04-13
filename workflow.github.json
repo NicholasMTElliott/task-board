@@ -139,8 +139,7 @@
         ],
         "NEEDS_INFO": "Design Questions",
         "ERROR": "Error",
-        "GATE_FAIL": "Ready for Design",
-        "MERGE_CONFLICT": "Ready for Implementation"
+        "GATE_FAIL": "Ready for Design"
       }
     },
     "Designing": {
