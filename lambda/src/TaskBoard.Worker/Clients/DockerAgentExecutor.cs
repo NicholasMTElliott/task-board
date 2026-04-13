@@ -10,7 +10,8 @@ namespace TaskBoard.Worker.Clients;
 /// </summary>
 public sealed class DockerAgentExecutor(
     IOptions<DockerAgentOptions> options,
-    ILogger<DockerAgentExecutor> logger) : IAgentExecutor
+    ILogger<DockerAgentExecutor> logger,
+    DockerMountBuilder? mountBuilder = null) : IAgentExecutor
 {
     private readonly DockerAgentOptions _options = options.Value;
 
@@ -30,116 +31,144 @@ public sealed class DockerAgentExecutor(
             context.TargetCardId, context.WorkspacePath,
             context.Model, _options.ImageName, containerName);
 
-        var taskFilePath = Processing.TaskFileManager.GetTaskFilePath(
-            context.WorkspacePath, context.TargetCardId, context.TargetCardTitle);
+        // Build workspace/credential mount context if a mount builder is available
+        DockerMountContext? mountContext = null;
+        if (mountBuilder is not null)
+        {
+            try
+            {
+                mountContext = await mountBuilder.BuildAsync(
+                    context.WorkspacePath, _options, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Failed to build mount context for card {CardId} — proceeding without workspace mounts",
+                    context.TargetCardId);
+            }
+        }
 
-        var userPrompt = ClaudeAgentExecutor.BuildUserPrompt(context, taskFilePath);
-
-        // Translate system prompt file path: mount host directory into container
-        var (hostPromptDir, containerPromptPath) = TranslateSystemPromptPath(
-            context.SystemPromptFilePath);
-
-        var claudeArgs = BuildClaudeArgumentList(context, containerPromptPath);
-        var dockerArgs = BuildDockerArgumentList(containerName, hostPromptDir, claudeArgs);
-
-        logger.LogDebug("Docker command: {Executable} {Args}",
-            DockerExecutable, ProcessRunner.FormatArgsForLogging(dockerArgs));
-
-        int exitCode;
-        string stdout, stderr;
         try
         {
-            (exitCode, stdout, stderr) = await ProcessRunner.RunProcessAsync(
-                DockerExecutable, dockerArgs, context.WorkspacePath,
-                _options.TimeoutSeconds, cancellationToken,
-                stdinData: userPrompt,
-                envVarsToRemove: ["CLAUDECODE"],
-                agentName: $"Docker agent ({containerName})");
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            AgentOutputParser.LogReproductionInfo(
-                logger, "Docker/Claude", DockerExecutable, dockerArgs,
-                userPrompt, context.WorkspacePath);
-            throw;
-        }
+            // Translate task file path to container-side path when a workspace is mounted
+            var taskFilePath = Processing.TaskFileManager.GetTaskFilePath(
+                context.WorkspacePath, context.TargetCardId, context.TargetCardTitle);
+            var containerTaskFilePath = mountContext?.TranslatePath(taskFilePath) ?? taskFilePath;
 
-        if (exitCode != 0)
-        {
-            // Check for rate limiting from Claude CLI stderr before classifying as Docker error
-            if (!IsDockerExitCode(exitCode) && ClaudeAgentExecutor.IsRateLimited(stderr))
+            var userPrompt = ClaudeAgentExecutor.BuildUserPrompt(context, containerTaskFilePath);
+
+            // Translate system prompt file path: mount host directory into container
+            var (hostPromptDir, containerPromptPath) = TranslateSystemPromptPath(
+                context.SystemPromptFilePath);
+
+            var claudeArgs = BuildClaudeArgumentList(context, containerPromptPath);
+            var dockerArgs = BuildDockerArgumentList(
+                containerName, hostPromptDir, claudeArgs, mountContext);
+
+            logger.LogDebug("Docker command: {Executable} {Args}",
+                DockerExecutable, ProcessRunner.FormatArgsForLogging(dockerArgs));
+
+            int exitCode;
+            string stdout, stderr;
+            try
             {
-                var snippet = stderr[..Math.Min(500, stderr.Length)].Trim();
-                logger.LogWarning(
-                    "Docker/Claude rate limited for card {CardId}. Exit code {ExitCode}. Stderr: {Stderr}",
-                    context.TargetCardId, exitCode, snippet);
-                throw new RateLimitException(
-                    $"Docker/Claude rate limited (exit code {exitCode}). Stderr: {snippet}",
-                    RateLimitSource.AgentCli);
+                (exitCode, stdout, stderr) = await ProcessRunner.RunProcessAsync(
+                    DockerExecutable, dockerArgs, context.WorkspacePath,
+                    _options.TimeoutSeconds, cancellationToken,
+                    stdinData: userPrompt,
+                    envVarsToRemove: ["CLAUDECODE"],
+                    agentName: $"Docker agent ({containerName})");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                AgentOutputParser.LogReproductionInfo(
+                    logger, "Docker/Claude", DockerExecutable, dockerArgs,
+                    userPrompt, context.WorkspacePath);
+                throw;
             }
 
-            logger.LogError(
-                "Docker agent exited with code {ExitCode}. Stderr: {Stderr}. Stdout: {Stdout}",
-                exitCode, stderr, stdout[..Math.Min(500, stdout.Length)]);
-
-            AgentOutputParser.LogReproductionInfo(
-                logger, "Docker/Claude", DockerExecutable, dockerArgs,
-                userPrompt, context.WorkspacePath);
-
-            var stderrSnippet = stderr[..Math.Min(1000, stderr.Length)].Trim();
-            var stdoutSnippet = stdout[..Math.Min(500, stdout.Length)].Trim();
-
-            var exitSource = IsDockerExitCode(exitCode) ? "Docker" : "Claude CLI";
-            var detail = new StringBuilder($"{exitSource} exited with code {exitCode}.");
-            if (!string.IsNullOrEmpty(stderrSnippet))
-                detail.Append($"\nStderr: {stderrSnippet}");
-            if (!string.IsNullOrEmpty(stdoutSnippet))
-                detail.Append($"\nStdout: {stdoutSnippet}");
-
-            throw new InvalidOperationException(detail.ToString());
-        }
-
-        if (string.IsNullOrWhiteSpace(stdout))
-        {
-            if (ClaudeAgentExecutor.IsRateLimited(stderr))
+            if (exitCode != 0)
             {
-                var snippet = stderr[..Math.Min(500, stderr.Length)].Trim();
-                logger.LogWarning(
-                    "Docker/Claude rate limited for card {CardId} (exit code 0, empty output). Stderr: {Stderr}",
-                    context.TargetCardId, snippet);
-                throw new RateLimitException(
-                    $"Docker/Claude rate limited (exit code 0, empty output). Stderr: {snippet}",
-                    RateLimitSource.AgentCli);
+                // Check for rate limiting from Claude CLI stderr before classifying as Docker error
+                if (!IsDockerExitCode(exitCode) && ClaudeAgentExecutor.IsRateLimited(stderr))
+                {
+                    var snippet = stderr[..Math.Min(500, stderr.Length)].Trim();
+                    logger.LogWarning(
+                        "Docker/Claude rate limited for card {CardId}. Exit code {ExitCode}. Stderr: {Stderr}",
+                        context.TargetCardId, exitCode, snippet);
+                    throw new RateLimitException(
+                        $"Docker/Claude rate limited (exit code {exitCode}). Stderr: {snippet}",
+                        RateLimitSource.AgentCli);
+                }
+
+                logger.LogError(
+                    "Docker agent exited with code {ExitCode}. Stderr: {Stderr}. Stdout: {Stdout}",
+                    exitCode, stderr, stdout[..Math.Min(500, stdout.Length)]);
+
+                AgentOutputParser.LogReproductionInfo(
+                    logger, "Docker/Claude", DockerExecutable, dockerArgs,
+                    userPrompt, context.WorkspacePath);
+
+                var stderrSnippet = stderr[..Math.Min(1000, stderr.Length)].Trim();
+                var stdoutSnippet = stdout[..Math.Min(500, stdout.Length)].Trim();
+
+                var exitSource = IsDockerExitCode(exitCode) ? "Docker" : "Claude CLI";
+                var detail = new StringBuilder($"{exitSource} exited with code {exitCode}.");
+                if (!string.IsNullOrEmpty(stderrSnippet))
+                    detail.Append($"\nStderr: {stderrSnippet}");
+                if (!string.IsNullOrEmpty(stdoutSnippet))
+                    detail.Append($"\nStdout: {stdoutSnippet}");
+
+                throw new InvalidOperationException(detail.ToString());
             }
 
-            logger.LogError("Docker agent returned empty output. Stderr: {Stderr}", stderr);
-            AgentOutputParser.LogReproductionInfo(
-                logger, "Docker/Claude", DockerExecutable, dockerArgs,
-                userPrompt, context.WorkspacePath);
-            throw new InvalidOperationException(
-                $"Docker/Claude returned empty output. Stderr: {stderr[..Math.Min(500, stderr.Length)].Trim()}");
+            if (string.IsNullOrWhiteSpace(stdout))
+            {
+                if (ClaudeAgentExecutor.IsRateLimited(stderr))
+                {
+                    var snippet = stderr[..Math.Min(500, stderr.Length)].Trim();
+                    logger.LogWarning(
+                        "Docker/Claude rate limited for card {CardId} (exit code 0, empty output). Stderr: {Stderr}",
+                        context.TargetCardId, snippet);
+                    throw new RateLimitException(
+                        $"Docker/Claude rate limited (exit code 0, empty output). Stderr: {snippet}",
+                        RateLimitSource.AgentCli);
+                }
+
+                logger.LogError("Docker agent returned empty output. Stderr: {Stderr}", stderr);
+                AgentOutputParser.LogReproductionInfo(
+                    logger, "Docker/Claude", DockerExecutable, dockerArgs,
+                    userPrompt, context.WorkspacePath);
+                throw new InvalidOperationException(
+                    $"Docker/Claude returned empty output. Stderr: {stderr[..Math.Min(500, stderr.Length)].Trim()}");
+            }
+
+            logger.LogDebug("Docker agent raw stdout ({Length} chars):\n{Stdout}",
+                stdout.Length, stdout[..Math.Min(10000, stdout.Length)]);
+
+            var (resultJson, conversationLog) = AgentOutputParser.ParseStreamOutput(stdout, logger);
+
+            if (!string.IsNullOrEmpty(conversationLog))
+            {
+                logger.LogInformation("Docker agent conversation ({Length} chars):\n{Log}",
+                    conversationLog.Length, conversationLog[..Math.Min(5000, conversationLog.Length)]);
+            }
+
+            var result = resultJson is not null
+                ? AgentOutputParser.ParseResult(resultJson)
+                : AgentOutputParser.ParseResult(stdout);
+
+            var resultWithLog = result with { ConversationLog = conversationLog };
+            logger.LogInformation(
+                "Docker agent complete, outcome={Outcome}, detail={Detail}, questions={QuestionCount}",
+                resultWithLog.Outcome, resultWithLog.Detail ?? "(none)", resultWithLog.Questions?.Count ?? 0);
+            return resultWithLog;
         }
-
-        logger.LogDebug("Docker agent raw stdout ({Length} chars):\n{Stdout}",
-            stdout.Length, stdout[..Math.Min(10000, stdout.Length)]);
-
-        var (resultJson, conversationLog) = AgentOutputParser.ParseStreamOutput(stdout, logger);
-
-        if (!string.IsNullOrEmpty(conversationLog))
+        finally
         {
-            logger.LogInformation("Docker agent conversation ({Length} chars):\n{Log}",
-                conversationLog.Length, conversationLog[..Math.Min(5000, conversationLog.Length)]);
+            if (mountContext is not null)
+                await mountContext.DisposeAsync();
         }
-
-        var result = resultJson is not null
-            ? AgentOutputParser.ParseResult(resultJson)
-            : AgentOutputParser.ParseResult(stdout);
-
-        var resultWithLog = result with { ConversationLog = conversationLog };
-        logger.LogInformation(
-            "Docker agent complete, outcome={Outcome}, detail={Detail}, questions={QuestionCount}",
-            resultWithLog.Outcome, resultWithLog.Detail ?? "(none)", resultWithLog.Questions?.Count ?? 0);
-        return resultWithLog;
     }
 
     /// <summary>
@@ -181,10 +210,18 @@ public sealed class DockerAgentExecutor(
     /// Builds the full argument list for <c>docker run</c>, including volume mounts,
     /// image name, and the Claude CLI invocation.
     /// </summary>
+    /// <param name="containerName">Generated container name.</param>
+    /// <param name="hostPromptDir">Host directory containing system prompt files (mounted read-only).</param>
+    /// <param name="claudeArgs">Claude CLI arguments.</param>
+    /// <param name="mountContext">
+    /// Optional workspace mount context from <see cref="DockerMountBuilder"/>.
+    /// When provided, adds workspace/git/.git-override/credential mounts, env vars, and <c>-w /workspace</c>.
+    /// </param>
     internal string[] BuildDockerArgumentList(
         string containerName,
         string hostPromptDir,
-        string[] claudeArgs)
+        string[] claudeArgs,
+        DockerMountContext? mountContext = null)
     {
         var args = new List<string>
         {
@@ -193,6 +230,29 @@ public sealed class DockerAgentExecutor(
             "-i",      // Attach stdin (required for prompt passthrough)
             "--name", containerName,
         };
+
+        // Workspace, git, and credential mounts from DockerMountBuilder
+        if (mountContext is not null)
+        {
+            foreach (var mount in mountContext.Mounts)
+            {
+                args.Add("-v");
+                var spec = $"{mount.HostPath}:{mount.ContainerPath}";
+                if (mount.ReadOnly) spec += ":ro";
+                args.Add(spec);
+            }
+
+            // Environment variables (e.g., GIT_OPTIONAL_LOCKS=0)
+            foreach (var (key, value) in mountContext.EnvironmentVariables)
+            {
+                args.Add("-e");
+                args.Add($"{key}={value}");
+            }
+
+            // Set container working directory to the mounted worktree
+            args.Add("-w");
+            args.Add(DockerMountBuilder.WorkspaceMountPoint);
+        }
 
         // Mount the system prompt directory read-only
         if (!string.IsNullOrEmpty(hostPromptDir))
