@@ -44,7 +44,7 @@ Webhook → Cloudflare Worker → PGMQ on Neon → .NET EventProcessor → Orche
 ## Core Design Patterns
 
 ### State Machine
-Board columns (GitHub Projects status field / Trello lists) are the authoritative state of a card. Each column maps to exactly one role or manual gate. The AgentRunner determines transitions deterministically based on workflow config.
+Board columns (GitHub Projects status field / Trello lists) are the authoritative state of a card. By default, each state key in the workflow config equals the column name. With `WorkflowState.Column`, multiple states can share a single column, disambiguated by card filters (field values, assignee, labels). The centralized `WorkflowConfig.ResolveState(BoardCard)` method replaces all direct dictionary lookups — it matches card column name to effective column, evaluates filters, and throws `InvalidOperationException` on ambiguity. The AgentRunner determines transitions deterministically based on workflow config.
 
 ### Multi-Step Execution
 States can define multiple sequential steps, each with its own role (and therefore model) and task prompt. Steps execute in order within the same worktree. Communication between steps happens via:
@@ -380,11 +380,16 @@ Applies to `--mode polling` and `--mode queue` (not agent mode — single card, 
 | SinceParser | Parses `--since` time strings (e.g., `7d`, `24h`, `1w`) into UTC DateTime offsets |
 | PrerequisiteValidator | Startup validation of providers, board config, and prompt files |
 | CardSelector / CardFilterEvaluator | Polling card selection and filtering logic |
+| WorkflowConfig.ResolveState | Centralized state resolution: matches card column + evaluates filters; replaces all direct `States.TryGetValue` lookups; throws on ambiguity |
+| WorkflowConfig.GetEffectiveColumn | Returns state's effective column name (explicit `Column` property or state key fallback) |
+| WorkflowConfig.FindStatesByColumn | Returns all states whose effective column matches a given name |
+| WorkflowConfig.GetTerminalColumnNames | Returns distinct effective column names for all terminal states (use instead of `GetTerminalStateNames` for column comparisons) |
 | ShutdownCoordinator | Thread-safe two-phase Ctrl+C shutdown: `IsShutdownRequested` flag + `IdleToken`; singleton shared by `Program.cs`, runners, and `AgentRunner` |
 | SystemSleepInhibitor | Prevents OS sleep during polling (Windows/Mac/Linux) |
 | PromptBuilder | Assembles system + task prompts for agent execution |
 | workflow.github.json | Workflow config for GitHub Projects (active) |
 | workflow.v1.json | Workflow config for Trello (legacy) |
+| workflow.simple.example.json | Example config demonstrating shared-column multi-phase workflow (5 phases sharing "Ready" column, disambiguated by Activity field + assignee filters) |
 
 ## Workflow Configuration
 **File-based** — `workflow.github.json` or `workflow.v1.json`, selected via `WORKFLOW_CONFIG_PATH` env var.
@@ -393,8 +398,9 @@ Schema:
 ```json
 {
   "states": {
-    "<column_name>": {
+    "<state_key>": {
       "name": "<display_name>",
+      "column": "<board_column_name>",
       "gateType": "agent_run | manual_gate | manual_entry | in_progress | holding | terminal | system_merge | children_complete",
       "gitBehavior": "discard | commit_only | commit_and_push",
       "providerParams": { "<key>": "<value>" },
@@ -435,6 +441,7 @@ Schema:
 }
 ```
 
+- `column`: optional board column name for the state; if omitted, falls back to the state key (backward compatible). Use when multiple states share a single board column — each state must then have `filters` to disambiguate. `WorkflowConfig.ResolveState(BoardCard)` uses `GetEffectiveColumn` + filter evaluation to resolve. Throws on ambiguity (multiple states pass filters for the same card).
 - `steps` array replaces legacy top-level `role`/`taskPrompt` (auto-normalized on load)
 - `taskPromptFile` takes precedence over `taskPrompt` (inline fallback preserved)
 - `systemPromptFile` takes precedence over `systemPrompt`
@@ -445,7 +452,9 @@ Schema:
 - `updateParentSum` transition action sums a field across all `sub_item` children and sets the result on the parent
 - `completeParentIfReady` transition action checks if the card's parent has all children in terminal states and transitions the parent if so; posts a progress comment otherwise
 - New ticket front matter supports `estimate:` field — value is set on the created card and summed for parent rollup
-- State keys are column names for GitHub Projects or list IDs for Trello
+- State keys are column names for GitHub Projects or list IDs for Trello (unless `column` property is set)
+- Validator enforces: if multiple states share a column and any has an actionable gate type (`agent_run`, `system_merge`, `children_complete`), all states on that column must have `filters`
+- `--mode agent --state <stateId>` CLI parameter overrides filter-based resolution for direct card invocation
 
 ## Roles
 
