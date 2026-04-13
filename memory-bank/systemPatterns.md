@@ -485,6 +485,7 @@ Schema:
 | started_at_utc | Run start time |
 | completed_at_utc | Run end time (nullable) |
 | outcome | COMPLETE / NEEDS_INFO / ERROR (nullable) |
+| failure_reason | Structured failure category for ERROR outcomes: `RATE_LIMIT`, `AGENT_ERROR`, `INFRASTRUCTURE`, `TIMEOUT` (nullable; NULL for non-error outcomes) |
 | estimate | Story point estimate captured from the estimation step (nullable) |
 | session_startup_ms | Time (ms) to create and start the Docker container for a session-based run (nullable; NULL = no session) |
 
@@ -501,15 +502,15 @@ Schema:
 | completed_at_utc | Step end time (nullable) |
 | session_exec_ms | Time (ms) for this step's execution via `docker exec` (nullable; NULL = no session or non-Docker executor) |
 
-### SQL Views (metrics, V12)
+### SQL Views (metrics, V12/V14)
 | View | Description |
 |------|-------------|
-| `v_run_metrics` | One row per completed run; derived `duration_seconds`, `is_complete`, `is_error`, `is_rate_limited` |
+| `v_run_metrics` | One row per completed run; derived `duration_seconds`, `is_complete`, `is_error`, `is_rate_limited`; `failure_reason` projected; `is_rate_limited` uses `failure_reason = 'RATE_LIMIT'` (V14) |
 | `v_step_duration` | One row per completed step; `duration_seconds` derived |
 | `v_card_metrics` | Per-card aggregates: cycle time, working time, waiting time |
 | `v_card_rework` | Cards/states re-entered more than once; `WHERE outcome IS NOT NULL` to exclude in-progress runs |
 
-Rate-limit detection in `v_run_metrics` uses `error_detail ILIKE '%rate limit%' OR error_detail ILIKE '%overloaded%'` (string matching; structured `failure_reason` column deferred to a follow-up ticket).
+Rate-limit detection in `v_run_metrics` and `PgMetricsStore.GetRunSummaryAsync` uses `failure_reason = 'RATE_LIMIT'` (structured enum; V14 replaced the prior ILIKE string-matching approach). Note: `is_rate_limited` returns NULL (not FALSE) for legacy rows where `failure_reason IS NULL` — `COUNT FILTER` treats NULL as false, so aggregates are unaffected.
 
 ### queue tables (PGMQ, legacy)
 | Table | Purpose |
