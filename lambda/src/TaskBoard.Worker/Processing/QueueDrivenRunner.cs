@@ -19,7 +19,8 @@ public sealed class QueueDrivenRunner(
     ICardClaimService cardClaim,
     AgentIdentity agentIdentity,
     IOptions<PgmqOptions> pgmqOptions,
-    ILogger<QueueDrivenRunner> logger)
+    ILogger<QueueDrivenRunner> logger,
+    ShutdownCoordinator? shutdownCoordinator = null)
 {
     private static readonly TimeSpan QueuePollInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan FallbackBoardPollInterval = TimeSpan.FromMinutes(10);
@@ -39,7 +40,14 @@ public sealed class QueueDrivenRunner(
 
         var lastBoardPoll = DateTimeOffset.MinValue;
 
-        while (!cancellationToken.IsCancellationRequested)
+        // Linked token cancelled by either hard-cancel or graceful-shutdown idle signal.
+        // Used for idle delays only — board processing still uses cancellationToken.
+        using var idleCts = shutdownCoordinator is not null
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, shutdownCoordinator.IdleToken)
+            : null;
+        var idleToken = idleCts?.Token ?? cancellationToken;
+
+        while (!cancellationToken.IsCancellationRequested && shutdownCoordinator?.IsShutdownRequested != true)
         {
             try
             {
@@ -80,7 +88,7 @@ public sealed class QueueDrivenRunner(
                         lastBoardPoll = DateTimeOffset.UtcNow;
                     }
 
-                    await Task.Delay(QueuePollInterval, cancellationToken);
+                    await Task.Delay(QueuePollInterval, idleToken);
                 }
             }
             catch (OperationCanceledException)
@@ -90,7 +98,7 @@ public sealed class QueueDrivenRunner(
             catch (Exception ex)
             {
                 logger.LogError(ex, "Queue-driven runner cycle failed");
-                try { await Task.Delay(QueuePollInterval, cancellationToken); }
+                try { await Task.Delay(QueuePollInterval, idleToken); }
                 catch (OperationCanceledException) { break; }
             }
         }
@@ -125,6 +133,16 @@ public sealed class QueueDrivenRunner(
 
         foreach (var card in selection.Eligible)
         {
+            // Do not claim new cards when graceful shutdown has been requested.
+            // Already-claimed in-flight cards (running in Task.WhenAll) are allowed to finish.
+            if (shutdownCoordinator?.IsShutdownRequested == true)
+            {
+                logger.LogInformation(
+                    "Shutdown requested — skipping claim for card {CardId} ({Title})",
+                    card.Id, card.Title);
+                continue;
+            }
+
             var claimed = await cardClaim.TryClaimAsync(card.Id, agentIdentity.DisplayName, cancellationToken);
             if (!claimed)
             {
