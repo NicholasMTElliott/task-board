@@ -9,7 +9,8 @@ ALTER TABLE agent_run ADD CONSTRAINT agent_run_failure_reason_check
     CHECK (failure_reason IS NULL OR failure_reason IN ('RATE_LIMIT', 'AGENT_ERROR', 'INFRASTRUCTURE', 'TIMEOUT'));
 
 -- ── 2. Update v_run_metrics to use failure_reason instead of ILIKE ────────────
-CREATE OR REPLACE VIEW v_run_metrics AS
+DROP VIEW IF EXISTS v_run_metrics;
+CREATE VIEW v_run_metrics AS
 SELECT
     run_id,
     card_id,

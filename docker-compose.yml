@@ -24,13 +24,14 @@ services:
         condition: service_healthy
     volumes:
       - ./db/migrations:/flyway/sql:ro
-    command: >-
-      -url=jdbc:postgresql://postgres:5432/aiboard
-      -user=aiboard
-      -password=aiboard
-      -locations=filesystem:/flyway/sql
-      -connectRetries=5
-      migrate
+    command:
+      - -url=jdbc:postgresql://postgres:5432/aiboard
+      - -user=aiboard
+      - -password=aiboard
+      - -locations=filesystem:/flyway/sql
+      - -connectRetries=5
+      - migrate
+    restart: "no"
 
   grafana:
     image: grafana/grafana:latest
