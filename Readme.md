@@ -336,6 +336,18 @@ dotnet run --project lambda/src/TaskBoard.Worker -- --mode metrics --card-id 3
 
 ---
 
+## Multi-Tenant Database
+
+Multiple projects (different GitHub repos/projects, Trello boards) can share one Postgres instance without conflicting. Every per-tenant table (`agent_run`, `step_result`, `card_state`, `processed_events`) carries a `tenant_id` column as the leading PK; metrics views project it; stores filter on it.
+
+The tenant identifier is `{provider}:{identifier}` — for example `github:NicholasMTElliott/kva/4` or `trello:abc123`. It's resolved from the merged configuration at startup (`GitHubProjects:Owner/Repo/ProjectNumber` or `Trello:BoardId`); missing required values fail the startup with a diagnostic naming the offending key. Each worker process is single-tenant — to run two projects against one DB, run two processes with different `.aiboard/` configs.
+
+Docker container names also embed an 8-char tenant hash (`aiboard-{hash}-{cardId}-…`) so concurrent runs across tenants with the same numeric card ID never collide.
+
+PGMQ queues are not yet tenant-scoped (queue mode is legacy/secondary).
+
+---
+
 ## Cost Strategy
 
 Idle cost: $0. Costs scale only when an agent executes (LLM tokens are the primary cost driver).

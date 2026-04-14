@@ -77,7 +77,7 @@ internal static class CliDefinitions
     }
 
     public static bool ShouldShowHelp(string[] args) =>
-        args.Length == 0 || Array.Exists(args, a => a is "--help" or "-h" or "-?");
+        Array.Exists(args, a => a is "--help" or "-h" or "-?");
 
     public static void PrintHelp()
     {
@@ -90,10 +90,12 @@ internal static class CliDefinitions
         Console.WriteLine("  aiboard --mode polling --board-id 1 --workspace .");
         Console.WriteLine("  aiboard --mode metrics [--card-id 3] [--since 7d]");
         Console.WriteLine("  aiboard --config project-a.json --mode polling");
+        Console.WriteLine("  aiboard                               (uses ./.aiboard/appsettings.json + ./.aiboard/workflow.json)");
         Console.WriteLine();
         Console.WriteLine("All options can also be set via appsettings.json, appsettings.user.json,");
         Console.WriteLine("a --config file, or environment variables (e.g. GitHubProjects__Repo).");
-        Console.WriteLine("Precedence: appsettings < --config < appsettings.user < env vars < CLI args.");
+        Console.WriteLine("Precedence (lowest -> highest):");
+        Console.WriteLine("  exe-dir < cwd/.aiboard < cwd < --config < env vars < CLI args");
         Console.WriteLine();
         Console.WriteLine("Path resolution for --config, --prompt-root, --workflow-config,");
         Console.WriteLine("--workspace, --worktree-base:");

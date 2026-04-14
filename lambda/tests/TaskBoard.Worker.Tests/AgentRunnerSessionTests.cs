@@ -150,6 +150,7 @@ public class AgentRunnerSessionTests : IDisposable
                 NullLogger<UpdateFileProcessor>.Instance),
             _runStore,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
+            TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             NullLogger<AgentRunner>.Instance,
             dockerOptions);
     }
@@ -598,7 +599,9 @@ public class AgentRunnerSessionTests : IDisposable
         // Assert: request has correct card ID, run ID, and container name convention
         Assert.NotNull(capturedRequest);
         Assert.Equal(CardId, capturedRequest!.CardId);
-        Assert.Equal($"aiboard-{CardId}", capturedRequest.ContainerName);
+        // Container name format: aiboard-{tenantShortHash}-{cardId}
+        Assert.StartsWith("aiboard-", capturedRequest.ContainerName);
+        Assert.EndsWith($"-{CardId}", capturedRequest.ContainerName);
         Assert.False(string.IsNullOrEmpty(capturedRequest.RunId));
         Assert.False(string.IsNullOrEmpty(capturedRequest.ImageName));
     }
@@ -781,6 +784,7 @@ public class AgentRunnerSessionIntegrationTests : IDisposable
                 NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
+            TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             NullLogger<AgentRunner>.Instance,
             new DockerAgentOptions { ReuseContainer = true });
 

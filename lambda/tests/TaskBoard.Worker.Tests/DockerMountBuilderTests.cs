@@ -500,7 +500,7 @@ public class DockerMountBuilderTests : IDisposable
             ImageName = "aiboard-test:latest",
             PromptMountPoint = "/mnt/prompts",
         });
-        var executor = new DockerAgentExecutor(opts, NullLogger<DockerAgentExecutor>.Instance);
+        var executor = new DockerAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerAgentExecutor>.Instance);
 
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
@@ -521,7 +521,7 @@ public class DockerMountBuilderTests : IDisposable
     public async Task BuildDockerArgumentList_WithMountContext_SetsWorkingDirectory()
     {
         var opts = Options.Create(new DockerAgentOptions { ImageName = "aiboard-test:latest" });
-        var executor = new DockerAgentExecutor(opts, NullLogger<DockerAgentExecutor>.Instance);
+        var executor = new DockerAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerAgentExecutor>.Instance);
 
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
@@ -539,7 +539,7 @@ public class DockerMountBuilderTests : IDisposable
     public async Task BuildDockerArgumentList_WithMountContext_InjectsGitOptionalLocksEnvVar()
     {
         var opts = Options.Create(new DockerAgentOptions { ImageName = "aiboard-test:latest" });
-        var executor = new DockerAgentExecutor(opts, NullLogger<DockerAgentExecutor>.Instance);
+        var executor = new DockerAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerAgentExecutor>.Instance);
 
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
@@ -557,7 +557,7 @@ public class DockerMountBuilderTests : IDisposable
     public void BuildDockerArgumentList_WithoutMountContext_NoWorkingDirectoryFlag()
     {
         var opts = Options.Create(new DockerAgentOptions { ImageName = "aiboard-test:latest" });
-        var executor = new DockerAgentExecutor(opts, NullLogger<DockerAgentExecutor>.Instance);
+        var executor = new DockerAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerAgentExecutor>.Instance);
 
         var args = executor.BuildDockerArgumentList("test-container", "/host/prompts", [], mountContext: null);
 
@@ -614,6 +614,7 @@ public class DockerMountBuilderTests : IDisposable
                 NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
+            TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             NullLogger<AgentRunner>.Instance,
             dockerOptions: new DockerAgentOptions { ReuseContainer = true, CredentialPath = "nonexistent-path" },
             mountBuilder: Builder);

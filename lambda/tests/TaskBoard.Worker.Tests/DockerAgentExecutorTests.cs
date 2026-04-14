@@ -20,7 +20,7 @@ public class DockerAgentExecutorTests
             ContainerNamePrefix = "aiboard-run",
             AdditionalMounts = additionalMounts ?? [],
         });
-        return new DockerAgentExecutor(opts,
+        return new DockerAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             NullLogger<DockerAgentExecutor>.Instance);
     }
 
@@ -349,7 +349,9 @@ public class DockerAgentExecutorTests
         var executor = CreateExecutor();
         var name = executor.BuildContainerName("42");
 
-        Assert.StartsWith("aiboard-run-42-", name);
+        // Format: {prefix}-{tenantHash}-{cardId}-{random8}
+        Assert.StartsWith("aiboard-run-", name);
+        Assert.Contains("-42-", name);
     }
 
     [Fact]

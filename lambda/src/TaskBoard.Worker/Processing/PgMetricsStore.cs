@@ -1,4 +1,5 @@
 using Npgsql;
+using TaskBoard.Worker.Clients;
 
 namespace TaskBoard.Worker.Processing;
 
@@ -10,6 +11,7 @@ namespace TaskBoard.Worker.Processing;
 /// </summary>
 public sealed class PgMetricsStore(
     NpgsqlDataSource dataSource,
+    ITenantIdentifier tenant,
     ILogger<PgMetricsStore> logger) : IMetricsStore
 {
     public async Task<RunSummary> GetRunSummaryAsync(DateTimeOffset? since, CancellationToken ct)
@@ -24,9 +26,11 @@ public sealed class PgMetricsStore(
                 COUNT(*) FILTER (WHERE outcome = 'ERROR')                            AS error_runs,
                 COUNT(*) FILTER (WHERE failure_reason = 'RATE_LIMIT')               AS rate_limited_runs
             FROM agent_run
-            WHERE completed_at_utc IS NOT NULL
-              AND ($1::timestamptz IS NULL OR started_at_utc >= $1)
+            WHERE tenant_id = $1
+              AND completed_at_utc IS NOT NULL
+              AND ($2::timestamptz IS NULL OR started_at_utc >= $2)
             """;
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(since.HasValue ? (object)since.Value : DBNull.Value);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -60,12 +64,14 @@ public sealed class PgMetricsStore(
                 COUNT(*)                                                             AS total_runs,
                 MAX(estimate)                                                        AS estimate
             FROM agent_run
-            WHERE completed_at_utc IS NOT NULL
-              AND ($1::text IS NULL OR card_id = $1)
-              AND ($2::timestamptz IS NULL OR started_at_utc >= $2)
+            WHERE tenant_id = $1
+              AND completed_at_utc IS NOT NULL
+              AND ($2::text IS NULL OR card_id = $2)
+              AND ($3::timestamptz IS NULL OR started_at_utc >= $3)
             GROUP BY card_id
             ORDER BY MIN(started_at_utc) DESC
             """;
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(cardId is not null ? (object)cardId : DBNull.Value);
         cmd.Parameters.AddWithValue(since.HasValue ? (object)since.Value : DBNull.Value);
 
@@ -102,11 +108,13 @@ public sealed class PgMetricsStore(
                 model,
                 EXTRACT(EPOCH FROM (completed_at_utc - started_at_utc)) AS duration_seconds
             FROM step_result
-            WHERE completed_at_utc IS NOT NULL
-              AND ($1::timestamptz IS NULL OR started_at_utc >= $1)
+            WHERE tenant_id = $1
+              AND completed_at_utc IS NOT NULL
+              AND ($2::timestamptz IS NULL OR started_at_utc >= $2)
             ORDER BY duration_seconds DESC
-            LIMIT $2
+            LIMIT $3
             """;
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(since.HasValue ? (object)since.Value : DBNull.Value);
         cmd.Parameters.AddWithValue(top);
 
@@ -134,12 +142,14 @@ public sealed class PgMetricsStore(
         cmd.CommandText = """
             SELECT card_id, state_name, COUNT(*) AS entry_count, COUNT(*) - 1 AS rework_count
             FROM agent_run
-            WHERE outcome IS NOT NULL
-              AND ($1::timestamptz IS NULL OR started_at_utc >= $1)
+            WHERE tenant_id = $1
+              AND outcome IS NOT NULL
+              AND ($2::timestamptz IS NULL OR started_at_utc >= $2)
             GROUP BY card_id, state_name
             HAVING COUNT(*) > 1
             ORDER BY rework_count DESC, card_id
             """;
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(since.HasValue ? (object)since.Value : DBNull.Value);
 
         var results = new List<CardRework>();
@@ -181,10 +191,11 @@ public sealed class PgMetricsStore(
                     card_id,
                     estimate
                 FROM agent_run
-                WHERE outcome IS NOT NULL
+                WHERE tenant_id = $1
+                  AND outcome IS NOT NULL
                   AND completed_at_utc IS NOT NULL
                   AND estimate IS NOT NULL
-                  AND ($1::timestamptz IS NULL OR started_at_utc >= $1)
+                  AND ($2::timestamptz IS NULL OR started_at_utc >= $2)
                 ORDER BY card_id, started_at_utc DESC
             ),
             card_cycle AS (
@@ -195,8 +206,9 @@ public sealed class PgMetricsStore(
                         AS cycle_time_seconds
                 FROM agent_run ar
                 JOIN latest_estimate le ON ar.card_id = le.card_id
-                WHERE ar.completed_at_utc IS NOT NULL
-                  AND ($1::timestamptz IS NULL OR ar.started_at_utc >= $1)
+                WHERE ar.tenant_id = $1
+                  AND ar.completed_at_utc IS NOT NULL
+                  AND ($2::timestamptz IS NULL OR ar.started_at_utc >= $2)
                 GROUP BY ar.card_id, le.estimate
             ),
             per_point AS (
@@ -209,6 +221,7 @@ public sealed class PgMetricsStore(
                 COALESCE(STDDEV(cycle_time_per_point), 0) AS stddev_seconds_per_point
             FROM per_point
             """;
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(since.HasValue ? (object)since.Value : DBNull.Value);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);

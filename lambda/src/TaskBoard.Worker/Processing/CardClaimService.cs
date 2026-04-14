@@ -8,6 +8,7 @@ namespace TaskBoard.Worker.Processing;
 public sealed class CardClaimService(
     NpgsqlDataSource dataSource,
     IOptions<PgmqOptions> options,
+    ITenantIdentifier tenant,
     ILogger<CardClaimService> logger) : ICardClaimService
 {
     private readonly int _staleMinutes = options.Value.StaleClaimMinutes;
@@ -19,7 +20,8 @@ public sealed class CardClaimService(
         // Ensure the card_state row exists
         await using (var upsert = conn.CreateCommand())
         {
-            upsert.CommandText = "INSERT INTO card_state (card_id) VALUES ($1) ON CONFLICT (card_id) DO NOTHING";
+            upsert.CommandText = "INSERT INTO card_state (tenant_id, card_id) VALUES ($1, $2) ON CONFLICT (tenant_id, card_id) DO NOTHING";
+            upsert.Parameters.AddWithValue(tenant.Value);
             upsert.Parameters.AddWithValue(cardId);
             await upsert.ExecuteNonQueryAsync(cancellationToken);
         }
@@ -28,13 +30,15 @@ public sealed class CardClaimService(
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             UPDATE card_state
-            SET current_lock = $1, claimed_at = NOW(), updated_at_utc = NOW()
-            WHERE card_id = $2
-              AND (current_lock IS NULL OR claimed_at < NOW() - make_interval(mins => $3))
+            SET current_lock = $3, claimed_at = NOW(), updated_at_utc = NOW()
+            WHERE tenant_id = $1
+              AND card_id = $2
+              AND (current_lock IS NULL OR claimed_at < NOW() - make_interval(mins => $4))
             RETURNING card_id
             """;
-        cmd.Parameters.AddWithValue(agentId);
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(cardId);
+        cmd.Parameters.AddWithValue(agentId);
         cmd.Parameters.AddWithValue(_staleMinutes);
 
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
@@ -56,8 +60,9 @@ public sealed class CardClaimService(
         cmd.CommandText = """
             UPDATE card_state
             SET current_lock = NULL, claimed_at = NULL, updated_at_utc = NOW()
-            WHERE card_id = $1 AND current_lock = $2
+            WHERE tenant_id = $1 AND card_id = $2 AND current_lock = $3
             """;
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(cardId);
         cmd.Parameters.AddWithValue(agentId);
 

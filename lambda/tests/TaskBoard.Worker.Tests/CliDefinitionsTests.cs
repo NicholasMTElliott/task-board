@@ -121,9 +121,11 @@ public class CliDefinitionsTests
     // ── ShouldShowHelp ───────────────────────────────────────────────────────
 
     [Fact]
-    public void ShouldShowHelp_NoArgs_ReturnsTrue()
+    public void ShouldShowHelp_NoArgs_ReturnsFalse()
     {
-        Assert.True(CliDefinitions.ShouldShowHelp([]));
+        // No-args is now a valid invocation (config sources supply Mode etc.).
+        // Only explicit help flags should trigger the help screen.
+        Assert.False(CliDefinitions.ShouldShowHelp([]));
     }
 
     [Theory]

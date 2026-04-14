@@ -12,6 +12,7 @@ namespace TaskBoard.Worker.Processing;
 /// </summary>
 public sealed class PgRunStore(
     NpgsqlDataSource dataSource,
+    ITenantIdentifier tenant,
     ILogger<PgRunStore> logger) : IRunStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -24,9 +25,10 @@ public sealed class PgRunStore(
         await using var conn = await dataSource.OpenConnectionAsync(ct);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO agent_run (run_id, card_id, state_name, agent_identity, git_branch, total_steps, started_at_utc)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO agent_run (tenant_id, run_id, card_id, state_name, agent_identity, git_branch, total_steps, started_at_utc)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             """;
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(run.RunId);
         cmd.Parameters.AddWithValue(run.CardId);
         cmd.Parameters.AddWithValue(run.StateName);
@@ -43,7 +45,8 @@ public sealed class PgRunStore(
     {
         await using var conn = await dataSource.OpenConnectionAsync(ct);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE agent_run SET completed_steps = $2 WHERE run_id = $1";
+        cmd.CommandText = "UPDATE agent_run SET completed_steps = $3 WHERE tenant_id = $1 AND run_id = $2";
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(runId);
         cmd.Parameters.AddWithValue(completedSteps);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -54,8 +57,10 @@ public sealed class PgRunStore(
         await using var conn = await dataSource.OpenConnectionAsync(ct);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            UPDATE agent_run SET outcome = $2, error_detail = $3, failure_reason = $4, completed_at_utc = NOW() WHERE run_id = $1
+            UPDATE agent_run SET outcome = $3, error_detail = $4, failure_reason = $5, completed_at_utc = NOW()
+            WHERE tenant_id = $1 AND run_id = $2
             """;
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(runId);
         cmd.Parameters.AddWithValue(outcome.ToString());
         cmd.Parameters.AddWithValue(errorDetail is null ? DBNull.Value : (object)errorDetail);
@@ -78,12 +83,13 @@ public sealed class PgRunStore(
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             INSERT INTO step_result
-                (run_id, card_id, state_name, step_name, step_index, role, model,
+                (tenant_id, run_id, card_id, state_name, step_name, step_index, role, model,
                  outcome, summary, detail, reference_content, conversation_log,
                  questions, requested_steps, started_at_utc, completed_at_utc, session_exec_ms)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $16, $17)
-            ON CONFLICT (run_id, step_name) DO NOTHING
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16, $17, $18)
+            ON CONFLICT (tenant_id, run_id, step_name) DO NOTHING
             """;
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(result.RunId);
         cmd.Parameters.AddWithValue(result.CardId);
         cmd.Parameters.AddWithValue(result.StateName);
@@ -122,10 +128,12 @@ public sealed class PgRunStore(
                    outcome, summary, detail, reference_content, conversation_log,
                    questions, requested_steps, started_at_utc, completed_at_utc, session_exec_ms
             FROM step_result
-            WHERE card_id = $1
-              AND ($2::text IS NULL OR state_name = $2)
+            WHERE tenant_id = $1
+              AND card_id = $2
+              AND ($3::text IS NULL OR state_name = $3)
             ORDER BY completed_at_utc DESC
             """;
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(cardId);
         cmd.Parameters.AddWithValue(stateName is null ? DBNull.Value : (object)stateName);
 
@@ -145,11 +153,13 @@ public sealed class PgRunStore(
             FROM step_result sr
             INNER JOIN (
                 SELECT run_id FROM agent_run
-                WHERE card_id = $1 AND state_name = $2
+                WHERE tenant_id = $1 AND card_id = $2 AND state_name = $3
                 ORDER BY started_at_utc DESC LIMIT 1
             ) ar ON sr.run_id = ar.run_id
+            WHERE sr.tenant_id = $1
             ORDER BY sr.step_index
             """;
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(cardId);
         cmd.Parameters.AddWithValue(stateName);
 
@@ -201,7 +211,8 @@ public sealed class PgRunStore(
     {
         await using var conn = await dataSource.OpenConnectionAsync(ct);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE agent_run SET estimate = $2 WHERE run_id = $1";
+        cmd.CommandText = "UPDATE agent_run SET estimate = $3 WHERE tenant_id = $1 AND run_id = $2";
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(runId);
         cmd.Parameters.AddWithValue(estimate);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -213,7 +224,8 @@ public sealed class PgRunStore(
     {
         await using var conn = await dataSource.OpenConnectionAsync(ct);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE agent_run SET session_startup_ms = $2 WHERE run_id = $1";
+        cmd.CommandText = "UPDATE agent_run SET session_startup_ms = $3 WHERE tenant_id = $1 AND run_id = $2";
+        cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(runId);
         cmd.Parameters.AddWithValue(startupMs);
         await cmd.ExecuteNonQueryAsync(ct);

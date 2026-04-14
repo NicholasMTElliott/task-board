@@ -10,6 +10,7 @@ namespace TaskBoard.Worker.Clients;
 /// </summary>
 public sealed class DockerAgentExecutor(
     IOptions<DockerAgentOptions> options,
+    ITenantIdentifier tenant,
     ILogger<DockerAgentExecutor> logger,
     DockerMountBuilder? mountBuilder = null) : IAgentExecutor
 {
@@ -304,7 +305,7 @@ public sealed class DockerAgentExecutor(
     internal string BuildContainerName(string cardId)
     {
         var suffix = Guid.NewGuid().ToString("N")[..8];
-        return $"{_options.ContainerNamePrefix}-{cardId}-{suffix}";
+        return $"{_options.ContainerNamePrefix}-{tenant.ShortHash}-{cardId}-{suffix}";
     }
 
     /// <summary>

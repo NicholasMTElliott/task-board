@@ -17,6 +17,7 @@ public sealed partial class AgentRunner(
     UpdateFileProcessor updateFileProcessor,
     IRunStore runStore,
     ImageDownloader imageDownloader,
+    ITenantIdentifier tenant,
     ILogger<AgentRunner> logger,
     DockerAgentOptions? dockerOptions = null,
     DockerMountBuilder? mountBuilder = null,
@@ -1342,7 +1343,7 @@ public sealed partial class AgentRunner(
         if (executor is not ISessionableAgentExecutor sessionableExecutor)
             return null;
 
-        var containerName = $"aiboard-{cardId}";
+        var containerName = $"aiboard-{tenant.ShortHash}-{cardId}";
         var imageName = dockerOptions?.ImageName ?? "aiboard-agent:latest";
         var request = new SessionRequest(
             CardId: cardId,

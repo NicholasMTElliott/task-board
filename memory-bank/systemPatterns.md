@@ -321,6 +321,33 @@ Ready for Design → Designed → Ready for Implementation → ... → Approved 
 - If siblings are pending → posts/updates a progress comment on the parent (stable marker, upserted in place)
 - `CompletionRunner` still exists for other `children_complete` use cases but is not used in the story-to-task flow
 
+### Multi-Tenant DB Partitioning
+Multiple projects (different GitHub repos/projects, Trello boards) can share one Postgres instance without colliding or blending data. Every per-tenant table carries a `tenant_id` column as the leading PK; every store query filters on it.
+
+**`ITenantIdentifier`** — process-lifetime singleton resolved once at DI registration:
+- `Value` — canonical `{provider}:{identifier}` string (e.g. `github:owner/repo/4`, `trello:abc123`, `stub:test`)
+- `Provider` — bare prefix (`github`, `trello`, `stub`)
+- `ShortHash` — 8-char lowercase hex of `SHA256(Value)`; used where the full string is too long or character-restricted (Docker container names; future PGMQ queue names)
+
+**`TenantIdentifierFactory.Create(boardProvider, ghOpts, trelloOpts, stubName)`** — fail-fast resolution:
+- `github` → requires `Owner`, `Repo`, `ProjectNumber`; throws `InvalidOperationException` naming the missing config key
+- `trello` / `live` → requires `Trello:BoardId`
+- `stub` (and unrecognised providers) → uses `Stub:TenantName` or defaults to `"test"`
+
+Resolved during service registration in `Program.cs` so missing required config aborts startup before the host runs (no untenanted rows can be written).
+
+**Tables partitioned (V15):** `agent_run`, `step_result`, `card_state`, `processed_events` — all have `tenant_id TEXT NOT NULL` as the leading PK column. Indexes lead with `tenant_id`. `step_result` FK is composite `(tenant_id, run_id) → agent_run(tenant_id, run_id)`.
+
+**Views (V16):** `v_run_metrics`, `v_step_duration`, `v_card_metrics`, `v_card_rework` all project `tenant_id` so callers can scope queries.
+
+**Stores:** `PgRunStore`, `PgMetricsStore`, `CardClaimService` inject `ITenantIdentifier`; every INSERT carries `tenant_id`, every SELECT/UPDATE filters on it (including run-id-keyed updates — prevents cross-tenant clobbering).
+
+**Docker container naming:** `DockerAgentExecutor.BuildContainerName` emits `{prefix}-{tenantHash}-{cardId}-{rand}`; `AgentRunner` session container is `aiboard-{tenantHash}-{cardId}`. Two tenants with the same numeric `card_id` produce different container names. Orphaned-container detection still matches the `aiboard-` prefix.
+
+**Not (yet) tenant-scoped:** PGMQ queues (`events`, `pings`) remain global; queue mode is legacy/secondary. `ITenantIdentifier.ShortHash` is the intended suffix when this is addressed.
+
+**Migration path:** V15 drops & recreates tables (no data preserved by design); V16 recreates the four metrics views.
+
 ### Rate Limiting
 - `ClaudeAgentExecutor` and `DockerAgentExecutor` detect rate limits via stderr analysis (checks for "rate limit" / "overloaded")
 - `GitHubProjectsClient` detects GitHub API rate limits (HTTP 429, "abuse detection", "secondary rate")
@@ -374,8 +401,9 @@ Applies to `--mode polling` and `--mode queue` (not agent mode — single card, 
 | TaskFileManager | Write board cards as `.aiboard/tasks/{id}.md` files + comments files |
 | UpdateFileProcessor | Processes `.aiboard/updates/` files for child ticket creation and cross-card comments |
 | CrossReferenceResolver | Parse card references, fetch dependent cards |
-| IRunStore / PgRunStore | Agent run and step result persistence (PostgreSQL); NullRunStore for no-op |
-| IMetricsStore / PgMetricsStore | Read-only analytical queries over agent_run + step_result; NullMetricsStore for no-op |
+| ITenantIdentifier / TenantIdentifierFactory | Process-lifetime tenant identity (`{provider}:{id}`); fail-fast resolution from board provider config; injected into all per-tenant DB stores and Docker container naming |
+| IRunStore / PgRunStore | Agent run and step result persistence (PostgreSQL); writes/reads scoped to `tenant_id`; NullRunStore for no-op |
+| IMetricsStore / PgMetricsStore | Read-only analytical queries over agent_run + step_result; scoped to `tenant_id`; NullMetricsStore for no-op |
 | MetricsRunner | CLI metrics mode: queries IMetricsStore and formats output for `--mode metrics` |
 | SinceParser | Parses `--since` time strings (e.g., `7d`, `24h`, `1w`) into UTC DateTime offsets |
 | PrerequisiteValidator | Startup validation of providers, board config, and prompt files |
@@ -498,10 +526,13 @@ Schema:
 
 ## Database Tables
 
+All per-tenant tables carry `tenant_id TEXT NOT NULL` as the leading PK column (V15). Format: `{provider}:{identifier}` (e.g. `github:owner/repo/4`).
+
 ### agent_run (run tracking)
 | Column | Description |
 |--------|-------------|
-| id | UUID (PK) |
+| tenant_id | Tenant scope (PK with run_id) |
+| run_id | TEXT (PK with tenant_id) |
 | card_id | Card ID |
 | state_name | Workflow state that triggered the run |
 | started_at_utc | Run start time |
@@ -511,12 +542,15 @@ Schema:
 | estimate | Story point estimate captured from the estimation step (nullable) |
 | session_startup_ms | Time (ms) to create and start the Docker container for a session-based run (nullable; NULL = no session) |
 
+Indexes: `(tenant_id, card_id)`, `(tenant_id, card_id, state_name)`, `(tenant_id, started_at_utc)`.
+
 ### step_result (step tracking)
 | Column | Description |
 |--------|-------------|
+| tenant_id | Tenant scope |
 | id | UUID (PK) |
-| agent_run_id | FK to agent_run |
-| step_name | Step name within the run |
+| run_id | FK component to agent_run (composite `(tenant_id, run_id)`) |
+| step_name | Step name within the run; unique within `(tenant_id, run_id)` |
 | role | Agent role executed |
 | outcome | Step outcome |
 | detail | Step output detail (nullable) |
@@ -524,33 +558,39 @@ Schema:
 | completed_at_utc | Step end time (nullable) |
 | session_exec_ms | Time (ms) for this step's execution via `docker exec` (nullable; NULL = no session or non-Docker executor) |
 
-### SQL Views (metrics, V12/V14)
+### SQL Views (metrics, V16)
 | View | Description |
 |------|-------------|
-| `v_run_metrics` | One row per completed run; derived `duration_seconds`, `is_complete`, `is_error`, `is_rate_limited`; `failure_reason` projected; `is_rate_limited` uses `failure_reason = 'RATE_LIMIT'` (V14) |
-| `v_step_duration` | One row per completed step; `duration_seconds` derived |
-| `v_card_metrics` | Per-card aggregates: cycle time, working time, waiting time |
-| `v_card_rework` | Cards/states re-entered more than once; `WHERE outcome IS NOT NULL` to exclude in-progress runs |
+| `v_run_metrics` | One row per completed run; projects `tenant_id`; derived `duration_seconds`, `is_complete`, `is_error`, `is_rate_limited`; `is_rate_limited` uses `failure_reason = 'RATE_LIMIT'` |
+| `v_step_duration` | One row per completed step; projects `tenant_id`; `duration_seconds` derived |
+| `v_card_metrics` | Per-`(tenant_id, card_id)` aggregates: cycle time, working time, waiting time |
+| `v_card_rework` | `(tenant_id, card_id, state_name)` re-entered more than once; `WHERE outcome IS NOT NULL` to exclude in-progress runs |
 
-Rate-limit detection in `v_run_metrics` and `PgMetricsStore.GetRunSummaryAsync` uses `failure_reason = 'RATE_LIMIT'` (structured enum; V14 replaced the prior ILIKE string-matching approach). Note: `is_rate_limited` returns NULL (not FALSE) for legacy rows where `failure_reason IS NULL` — `COUNT FILTER` treats NULL as false, so aggregates are unaffected.
+`PgMetricsStore` queries always include `WHERE tenant_id = $1` so a single process only sees its own tenant's data.
 
-### queue tables (PGMQ, legacy)
+### queue tables (PGMQ, legacy — NOT yet tenant-scoped)
 | Table | Purpose |
 |-------|---------|
 | `pgmq.q_events` | Active event queue |
 | `pgmq.a_events` | Archive table (completed/dead-lettered) |
+| `pgmq.q_pings` | Active ping queue |
+
+Queue mode is legacy/secondary; queue names are global. Multi-tenant queue partitioning is deferred (`ITenantIdentifier.ShortHash` is the intended suffix when addressed).
 
 ### processed_events (idempotency)
 | Column | Description |
 |--------|-------------|
-| action_id | Trello action ID (PK) |
+| tenant_id | Tenant scope (PK with action_id) |
+| action_id | Trello action ID (PK with tenant_id) |
 | processed_at_utc | Timestamp |
 
 ### card_state
 | Column | Description |
 |--------|-------------|
-| card_id | Card ID (PK) |
+| tenant_id | Tenant scope (PK with card_id) |
+| card_id | Card ID (PK with tenant_id) |
 | current_lock | Active run lock ID |
+| claimed_at | Timestamp of current lock acquisition (nullable) |
 | last_known_list | Last confirmed list ID |
 | origin_list_id | Pre-Questions list (for return-path validation) |
 | waiting_on_human | Boolean flag |

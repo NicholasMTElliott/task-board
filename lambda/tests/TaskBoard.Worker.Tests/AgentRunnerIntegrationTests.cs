@@ -216,6 +216,7 @@ public class AgentRunnerIntegrationTests : IDisposable
             new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
+            TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             new XUnitLogger<AgentRunner>(_output));
     }
 

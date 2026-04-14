@@ -20,23 +20,26 @@ var configFilePath = PreParseArg(args, "--config");
 var promptRootArg = PreParseArg(args, "--prompt-root");
 
 // ── 2. Build host with layered configuration ─────────────────────────────────
-//  Built-in order from CreateApplicationBuilder:
-//    appsettings.json -> appsettings.{env}.json -> env vars -> command-line
-//  We layer on top in ascending precedence:
+// Precedence (lowest → highest, later wins):
+//   1. EXE-dir defaults     (shipped with the binary)
+//   2. cwd/.aiboard/        (project-tracked config)
+//   3. cwd/                 (local overrides — closest to invocation wins)
+//   4. --config <path>      (explicit operator override)
+//   5. environment variables
+//   6. CLI args             (highest)
 var builder = Host.CreateApplicationBuilder(args);
 
-// When launched via `dotnet run` the content root is the caller's working directory,
-// which typically does NOT contain appsettings.json. The compiled copy lives next to
-// the executable in AppContext.BaseDirectory, so add it explicitly as a fallback.
-if (!string.Equals(Path.GetFullPath(builder.Environment.ContentRootPath),
-        Path.GetFullPath(AppContext.BaseDirectory), StringComparison.OrdinalIgnoreCase))
-{
-    builder.Configuration.AddJsonFile(
-        Path.Combine(AppContext.BaseDirectory, "appsettings.json"), optional: true, reloadOnChange: false);
+// Discard the default sources added by CreateApplicationBuilder so we can
+// re-add JSON files in the precise order documented above. Env vars and CLI
+// are re-added at the end so they remain top-precedence.
+builder.Configuration.Sources.Clear();
 
-    var env = builder.Environment.EnvironmentName;
-    builder.Configuration.AddJsonFile(
-        Path.Combine(AppContext.BaseDirectory, $"appsettings.{env}.json"), optional: true, reloadOnChange: false);
+// Track config sources for diagnostics when required values are missing.
+var configSources = new List<string>();
+void AddJsonLayer(string path)
+{
+    builder.Configuration.AddJsonFile(path, optional: true, reloadOnChange: false);
+    configSources.Add($"  json   {path}  [{(File.Exists(path) ? "exists" : "missing")}]");
 }
 
 builder.Logging.AddSimpleConsole(options =>
@@ -45,24 +48,46 @@ builder.Logging.AddSimpleConsole(options =>
     options.TimestampFormat = "HH:mm:ss ";
 });
 
-// Project-local overrides: {cwd}/.aiboard/appsettings[.user].json
-var cwdAiboardDir = Path.Combine(Directory.GetCurrentDirectory(), ".aiboard");
-builder.Configuration.AddJsonFile(
-    Path.Combine(cwdAiboardDir, "appsettings.json"), optional: true, reloadOnChange: false);
-builder.Configuration.AddJsonFile(
-    Path.Combine(cwdAiboardDir, "appsettings.user.json"), optional: true, reloadOnChange: false);
+var envName = builder.Environment.EnvironmentName;
+var exeDir = AppContext.BaseDirectory;
+var cwd = Directory.GetCurrentDirectory();
+var cwdIsExeDir = string.Equals(
+    Path.GetFullPath(cwd), Path.GetFullPath(exeDir), StringComparison.OrdinalIgnoreCase);
 
+// Layer 1 — EXE-dir defaults (lowest precedence)
+AddJsonLayer(Path.Combine(exeDir, "appsettings.json"));
+AddJsonLayer(Path.Combine(exeDir, $"appsettings.{envName}.json"));
+AddJsonLayer(Path.Combine(exeDir, "appsettings.user.json"));
+
+// Layer 2 — project-tracked config under cwd/.aiboard/
+var cwdAiboardDir = Path.Combine(cwd, ".aiboard");
+AddJsonLayer(Path.Combine(cwdAiboardDir, "appsettings.json"));
+AddJsonLayer(Path.Combine(cwdAiboardDir, "appsettings.user.json"));
+
+// Layer 3 — local cwd overrides (skip when cwd == exeDir to avoid loading the
+// same file twice and confusing the diagnostic output).
+if (!cwdIsExeDir)
+{
+    AddJsonLayer(Path.Combine(cwd, "appsettings.json"));
+    AddJsonLayer(Path.Combine(cwd, $"appsettings.{envName}.json"));
+    AddJsonLayer(Path.Combine(cwd, "appsettings.user.json"));
+}
+
+// Layer 4 — explicit operator override via --config (required if specified)
 if (configFilePath is not null)
-    builder.Configuration.AddJsonFile(CliDefinitions.ResolvePath(configFilePath), optional: false, reloadOnChange: false);
+{
+    var resolvedConfig = CliDefinitions.ResolvePath(configFilePath);
+    builder.Configuration.AddJsonFile(resolvedConfig, optional: false, reloadOnChange: false);
+    configSources.Add($"  json   {resolvedConfig}  [--config; required]");
+}
 
-builder.Configuration.AddJsonFile(
-    Path.Combine(AppContext.BaseDirectory, "appsettings.user.json"), optional: true, reloadOnChange: false);
-
-// Re-add env vars so they beat --config and appsettings.user.json
+// Layer 5 — env vars
 builder.Configuration.AddEnvironmentVariables();
+configSources.Add("  env    environment variables  [checked]");
 
-// CLI args via switch mappings — highest precedence
+// Layer 6 — CLI args (highest precedence)
 builder.Configuration.AddCommandLine(args, CliDefinitions.SwitchMappings);
+configSources.Add($"  cli    command-line arguments  [{(args.Length == 0 ? "none provided" : $"{args.Length} arg(s)")}]");
 
 // ── 3. Resolve prompt base directory ─────────────────────────────────────────
 var promptBaseDir = promptRootArg is not null
@@ -273,6 +298,23 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
     return new AgentExecutorResolver(executors);
 });
 
+// Tenant identifier: scopes all DB rows and Docker container names to this
+// project so multiple projects can share one Postgres instance.
+// Resolved eagerly so any missing required config fails fast at startup
+// (before the host starts and before any rows could be written untenanted).
+{
+    var ghOpts = boardProvider == "github"
+        ? builder.Configuration.GetSection(GitHubProjectsOptions.SectionName).Get<GitHubProjectsOptions>()
+        : null;
+    var trelloOpts = boardProvider is "trello" or "live"
+        ? builder.Configuration.GetSection(TrelloClientOptions.SectionName).Get<TrelloClientOptions>()
+        : null;
+    var stubName = builder.Configuration["Stub:TenantName"];
+
+    var tenant = TenantIdentifierFactory.Create(boardProvider, ghOpts, trelloOpts, stubName);
+    builder.Services.AddSingleton(tenant);
+}
+
 // Generate agent identity for this process instance
 var agentIdentity = AgentIdentity.Generate();
 builder.Services.AddSingleton(agentIdentity);
@@ -357,6 +399,19 @@ else
 
 using var host = builder.Build();
 var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Program");
+
+{
+    var resolvedTenant = host.Services.GetRequiredService<ITenantIdentifier>();
+    logger.LogInformation("Tenant: {Tenant} (hash={Hash})", resolvedTenant.Value, resolvedTenant.ShortHash);
+}
+
+void LogMissingConfig(string requiredKeys)
+{
+    logger.LogError(
+        "Required configuration missing: {Keys}\nConfig sources searched (in precedence order, lowest first):\n{Sources}\n" +
+        "Set the value in any of the JSON files above, as an environment variable (use '__' for ':'), or via the matching CLI flag.",
+        requiredKeys, string.Join("\n", configSources));
+}
 
 // ── 7. Runtime prerequisite validation ───────────────────────────────────────
 {
@@ -475,19 +530,19 @@ if (mode == "agent")
     var cardId = builder.Configuration["CardId"];
     if (string.IsNullOrWhiteSpace(cardId))
     {
-        logger.LogError("--card-id is required for agent mode");
+        LogMissingConfig("CardId (or --card-id) — required for agent mode");
         return;
     }
 
     if (string.IsNullOrWhiteSpace(boardId))
     {
-        logger.LogError("--board-id, BoardId, or GitHubProjects:ProjectNumber is required for agent mode");
+        LogMissingConfig("BoardId / GitHubProjects:ProjectNumber (or --board-id) — required for agent mode");
         return;
     }
 
     if (string.IsNullOrWhiteSpace(workspacePath))
     {
-        logger.LogError("--workspace or AgentWorkspacePath is required for agent mode");
+        LogMissingConfig("AgentWorkspacePath (or --workspace) — required for agent mode");
         return;
     }
 
@@ -547,13 +602,13 @@ if (mode == "polling")
 {
     if (string.IsNullOrWhiteSpace(boardId))
     {
-        logger.LogError("--board-id, BoardId, or GitHubProjects:ProjectNumber is required for polling mode");
+        LogMissingConfig("BoardId / GitHubProjects:ProjectNumber (or --board-id) — required for polling mode");
         return;
     }
 
     if (string.IsNullOrWhiteSpace(workspacePath))
     {
-        logger.LogError("--workspace or AgentWorkspacePath is required for polling mode");
+        LogMissingConfig("AgentWorkspacePath (or --workspace) — required for polling mode");
         return;
     }
 
@@ -607,19 +662,19 @@ if (mode == "queue")
 {
     if (string.IsNullOrWhiteSpace(boardId))
     {
-        logger.LogError("--board-id is required for queue mode");
+        LogMissingConfig("BoardId (or --board-id) — required for queue mode");
         return;
     }
 
     if (string.IsNullOrWhiteSpace(workspacePath))
     {
-        logger.LogError("--workspace or AgentWorkspacePath is required for queue mode");
+        LogMissingConfig("AgentWorkspacePath (or --workspace) — required for queue mode");
         return;
     }
 
     if (string.IsNullOrWhiteSpace(dbConnectionString))
     {
-        logger.LogError("Database:ConnectionString (or --db-connection) is required for queue mode");
+        LogMissingConfig("Database:ConnectionString (or --db-connection) — required for queue mode");
         return;
     }
 
@@ -685,8 +740,11 @@ if (mode == "metrics")
     return;
 }
 
-// No recognized mode — show help
-logger.LogError("No valid --mode specified. Use --mode agent, --mode polling, --mode queue, or --mode metrics.");
+// No recognized mode — show diagnostic + help
+LogMissingConfig(
+    mode is null
+        ? "Mode (or --mode) — must be agent, polling, queue, or metrics"
+        : $"Mode='{mode}' is not recognized — must be agent, polling, queue, or metrics");
 CliDefinitions.PrintHelp();
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
