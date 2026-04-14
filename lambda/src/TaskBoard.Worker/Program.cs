@@ -1,10 +1,12 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using TaskBoard.Worker;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Configuration;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
 
@@ -297,6 +299,21 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
 
     return new AgentExecutorResolver(executors);
 });
+
+// Pre-flight config validation — flags contradictions (e.g. GitHubProjects
+// populated but BoardProvider is stub) before tenant resolution would throw
+// with a less-informative message. Uses a temporary console logger since the
+// host isn't built yet.
+{
+    using var preHostLoggerFactory = LoggerFactory.Create(b =>
+    {
+        b.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; });
+    });
+    var preHostLogger = preHostLoggerFactory.CreateLogger("Config");
+    var findings = StartupConfigValidator.Validate(builder.Configuration);
+    if (!StartupConfigValidator.LogAndMaybeExit(findings, preHostLogger))
+        return;
+}
 
 // Tenant identifier: scopes all DB rows and Docker container names to this
 // project so multiple projects can share one Postgres instance.

@@ -51,6 +51,23 @@ public class TenantIdentifierTests
     }
 
     [Fact]
+    public void Create_GitHub_ReportsAllMissingFieldsAtOnce()
+    {
+        // Operators fixing config shouldn't have to re-run three times to learn
+        // which fields are missing — the factory must surface the full list.
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            TenantIdentifierFactory.Create(
+                "github",
+                new GitHubProjectsOptions { Owner = "", Repo = "", ProjectNumber = "" },
+                trelloOptions: null,
+                stubTenantName: null));
+
+        Assert.Contains("GitHubProjects:Owner", ex.Message);
+        Assert.Contains("GitHubProjects:Repo", ex.Message);
+        Assert.Contains("GitHubProjects:ProjectNumber", ex.Message);
+    }
+
+    [Fact]
     public void Create_GitHub_FailsWhenOptionsNull()
     {
         Assert.Throws<InvalidOperationException>(() =>

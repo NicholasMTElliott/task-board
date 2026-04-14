@@ -68,27 +68,36 @@ public static class TenantIdentifierFactory
         switch (boardProvider)
         {
             case "github":
-                if (githubOptions is null)
-                    throw new InvalidOperationException(
-                        "BoardProvider=github but GitHubProjectsOptions is unavailable.");
-                Require(githubOptions.Owner, "GitHubProjects:Owner");
-                Require(githubOptions.Repo, "GitHubProjects:Repo");
-                Require(githubOptions.ProjectNumber, "GitHubProjects:ProjectNumber");
+            {
+                var missing = new List<string>();
+                if (githubOptions is null || string.IsNullOrWhiteSpace(githubOptions.Owner))
+                    missing.Add("GitHubProjects:Owner");
+                if (githubOptions is null || string.IsNullOrWhiteSpace(githubOptions.Repo))
+                    missing.Add("GitHubProjects:Repo");
+                if (githubOptions is null || string.IsNullOrWhiteSpace(githubOptions.ProjectNumber))
+                    missing.Add("GitHubProjects:ProjectNumber");
+                if (missing.Count > 0)
+                    throw Missing("BoardProvider=github", missing);
 
-                var repo = githubOptions.Repo.Contains('/')
+                var repo = githubOptions!.Repo.Contains('/')
                     ? githubOptions.Repo.Split('/', 2)[1]
                     : githubOptions.Repo;
                 return new TenantIdentifier(
                     "github",
                     $"{githubOptions.Owner}/{repo}/{githubOptions.ProjectNumber}");
+            }
 
             case "trello":
             case "live":
-                if (trelloOptions is null)
-                    throw new InvalidOperationException(
-                        "BoardProvider=trello but TrelloClientOptions is unavailable.");
-                Require(trelloOptions.BoardId, "Trello:BoardId");
-                return new TenantIdentifier("trello", trelloOptions.BoardId);
+            {
+                var missing = new List<string>();
+                if (trelloOptions is null || string.IsNullOrWhiteSpace(trelloOptions.BoardId))
+                    missing.Add("Trello:BoardId");
+                if (missing.Count > 0)
+                    throw Missing($"BoardProvider={boardProvider}", missing);
+
+                return new TenantIdentifier("trello", trelloOptions!.BoardId);
+            }
 
             case "stub":
             default:
@@ -96,11 +105,8 @@ public static class TenantIdentifierFactory
         }
     }
 
-    private static void Require(string value, string configKey)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            throw new InvalidOperationException(
-                $"Tenant identifier cannot be resolved: required config '{configKey}' is missing or empty. " +
-                "Set it in appsettings.json, .aiboard/appsettings.json, an env var, or a CLI flag.");
-    }
+    private static InvalidOperationException Missing(string context, IReadOnlyList<string> keys) =>
+        new($"Tenant identifier cannot be resolved: {context} but required config " +
+            $"{(keys.Count == 1 ? $"key '{keys[0]}' is" : $"keys [{string.Join(", ", keys)}] are")} " +
+            "missing or empty. Set in appsettings.json, .aiboard/appsettings.json, an env var, or a CLI flag.");
 }
