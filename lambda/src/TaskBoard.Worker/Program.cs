@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
@@ -9,6 +10,7 @@ using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Configuration;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
+using TaskBoard.Worker.Validation;
 
 // ── 0. Help check (before any host building) ────────────────────────────────
 if (CliDefinitions.ShouldShowHelp(args))
@@ -190,12 +192,16 @@ switch (boardProvider)
         builder.Services.Configure<GitHubProjectsOptions>(builder.Configuration.GetSection(GitHubProjectsOptions.SectionName));
         builder.Services.AddSingleton<ITaskBoardClient, GitHubProjectsClient>();
         builder.Services.AddSingleton<ICrossReferenceResolver, GitHubCrossReferenceResolver>();
+        builder.Services.AddSingleton<IBoardShapeProbe, GitHubProjectShapeProbe>();
         break;
     default:
         builder.Services.AddSingleton<ITaskBoardClient, StubTaskBoardClient>();
         builder.Services.AddSingleton<ICrossReferenceResolver, StubCrossReferenceResolver>();
         break;
 }
+
+// Default probe for providers without a dedicated implementation (stub, trello)
+builder.Services.TryAddSingleton<IBoardShapeProbe, NullBoardShapeProbe>();
 
 // ── 6. Agent executor selection ──────────────────────────────────────────────
 // AGENT_EXECUTOR=stub              → all providers mapped to stub (testing/dev)
@@ -737,6 +743,25 @@ if (mode == "queue")
     return;
 }
 
+if (mode == "validation")
+{
+    if (string.IsNullOrWhiteSpace(boardId))
+    {
+        LogMissingConfig("BoardId / GitHubProjects:ProjectNumber (or --board-id) — required for validation mode");
+        return;
+    }
+
+    using var scope = host.Services.CreateScope();
+    var workflowCfg = scope.ServiceProvider.GetRequiredService<WorkflowConfig>();
+    var probe = scope.ServiceProvider.GetRequiredService<IBoardShapeProbe>();
+    var runnerLogger = scope.ServiceProvider.GetRequiredService<ILogger<ValidationRunner>>();
+    var validationRunner = new ValidationRunner(workflowCfg, probe, boardProvider, boardId, runnerLogger);
+
+    var exitCode = await validationRunner.RunAsync(CancellationToken.None);
+    Environment.ExitCode = exitCode;
+    return;
+}
+
 if (mode == "metrics")
 {
     var cardId = builder.Configuration["CardId"];
@@ -760,8 +785,8 @@ if (mode == "metrics")
 // No recognized mode — show diagnostic + help
 LogMissingConfig(
     mode is null
-        ? "Mode (or --mode) — must be agent, polling, queue, or metrics"
-        : $"Mode='{mode}' is not recognized — must be agent, polling, queue, or metrics");
+        ? "Mode (or --mode) — must be agent, polling, queue, metrics, or validation"
+        : $"Mode='{mode}' is not recognized — must be agent, polling, queue, metrics, or validation");
 CliDefinitions.PrintHelp();
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

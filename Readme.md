@@ -47,6 +47,7 @@ Execution modes:
   --mode agent --card-id N           (direct, single card)
   --mode polling --board-id 1        (automatic, priority-sorted pickup)
   --mode metrics [--card-id N | --since 7d]  (operational metrics report)
+  --mode validation --board-id N             (read-only workflow vs. board check)
 
 AgentRunner flow (agent_run states):
   Fetch card → move to IN_PROGRESS column

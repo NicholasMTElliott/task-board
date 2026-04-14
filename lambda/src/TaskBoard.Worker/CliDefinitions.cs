@@ -89,6 +89,7 @@ internal static class CliDefinitions
         Console.WriteLine("  aiboard --mode agent --card-id 3 --board-id 1 --workspace .");
         Console.WriteLine("  aiboard --mode polling --board-id 1 --workspace .");
         Console.WriteLine("  aiboard --mode metrics [--card-id 3] [--since 7d]");
+        Console.WriteLine("  aiboard --mode validation --board-id 1     (read-only check of workflow vs. board)");
         Console.WriteLine("  aiboard --config project-a.json --mode polling");
         Console.WriteLine("  aiboard                               (uses ./.aiboard/appsettings.json + ./.aiboard/workflow.json)");
         Console.WriteLine();
@@ -110,7 +111,7 @@ internal static class CliDefinitions
         Console.WriteLine();
 
         WriteSection("General", [
-            ("--mode <mode>",             "Execution mode: agent, polling, metrics",           null),
+            ("--mode <mode>",             "Execution mode: agent, polling, metrics, validation", null),
             ("--card-id <id>",            "Card/issue number (required for agent mode)",       null),
             ("--state <stateId>",         "Override state key for agent mode dispatch (bypasses filter-based resolution)", null),
             ("--config <path>",           "Additional JSON config file to layer in",           null),

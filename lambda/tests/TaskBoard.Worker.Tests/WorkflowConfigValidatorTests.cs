@@ -1485,4 +1485,165 @@ public class WorkflowConfigValidatorAllowedChildrenTests
         Assert.Contains(errors, e => e.Contains("invalid_a") && e.Contains("story"));
         Assert.Contains(errors, e => e.Contains("invalid_b") && e.Contains("feature"));
     }
+
+    // ── New v-mode checks: enum/numeric/uniqueness ─────────────────────────
+
+    private static WorkflowConfig MakeValidConfig()
+    {
+        return new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-req"] = new WorkflowState(
+                    "Requirements", "ba", "agent_run",
+                    "Analyze the card.",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-review"),
+                        ["ERROR"]    = TransitionTarget.ForColumn("list-error"),
+                    }),
+                ["list-review"] = new WorkflowState(
+                    "Review", null, "manual_gate", null,
+                    new Dictionary<string, TransitionTarget>()),
+                ["list-error"] = new WorkflowState(
+                    "Error", null, "holding", null,
+                    new Dictionary<string, TransitionTarget>())
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "You are a BA.", new List<string> { "Requirements" })
+            });
+    }
+
+    [Fact]
+    public void UnknownGateType_ReportsError()
+    {
+        var cfg = MakeValidConfig();
+        cfg.States["list-req"] = cfg.States["list-req"] with { GateType = "bogus_gate" };
+
+        var errors = WorkflowConfigValidator.Validate(cfg);
+
+        Assert.Contains(errors, e => e.Contains("gateType") && e.Contains("bogus_gate"));
+    }
+
+    [Fact]
+    public void UnknownGitBehavior_ReportsError()
+    {
+        var cfg = MakeValidConfig();
+        cfg.States["list-req"] = cfg.States["list-req"] with { GitBehavior = "squash_merge" };
+
+        var errors = WorkflowConfigValidator.Validate(cfg);
+
+        Assert.Contains(errors, e => e.Contains("gitBehavior") && e.Contains("squash_merge"));
+    }
+
+    [Theory]
+    [InlineData("discard")]
+    [InlineData("commit_only")]
+    [InlineData("commit_and_push")]
+    public void KnownGitBehaviorValues_DoNotError(string value)
+    {
+        var cfg = MakeValidConfig();
+        cfg.States["list-req"] = cfg.States["list-req"] with { GitBehavior = value };
+
+        var errors = WorkflowConfigValidator.Validate(cfg);
+
+        Assert.DoesNotContain(errors, e => e.Contains("gitBehavior"));
+    }
+
+    [Fact]
+    public void RoleWithEmptyModel_ReportsError()
+    {
+        var cfg = MakeValidConfig();
+        cfg.Roles["ba"] = cfg.Roles["ba"] with { Model = "" };
+
+        var errors = WorkflowConfigValidator.Validate(cfg);
+
+        Assert.Contains(errors, e => e.Contains("Role 'ba'") && e.Contains("no model"));
+    }
+
+    [Fact]
+    public void EstimationScale_NonMonotonic_ReportsError()
+    {
+        var cfg = MakeValidConfig() with
+        {
+            Estimation = new EstimationConfig("1", 1, "Estimate", [1, 2, 2, 4]),
+        };
+
+        var errors = WorkflowConfigValidator.Validate(cfg);
+
+        Assert.Contains(errors, e => e.Contains("monotonic"));
+    }
+
+    [Fact]
+    public void EstimationScale_CalibrationSizeNotInScale_ReportsError()
+    {
+        var cfg = MakeValidConfig() with
+        {
+            Estimation = new EstimationConfig("1", 3, "Estimate", [1, 2, 4, 8]),
+        };
+
+        var errors = WorkflowConfigValidator.Validate(cfg);
+
+        Assert.Contains(errors, e => e.Contains("calibrationSize") && e.Contains("scale"));
+    }
+
+    [Fact]
+    public void EstimationScale_Valid_DoesNotError()
+    {
+        var cfg = MakeValidConfig() with
+        {
+            Estimation = new EstimationConfig("1", 1, "Estimate", [1, 2, 4, 8]),
+        };
+
+        var errors = WorkflowConfigValidator.Validate(cfg);
+
+        Assert.DoesNotContain(errors, e => e.Contains("scale") || e.Contains("calibrationSize"));
+    }
+
+    [Fact]
+    public void CardTypesLabelPrefix_Empty_ReportsError()
+    {
+        var cfg = MakeValidConfig() with
+        {
+            CardTypes = new Dictionary<string, CardTypeDefinition>
+            {
+                ["story"] = new("Story", "", []),
+            },
+        };
+
+        var errors = WorkflowConfigValidator.Validate(cfg);
+
+        Assert.Contains(errors, e => e.Contains("labelPrefix") && e.Contains("story"));
+    }
+
+    [Fact]
+    public void OptionalStepName_DuplicatedAcrossStates_ReportsError()
+    {
+        var gate = new GateCheckConfig("ba", TaskPrompt: "check");
+        var optional = new OptionalStepDefinition(
+            Name: "shared_review", Role: "ba", TaskPrompt: "p",
+            Description: "d", Triggers: "t");
+
+        var cfg = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["A"] = new("A", "ba", "agent_run", "p",
+                    new Dictionary<string, TransitionTarget>(),
+                    GateCheck: gate,
+                    OptionalSteps: [optional]),
+                ["B"] = new("B", "ba", "agent_run", "p",
+                    new Dictionary<string, TransitionTarget>(),
+                    GateCheck: gate,
+                    OptionalSteps: [optional]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new("gpt-4.1", "sys", ["Requirements"]),
+            });
+
+        var errors = WorkflowConfigValidator.Validate(cfg);
+
+        Assert.Contains(errors, e =>
+            e.Contains("shared_review") && e.Contains("unique across the whole config"));
+    }
 }

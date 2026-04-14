@@ -2,6 +2,18 @@ namespace TaskBoard.Worker.Models;
 
 public static class WorkflowConfigValidator
 {
+    private static readonly HashSet<string> KnownGateTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        GateTypes.AgentRun, GateTypes.SystemMerge, GateTypes.ChildrenComplete,
+        GateTypes.InProgress, GateTypes.ManualGate, GateTypes.ManualEntry,
+        GateTypes.Holding, GateTypes.Terminal,
+    };
+
+    private static readonly HashSet<string> KnownGitBehaviors = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "discard", "commit_only", "commit_and_push",
+    };
+
     public static List<string> Validate(WorkflowConfig config, bool validatePolling = false)
     {
         var errors = new List<string>();
@@ -12,8 +24,26 @@ public static class WorkflowConfigValidator
         if (config.Roles.Count == 0)
             errors.Add("Roles dictionary must not be empty.");
 
+        // Role.model non-empty (weak check — don't validate model IDs)
+        foreach (var (roleId, role) in config.Roles)
+        {
+            if (string.IsNullOrWhiteSpace(role.Model))
+                errors.Add($"Role '{roleId}' has no model.");
+        }
+
+        // Track optional step names across the whole config (uniqueness)
+        var globalOptionalNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var (stateId, state) in config.States)
         {
+            // gateType enum check
+            if (!string.IsNullOrWhiteSpace(state.GateType) && !KnownGateTypes.Contains(state.GateType))
+                errors.Add($"State '{stateId}' ({state.Name}) has unknown gateType '{state.GateType}'. Expected one of: {string.Join(", ", KnownGateTypes)}.");
+
+            // gitBehavior enum check
+            if (!string.IsNullOrWhiteSpace(state.GitBehavior) && !KnownGitBehaviors.Contains(state.GitBehavior))
+                errors.Add($"State '{stateId}' ({state.Name}) has unknown gitBehavior '{state.GitBehavior}'. Expected one of: {string.Join(", ", KnownGitBehaviors)}.");
+
             if (string.Equals(state.GateType, GateTypes.AgentRun, StringComparison.OrdinalIgnoreCase))
             {
                 if (state.Steps is { Count: > 0 })
@@ -93,6 +123,16 @@ public static class WorkflowConfigValidator
 
                     if (!optionalNames.Add(optStep.Name))
                         errors.Add($"State '{stateId}' ({state.Name}) has duplicate optional step name '{optStep.Name}'.");
+
+                    if (globalOptionalNames.TryGetValue(optStep.Name, out var otherState))
+                    {
+                        if (!string.Equals(otherState, stateId, StringComparison.OrdinalIgnoreCase))
+                            errors.Add($"Optional step name '{optStep.Name}' is defined in both state '{otherState}' and state '{stateId}'. Names must be unique across the whole config.");
+                    }
+                    else
+                    {
+                        globalOptionalNames[optStep.Name] = stateId;
+                    }
 
                     if (string.IsNullOrWhiteSpace(optStep.Role))
                         errors.Add($"State '{stateId}' ({state.Name}) optional step '{optStep.Name}' has no role.");
@@ -252,6 +292,42 @@ public static class WorkflowConfigValidator
             {
                 if (st.Filters is null or { Count: 0 })
                     errors.Add($"State '{sid}' ({st.Name}) shares column '{group.Key}' with another actionable state but has no filters. Add filters to disambiguate.");
+            }
+        }
+
+        // ── Estimation config sanity ─────────────────────────────────────────
+        if (config.Estimation is { } est)
+        {
+            if (est.Scale is { Count: > 0 })
+            {
+                if (est.Scale.Any(v => v <= 0))
+                    errors.Add("estimation.scale contains non-positive values.");
+
+                for (var i = 1; i < est.Scale.Count; i++)
+                {
+                    if (est.Scale[i] <= est.Scale[i - 1])
+                    {
+                        errors.Add("estimation.scale must be strictly monotonic increasing.");
+                        break;
+                    }
+                }
+
+                if (!est.Scale.Contains(est.CalibrationSize))
+                    errors.Add($"estimation.calibrationSize ({est.CalibrationSize}) is not present in estimation.scale.");
+            }
+            else if (est.Scale is not null)
+            {
+                errors.Add("estimation.scale is present but empty.");
+            }
+        }
+
+        // ── cardTypes.labelPrefix non-empty ──────────────────────────────────
+        if (config.CardTypes is not null)
+        {
+            foreach (var (typeName, typeDef) in config.CardTypes)
+            {
+                if (string.IsNullOrWhiteSpace(typeDef.LabelPrefix))
+                    errors.Add($"cardTypes['{typeName}'].labelPrefix is empty.");
             }
         }
 

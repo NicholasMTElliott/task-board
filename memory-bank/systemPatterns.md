@@ -408,6 +408,7 @@ Applies to `--mode polling` and `--mode queue` (not agent mode — single card, 
 | SinceParser | Parses `--since` time strings (e.g., `7d`, `24h`, `1w`) into UTC DateTime offsets |
 | PrerequisiteValidator | Startup validation of providers, board config, and prompt files |
 | StartupConfigValidator | Pre-flight IConfiguration validation: flags unknown `BoardProvider`, incomplete GitHubProjects/Trello sections, provider-vs-section contradictions, unknown `AgentExecutor`; errors abort, warnings continue |
+| ValidationRunner / IBoardShapeProbe / BoardShapeChecks | Read-only `--mode validation`: static + prompt-file + live board-shape cross-checks; `GitHubProjectShapeProbe` uses `gh project field-list` + `gh label list`; `NullBoardShapeProbe` returns null (Info, skip board checks); pure `BoardShapeChecks.Check` produces `ValidationFinding` records |
 | CardSelector / CardFilterEvaluator | Polling card selection and filtering logic |
 | WorkflowConfig.ResolveState | Centralized state resolution: matches card column + evaluates filters; replaces all direct `States.TryGetValue` lookups; throws on ambiguity |
 | WorkflowConfig.GetEffectiveColumn | Returns state's effective column name (explicit `Column` property or state key fallback) |
