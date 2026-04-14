@@ -771,8 +771,12 @@ public class DockerMountBuilderTests : IDisposable
         {
             args.Add("-e"); args.Add($"{k}={v}");
         }
+        // -c safe.directory=* tells git to trust the host-mounted workspace
+        // even when its UID doesn't match the container user (CI-only issue:
+        // the GitHub runner mounts repos owned by `runner` while the alpine
+        // container runs as root, triggering git's "dubious ownership" check).
         args.AddRange(["-w", DockerMountBuilder.WorkspaceMountPoint,
-            "alpine/git", "log", "--oneline"]);
+            "alpine/git", "-c", "safe.directory=*", "log", "--oneline"]);
         return args.ToArray();
     }
 
