@@ -1053,6 +1053,163 @@ public class UpdateFileProcessorTests : IDisposable
             Arg.Any<CancellationToken>());
     }
 
+    // ── SetFields on generationConfig ────────────────────────────────────────
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_SetFields_AppliesLiteralFieldValues()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-sf.md"),
+            "---\ntitle: SF Task\n---\n\nBody.");
+
+        var genConfig = new GenerationConfig("task", "Backlog", true,
+            CopyFields: null,
+            SetFields: new Dictionary<string, string>
+            {
+                ["Type"] = "Task",
+                ["Activity"] = "Design",
+            });
+
+        await _processor.ProcessUpdatesAsync(
+            _tempDir, "20", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r =>
+                r.FieldValues != null
+                && r.FieldValues["Type"] == "Task"
+                && r.FieldValues["Activity"] == "Design"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_SetFields_WinOverCopyFieldsOnKeyCollision()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-collision.md"),
+            "---\ntitle: Collision\n---\n\nBody.");
+
+        _boardClient.GetCardAsync("20", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BoardCard("20", "Parent", "", "Backlog",
+                Metadata: new Dictionary<string, string> { ["Activity"] = "Test" })));
+
+        var genConfig = new GenerationConfig("task", "Backlog", true,
+            CopyFields: ["Activity"],
+            SetFields: new Dictionary<string, string> { ["Activity"] = "Design" });
+
+        await _processor.ProcessUpdatesAsync(
+            _tempDir, "20", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        // setFields wins
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r =>
+                r.FieldValues != null && r.FieldValues["Activity"] == "Design"),
+            Arg.Any<CancellationToken>());
+    }
+
+    // ── Field-based card type discriminator (CardTypeField) ─────────────────
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_CardTypeField_WritesTypeNameToField()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Backlog"] = new("Backlog", null, "manual_entry", null, new()),
+            },
+            Roles: new(),
+            CardTypes: new Dictionary<string, CardTypeDefinition>
+            {
+                ["task"] = new("Task", LabelPrefix: null, AllowedChildren: []),
+                ["story"] = new("User Story", LabelPrefix: null, AllowedChildren: ["task"]),
+            },
+            CardTypeField: "Type");
+
+        var processor = new UpdateFileProcessor(_boardClient, config, _identity,
+            NullLogger<UpdateFileProcessor>.Instance);
+
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-ftask.md"),
+            "---\ntitle: Field Task\n---\n\nBody.");
+
+        var genConfig = new GenerationConfig("task", "Backlog", true);
+
+        await processor.ProcessUpdatesAsync(
+            _tempDir, "20", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        // Type field set to CardTypeDefinition.Name ("Task"), no type label
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r =>
+                r.CardType == null
+                && r.FieldValues != null
+                && r.FieldValues["Type"] == "Task"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdatesAsync_CardTypeField_ParentTypeResolvedFromField()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Backlog"] = new("Backlog", null, "manual_entry", null, new()),
+            },
+            Roles: new(),
+            CardTypes: new Dictionary<string, CardTypeDefinition>
+            {
+                // "task" is NOT an allowed child of "story" — should skip creation
+                ["task"] = new("Task", LabelPrefix: null, AllowedChildren: []),
+                ["story"] = new("User Story", LabelPrefix: null, AllowedChildren: []),
+            },
+            CardTypeField: "Type");
+
+        var processor = new UpdateFileProcessor(_boardClient, config, _identity,
+            NullLogger<UpdateFileProcessor>.Instance);
+
+        _boardClient.GetCardAsync("20", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BoardCard("20", "Parent Story", "", "Backlog",
+                Metadata: new Dictionary<string, string> { ["Type"] = "User Story" },
+                Labels: []))); // no labels; discrimination is field-based
+
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-blocked.md"),
+            "---\ntitle: Blocked Task\n---\n\nBody.");
+
+        var genConfig = new GenerationConfig("task", "Backlog", true);
+
+        await processor.ProcessUpdatesAsync(
+            _tempDir, "20", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        // Parent was identified as "story" via Type field; child type "task" not allowed → no creation
+        await _boardClient.DidNotReceive().CreateCardAsync(
+            Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    // ── Label opt-out (empty LabelPrefix) ───────────────────────────────────
+
+    [Fact]
+    public void BuildTypeLabel_EmptyLabelPrefix_ReturnsNull()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Backlog"] = new("Backlog", null, "manual_entry", null, new()),
+            },
+            Roles: new(),
+            CardTypes: new Dictionary<string, CardTypeDefinition>
+            {
+                ["task"] = new("Task", LabelPrefix: null, AllowedChildren: []),
+            });
+
+        var processor = new UpdateFileProcessor(_boardClient, config, _identity,
+            NullLogger<UpdateFileProcessor>.Instance);
+
+        Assert.Null(processor.BuildTypeLabel("task"));
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private string CreateUpdatesDir()

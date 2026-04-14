@@ -249,6 +249,18 @@ public static class WorkflowConfigValidator
                     {
                         errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' generationConfig.targetColumn '{genCfg.TargetColumn}' is not a known column.");
                     }
+
+                    // setFields: keys non-empty, values non-empty
+                    if (genCfg.SetFields is { Count: > 0 })
+                    {
+                        foreach (var (k, v) in genCfg.SetFields)
+                        {
+                            if (string.IsNullOrWhiteSpace(k))
+                                errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' generationConfig.setFields has an empty field name.");
+                            if (string.IsNullOrWhiteSpace(v))
+                                errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' generationConfig.setFields['{k}'] has an empty value.");
+                        }
+                    }
                 }
             }
         }
@@ -321,13 +333,18 @@ public static class WorkflowConfigValidator
             }
         }
 
-        // ── cardTypes.labelPrefix non-empty ──────────────────────────────────
+        // ── cardTypes discriminator rule ─────────────────────────────────────
+        // A card type must have a way to be identified on the board: either a non-empty
+        // labelPrefix (label-based) or workflowConfig.CardTypeField set (field-based).
+        // The two mechanisms may be combined; only absence of both is an error.
         if (config.CardTypes is not null)
         {
+            var hasFieldDiscriminator = !string.IsNullOrWhiteSpace(config.CardTypeField);
             foreach (var (typeName, typeDef) in config.CardTypes)
             {
-                if (string.IsNullOrWhiteSpace(typeDef.LabelPrefix))
-                    errors.Add($"cardTypes['{typeName}'].labelPrefix is empty.");
+                var hasLabelDiscriminator = !string.IsNullOrWhiteSpace(typeDef.LabelPrefix);
+                if (!hasLabelDiscriminator && !hasFieldDiscriminator)
+                    errors.Add($"cardTypes['{typeName}'] has no discriminator: set labelPrefix on the type or cardTypeField on the workflow.");
             }
         }
 

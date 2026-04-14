@@ -212,7 +212,8 @@ File-based config (`workflow.github.json`) maps columns to roles and transitions
   "cardTypes": {
     "story": { "name": "User Story", "labelPrefix": "type", "allowedChildren": ["task"] },
     "task": { "name": "Task", "allowedChildren": [] }
-  }
+  },
+  "cardTypeField": "Type"
 }
 ```
 
@@ -224,9 +225,12 @@ File-based config (`workflow.github.json`) maps columns to roles and transitions
 - `pipelineOrder` determines polling priority (higher = picked first)
 - `transitions` values can be a string (column name) or an array of actions (`moveToColumn`, `setField`, `updateParentSum`)
 - `estimation` configures calibration-based ticket sizing (scale, calibration ticket, board field)
-- `cardTypes` defines card type hierarchy for child task generation (e.g., stories → tasks)
-- `generationConfig` on a step specifies child ticket creation: `targetType`, `targetColumn`, `linkToParent`, `copyFields` (fields to inherit from parent, e.g., priority)
+- `cardTypes` defines card type hierarchy for child task generation (e.g., stories → tasks). `labelPrefix` is optional — set it to apply `{prefix}:{typeKey}` labels, or omit/null it to opt that type out of labels entirely
+- `cardTypeField` (optional, workflow-level) — name of a project field (e.g. `"Type"`) that holds each card's type. When set, generated children write their `CardTypeDefinition.Name` to this field, and parent-type lookups for `allowedChildren` enforcement read from this field first and fall back to labels. Labels and fields can be used together; each `cardTypes[k]` must have either a `labelPrefix` or a global `cardTypeField`
+- `generationConfig` on a step specifies child ticket creation: `targetType`, `targetColumn`, `linkToParent`, `copyFields` (fields to inherit from parent, e.g., priority), `setFields` (literal field→value map applied to the new card — useful for putting children into a specific pipeline stage, e.g. `{"Type": "Task", "Activity": "Design"}`; wins over `copyFields` on key collision)
 - `updateParentSum` transition action recalculates a parent card's field as the sum of its children's values (used for estimate rollup)
+
+See [docs/CardTypesAndGeneration.md](docs/CardTypesAndGeneration.md) for a walkthrough of label-based vs. field-based type discrimination and `generationConfig.setFields` usage.
 
 ---
 

@@ -181,6 +181,25 @@ public sealed class UpdateFileProcessor(
             fieldValues[workflowConfig.Estimation?.FieldName ?? "Estimate"] = parsed.Estimate;
         }
 
+        // Field-based card type discriminator: if workflowConfig.CardTypeField is set, write the
+        // resolved type's display name (CardTypeDefinition.Name) into that project field.
+        var resolvedTypeKey = generationConfig?.TargetType ?? parsed.Type;
+        if (!string.IsNullOrWhiteSpace(workflowConfig.CardTypeField) && resolvedTypeKey is not null
+            && workflowConfig.CardTypes is not null
+            && workflowConfig.CardTypes.TryGetValue(resolvedTypeKey, out var resolvedTypeDef))
+        {
+            fieldValues ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            fieldValues[workflowConfig.CardTypeField!] = resolvedTypeDef.Name;
+        }
+
+        // Literal field values from generationConfig.setFields (explicit values win over copyFields).
+        if (generationConfig?.SetFields is { Count: > 0 })
+        {
+            fieldValues ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (k, v) in generationConfig.SetFields)
+                fieldValues[k] = v;
+        }
+
         var request = new CreateCardRequest(
             Title: parsed.Title,
             Body: parsed.Body,
@@ -263,23 +282,45 @@ public sealed class UpdateFileProcessor(
             return true;
         }
 
-        if (parentCard?.Labels is null || workflowConfig.CardTypes is null)
+        if (parentCard is null || workflowConfig.CardTypes is null)
             return true;
 
-        // Find the parent's type key by matching its labels to cardTypes label conventions
+        // Find the parent's type key. Prefer the field-based discriminator if configured,
+        // then fall back to the label-based mechanism for boards that still use labels.
         string? parentTypeKey = null;
-        foreach (var (typeName, typeDef) in workflowConfig.CardTypes)
+
+        if (!string.IsNullOrWhiteSpace(workflowConfig.CardTypeField)
+            && parentCard.Metadata is not null
+            && parentCard.Metadata.TryGetValue(workflowConfig.CardTypeField!, out var fieldValue)
+            && !string.IsNullOrWhiteSpace(fieldValue))
         {
-            var expectedLabel = $"{typeDef.LabelPrefix}:{typeName}";
-            if (parentCard.Labels.Contains(expectedLabel, StringComparer.OrdinalIgnoreCase))
+            foreach (var (typeName, typeDef) in workflowConfig.CardTypes)
             {
-                parentTypeKey = typeName;
-                break;
+                if (string.Equals(typeDef.Name, fieldValue, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(typeName, fieldValue, StringComparison.OrdinalIgnoreCase))
+                {
+                    parentTypeKey = typeName;
+                    break;
+                }
+            }
+        }
+
+        if (parentTypeKey is null && parentCard.Labels is { Count: > 0 })
+        {
+            foreach (var (typeName, typeDef) in workflowConfig.CardTypes)
+            {
+                if (string.IsNullOrWhiteSpace(typeDef.LabelPrefix)) continue;
+                var expectedLabel = $"{typeDef.LabelPrefix}:{typeName}";
+                if (parentCard.Labels.Contains(expectedLabel, StringComparer.OrdinalIgnoreCase))
+                {
+                    parentTypeKey = typeName;
+                    break;
+                }
             }
         }
 
         if (parentTypeKey is null)
-            return true; // No type label found — no restriction applies
+            return true; // No type discriminator found — no restriction applies
 
         if (!workflowConfig.CardTypes.TryGetValue(parentTypeKey, out var parentTypeDef))
             return true;
@@ -310,6 +351,11 @@ public sealed class UpdateFileProcessor(
         if (workflowConfig.CardTypes is not null
             && workflowConfig.CardTypes.TryGetValue(rawType, out var typeDef))
         {
+            // Empty/null LabelPrefix means the card type opts out of labels entirely
+            // (board uses a project field for type discrimination instead).
+            if (string.IsNullOrWhiteSpace(typeDef.LabelPrefix))
+                return null;
+
             return $"{typeDef.LabelPrefix}:{rawType}";
         }
 

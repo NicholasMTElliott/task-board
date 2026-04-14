@@ -67,14 +67,15 @@ public static class FilterOperators
 
 public sealed record CardTypeDefinition(
     string Name,
-    string LabelPrefix = "type",
+    string? LabelPrefix = "type",
     List<string>? AllowedChildren = null);
 
 public sealed record GenerationConfig(
     string TargetType,
     string? TargetColumn = null,
     bool LinkToParent = true,
-    List<string>? CopyFields = null);
+    List<string>? CopyFields = null,
+    Dictionary<string, string>? SetFields = null);
 
 // ── Workflow config ───────────────────────────────────────────────────────────
 
@@ -90,7 +91,8 @@ public sealed record WorkflowConfig(
     PollingConfig? Polling = null,
     MergeResolutionConfig? MergeResolution = null,
     EstimationConfig? Estimation = null,
-    Dictionary<string, CardTypeDefinition>? CardTypes = null)
+    Dictionary<string, CardTypeDefinition>? CardTypes = null,
+    string? CardTypeField = null)
 {
     /// <summary>
     /// The directory containing the workflow config file. Set after deserialization.

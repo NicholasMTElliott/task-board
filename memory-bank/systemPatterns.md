@@ -289,7 +289,12 @@ User stories can generate child task tickets via the `cardTypes` config:
 "cardTypes": { "story": { "name": "User Story", "labelPrefix": "type", "allowedChildren": ["task"] }, "task": { "name": "Task", "allowedChildren": [] } }
 ```
 
-**Card type labels:** Issues are labeled `type:story`, `type:task`, or `type:bug` to identify their card type. The `labelPrefix` field in `cardTypes` controls the label format.
+**Card type discriminators — labels, fields, or both.**
+- Label-based (default): issues are labeled `type:story`, `type:task`, `type:bug`. `CardTypeDefinition.LabelPrefix` controls the format. Set `LabelPrefix` to empty/null to opt a type out of labels.
+- Field-based: set `WorkflowConfig.CardTypeField` (e.g. `"Type"`) to name a project field that holds the type. `UpdateFileProcessor` writes `CardTypeDefinition.Name` into that field on create and reads it from parent `Metadata` first when resolving parent type for `AllowedChildren` enforcement; labels are checked as a fallback.
+- Both mechanisms can coexist. Validator errors only when a `CardTypeDefinition` has **neither** a non-empty `LabelPrefix` nor a global `CardTypeField`.
+
+**Setting arbitrary project fields on generated children.** `GenerationConfig.SetFields` is a literal field→value map merged into `CreateCardRequest.FieldValues` after `CopyFields` (copied from parent) and the estimate. On key collision, `SetFields` wins. Typical use: drop the child directly into its initial pipeline stage — e.g. `"setFields": { "Type": "Task", "Activity": "Design" }`.
 
 **Pipeline flow for stories:**
 Backlog → Ready for Design → Designed → **Ready for Tasking** → Tasking → **Waiting for Tasks** → Done

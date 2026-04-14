@@ -197,16 +197,75 @@ public static class BoardShapeChecks
             }
         }
 
-        // #15: cardTypes labels (Warning — AddLabelAsync can create on demand)
+        // #15: cardTypes labels (Warning — AddLabelAsync can create on demand).
+        // Only check when labelPrefix is non-empty; empty/null means the type opts out of labels
+        // (board uses a project field for type discrimination — validated separately below).
         if (config.CardTypes is not null && shape.Labels.Count > 0)
         {
             foreach (var (typeKey, typeDef) in config.CardTypes)
             {
+                if (string.IsNullOrWhiteSpace(typeDef.LabelPrefix)) continue;
                 var labelName = $"{typeDef.LabelPrefix}:{typeKey}";
                 if (!labels.Contains(labelName))
                     findings.Add(new ValidationFinding(
                         ValidationSeverity.Warning, "board", $"cardTypes[{typeKey}]",
                         $"Label '{labelName}' is not defined on the repo. It will be created on first use."));
+            }
+        }
+
+        // #16: cardTypeField — the discriminator field exists and each cardType's Name is
+        // an accepted option of that single-select field.
+        if (!string.IsNullOrWhiteSpace(config.CardTypeField))
+        {
+            if (!fieldsByName.TryGetValue(config.CardTypeField!, out var typeField))
+            {
+                findings.Add(new ValidationFinding(
+                    ValidationSeverity.Error, "board", "cardTypeField",
+                    $"Field '{config.CardTypeField}' does not exist on the board."));
+            }
+            else if (config.CardTypes is not null && typeField.Options is { Count: > 0 } typeOpts)
+            {
+                var typeOptNames = new HashSet<string>(typeOpts.Select(o => o.Name), StringComparer.OrdinalIgnoreCase);
+                foreach (var (typeKey, typeDef) in config.CardTypes)
+                {
+                    if (!typeOptNames.Contains(typeDef.Name))
+                        findings.Add(new ValidationFinding(
+                            ValidationSeverity.Error, "board", $"cardTypes[{typeKey}].name",
+                            $"Type name '{typeDef.Name}' is not an option of field '{config.CardTypeField}'."));
+                }
+            }
+        }
+
+        // #17: generationConfig.setFields — every key must be a real field; single-select values
+        // must be accepted options (skip templated values).
+        foreach (var (stateId, state) in config.States)
+        {
+            if (state.Steps is not { Count: > 0 }) continue;
+            foreach (var step in state.Steps)
+            {
+                if (step.GenerationConfig?.SetFields is not { Count: > 0 } setFields) continue;
+
+                foreach (var (fieldName, value) in setFields)
+                {
+                    if (!fieldsByName.TryGetValue(fieldName, out var f))
+                    {
+                        findings.Add(new ValidationFinding(
+                            ValidationSeverity.Error, "board",
+                            $"states[{stateId}].steps[{step.Name}].generationConfig.setFields",
+                            $"Field '{fieldName}' does not exist on the board."));
+                        continue;
+                    }
+
+                    if (!IsTemplate(value)
+                        && f.Options is { Count: > 0 } fOpts
+                        && !fOpts.Any(o => o.Name.Equals(value, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        findings.Add(new ValidationFinding(
+                            ValidationSeverity.Error, "board",
+                            $"states[{stateId}].steps[{step.Name}].generationConfig.setFields[{fieldName}]",
+                            $"Value '{value}' is not an option of field '{fieldName}'."));
+                    }
+                }
             }
         }
 

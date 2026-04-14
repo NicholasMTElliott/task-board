@@ -234,6 +234,184 @@ public class BoardShapeChecksTests
     }
 
     [Fact]
+    public void CardTypeLabel_EmptyLabelPrefix_SkipsLabelCheck()
+    {
+        // When labelPrefix is empty, the type opts out of labels — no warning should be emitted.
+        var cfg = MakeConfig(cardTypes: new Dictionary<string, CardTypeDefinition>
+        {
+            ["story"] = new("Story", LabelPrefix: null, AllowedChildren: []),
+        });
+        var shape = MakeShape(labels: new[] { "something-else" });
+
+        var findings = BoardShapeChecks.Check(cfg, shape);
+
+        Assert.DoesNotContain(findings, f => f.Message.Contains(":story"));
+    }
+
+    [Fact]
+    public void CardTypeField_Missing_ReportsError()
+    {
+        var cfg = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Ready"] = new("Ready", "ba", "agent_run", "p",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("Done"),
+                    }),
+                ["Done"] = new("Done", null, "terminal", null,
+                    new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new("m", "s", ["S"]),
+            },
+            CardTypes: new Dictionary<string, CardTypeDefinition>
+            {
+                ["story"] = new("User Story", LabelPrefix: null, AllowedChildren: []),
+            },
+            CardTypeField: "Type");
+        var shape = MakeShape(); // no fields
+
+        var findings = BoardShapeChecks.Check(cfg, shape);
+
+        Assert.Contains(findings, f =>
+            f.Severity == ValidationSeverity.Error && f.Path == "cardTypeField");
+    }
+
+    [Fact]
+    public void CardTypeField_TypeNameNotAnOption_ReportsError()
+    {
+        var cfg = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Ready"] = new("Ready", "ba", "agent_run", "p",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("Done"),
+                    }),
+                ["Done"] = new("Done", null, "terminal", null,
+                    new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new("m", "s", ["S"]),
+            },
+            CardTypes: new Dictionary<string, CardTypeDefinition>
+            {
+                ["task"] = new("Chore", LabelPrefix: null, AllowedChildren: []), // "Chore" not an option
+            },
+            CardTypeField: "Type");
+        var typeField = new BoardField("Type", "ProjectV2SingleSelectField",
+            new List<BoardFieldOption> { new("Task", "o1"), new("Story", "o2") });
+        var shape = MakeShape(fields: new[] { typeField });
+
+        var findings = BoardShapeChecks.Check(cfg, shape);
+
+        Assert.Contains(findings, f =>
+            f.Severity == ValidationSeverity.Error
+            && f.Path.Contains("cardTypes[task]")
+            && f.Message.Contains("Chore"));
+    }
+
+    [Fact]
+    public void GenerationConfig_SetFields_UnknownField_ReportsError()
+    {
+        var step = new WorkflowStep("gen", "ba", TaskPrompt: "p",
+            GenerationConfig: new GenerationConfig(
+                TargetType: "task",
+                TargetColumn: "Ready",
+                SetFields: new Dictionary<string, string> { ["Nope"] = "X" }));
+        var cfg = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Ready"] = new("Ready", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("Ready"),
+                    },
+                    Steps: [step]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new("m", "s", ["S"]),
+            });
+        var shape = MakeShape(columns: new[] { "Ready" });
+
+        var findings = BoardShapeChecks.Check(cfg, shape);
+
+        Assert.Contains(findings, f =>
+            f.Severity == ValidationSeverity.Error
+            && f.Path.Contains("setFields")
+            && f.Message.Contains("Nope"));
+    }
+
+    [Fact]
+    public void GenerationConfig_SetFields_ValueNotAnOption_ReportsError()
+    {
+        var step = new WorkflowStep("gen", "ba", TaskPrompt: "p",
+            GenerationConfig: new GenerationConfig(
+                TargetType: "task",
+                TargetColumn: "Ready",
+                SetFields: new Dictionary<string, string> { ["Activity"] = "BadValue" }));
+        var cfg = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Ready"] = new("Ready", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("Ready"),
+                    },
+                    Steps: [step]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new("m", "s", ["S"]),
+            });
+        var actField = new BoardField("Activity", "ProjectV2SingleSelectField",
+            new List<BoardFieldOption> { new("Design", "o1"), new("Test", "o2") });
+        var shape = MakeShape(columns: new[] { "Ready" }, fields: new[] { actField });
+
+        var findings = BoardShapeChecks.Check(cfg, shape);
+
+        Assert.Contains(findings, f =>
+            f.Severity == ValidationSeverity.Error
+            && f.Path.Contains("setFields[Activity]")
+            && f.Message.Contains("BadValue"));
+    }
+
+    [Fact]
+    public void GenerationConfig_SetFields_TemplatedValue_Skipped()
+    {
+        var step = new WorkflowStep("gen", "ba", TaskPrompt: "p",
+            GenerationConfig: new GenerationConfig(
+                TargetType: "task",
+                TargetColumn: "Ready",
+                SetFields: new Dictionary<string, string> { ["Activity"] = "{{estimation}}" }));
+        var cfg = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Ready"] = new("Ready", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("Ready"),
+                    },
+                    Steps: [step]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new("m", "s", ["S"]),
+            });
+        var actField = new BoardField("Activity", "ProjectV2SingleSelectField",
+            new List<BoardFieldOption> { new("Design", "o1") });
+        var shape = MakeShape(columns: new[] { "Ready" }, fields: new[] { actField });
+
+        var findings = BoardShapeChecks.Check(cfg, shape);
+
+        Assert.DoesNotContain(findings, f => f.Path.Contains("setFields"));
+    }
+
+    [Fact]
     public void HappyPath_AllClean_NoFindings()
     {
         var cfg = MakeConfig();

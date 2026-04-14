@@ -1601,19 +1601,106 @@ public class WorkflowConfigValidatorAllowedChildrenTests
     }
 
     [Fact]
-    public void CardTypesLabelPrefix_Empty_ReportsError()
+    public void CardType_NoDiscriminator_ReportsError()
     {
+        // No labelPrefix AND no workflow-level cardTypeField → error
         var cfg = MakeValidConfig() with
         {
             CardTypes = new Dictionary<string, CardTypeDefinition>
             {
                 ["story"] = new("Story", "", []),
             },
+            CardTypeField = null,
         };
 
         var errors = WorkflowConfigValidator.Validate(cfg);
 
-        Assert.Contains(errors, e => e.Contains("labelPrefix") && e.Contains("story"));
+        Assert.Contains(errors, e => e.Contains("discriminator") && e.Contains("story"));
+    }
+
+    [Fact]
+    public void CardType_EmptyLabelPrefixWithCardTypeField_IsAccepted()
+    {
+        // Empty labelPrefix is OK when workflow has cardTypeField (field-based discrimination)
+        var cfg = MakeValidConfig() with
+        {
+            CardTypes = new Dictionary<string, CardTypeDefinition>
+            {
+                ["story"] = new("Story", LabelPrefix: null, AllowedChildren: []),
+            },
+            CardTypeField = "Type",
+        };
+
+        var errors = WorkflowConfigValidator.Validate(cfg);
+
+        Assert.DoesNotContain(errors, e => e.Contains("discriminator"));
+    }
+
+    private static WorkflowConfig MakeConfigWithGenerationStep(GenerationConfig genCfg)
+    {
+        var step = new WorkflowStep("gen", "ba", TaskPrompt: "prompt", GenerationConfig: genCfg);
+        return new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["gen-state"] = new WorkflowState(
+                    "Generate", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("gen-state"),
+                    },
+                    Steps: [step]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new WorkflowRole("gpt-4.1", "sys", ["Requirements"]),
+            },
+            CardTypes: new Dictionary<string, CardTypeDefinition>
+            {
+                ["task"] = new("Task", "type", []),
+            });
+    }
+
+    [Fact]
+    public void GenerationConfig_SetFields_EmptyKey_ReportsError()
+    {
+        var cfg = MakeConfigWithGenerationStep(new GenerationConfig(
+            TargetType: "task",
+            TargetColumn: "gen-state",
+            SetFields: new Dictionary<string, string> { [""] = "x" }));
+
+        var errors = WorkflowConfigValidator.Validate(cfg);
+
+        Assert.Contains(errors, e => e.Contains("setFields") && e.Contains("empty field name"));
+    }
+
+    [Fact]
+    public void GenerationConfig_SetFields_EmptyValue_ReportsError()
+    {
+        var cfg = MakeConfigWithGenerationStep(new GenerationConfig(
+            TargetType: "task",
+            TargetColumn: "gen-state",
+            SetFields: new Dictionary<string, string> { ["Activity"] = "" }));
+
+        var errors = WorkflowConfigValidator.Validate(cfg);
+
+        Assert.Contains(errors, e => e.Contains("setFields") && e.Contains("Activity") && e.Contains("empty value"));
+    }
+
+    [Fact]
+    public void GenerationConfig_SetFields_Valid_NoErrors()
+    {
+        var cfg = MakeConfigWithGenerationStep(new GenerationConfig(
+            TargetType: "task",
+            TargetColumn: "gen-state",
+            SetFields: new Dictionary<string, string>
+            {
+                ["Type"] = "Task",
+                ["Activity"] = "Design",
+            }));
+
+        var errors = WorkflowConfigValidator.Validate(cfg);
+
+        Assert.DoesNotContain(errors, e => e.Contains("setFields"));
     }
 
     [Fact]
