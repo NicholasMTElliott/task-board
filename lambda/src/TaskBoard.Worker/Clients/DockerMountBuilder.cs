@@ -57,6 +57,7 @@ public sealed class DockerMountBuilder(ILogger<DockerMountBuilder> logger)
     {
         var mounts = new List<DockerMount>();
         var tempFiles = new List<string>();
+        var tempDirs = new List<string>();
         var pathMap = new List<(string HostPrefix, string ContainerPrefix)>();
 
         // 1. Worktree mount (RW) — the agent's working directory
@@ -128,14 +129,21 @@ public sealed class DockerMountBuilder(ILogger<DockerMountBuilder> logger)
         {
             if (Directory.Exists(credPath))
             {
+                var stagedCredDir = Path.Combine(
+                    Path.GetTempPath(),
+                    $"aiboard-claude-{Guid.NewGuid():N}");
+                CopyDirectoryRecursive(credPath, stagedCredDir, CredentialCopyExcludes);
+                tempDirs.Add(stagedCredDir);
+
                 mounts.Add(new DockerMount
                 {
-                    HostPath = NormalizeHostPath(credPath),
+                    HostPath = NormalizeHostPath(stagedCredDir),
                     ContainerPath = credMountPoint,
-                    ReadOnly = true,
+                    ReadOnly = false,
                 });
                 logger.LogDebug(
-                    "Claude credential mount: {CredPath} → {MountPoint}", credPath, credMountPoint);
+                    "Claude credential mount (staged RW copy): {CredPath} → {Staged} → {MountPoint}",
+                    credPath, stagedCredDir, credMountPoint);
             }
             else
             {
@@ -160,7 +168,58 @@ public sealed class DockerMountBuilder(ILogger<DockerMountBuilder> logger)
             ["GIT_OPTIONAL_LOCKS"] = "0",
         };
 
-        return new DockerMountContext(mounts, envVars, pathMap, tempFiles);
+        return new DockerMountContext(mounts, envVars, pathMap, tempFiles, tempDirs);
+    }
+
+    private static readonly HashSet<string> CredentialCopyExcludes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "projects",
+        "shell-snapshots",
+        "todos",
+        "history",
+    };
+
+    private static void CopyDirectoryRecursive(string source, string dest, HashSet<string> excludeTopLevelDirs)
+    {
+        Directory.CreateDirectory(dest);
+        foreach (var file in Directory.EnumerateFiles(source))
+        {
+            var name = Path.GetFileName(file);
+            try
+            {
+                File.Copy(file, Path.Combine(dest, name), overwrite: true);
+            }
+            catch
+            {
+                // Best-effort: skip files that can't be copied (locked, permissions)
+            }
+        }
+        foreach (var dir in Directory.EnumerateDirectories(source))
+        {
+            var name = Path.GetFileName(dir);
+            if (excludeTopLevelDirs.Contains(name)) continue;
+            CopyDirectoryRecursiveAll(dir, Path.Combine(dest, name));
+        }
+    }
+
+    private static void CopyDirectoryRecursiveAll(string source, string dest)
+    {
+        Directory.CreateDirectory(dest);
+        foreach (var file in Directory.EnumerateFiles(source))
+        {
+            try
+            {
+                File.Copy(file, Path.Combine(dest, Path.GetFileName(file)), overwrite: true);
+            }
+            catch
+            {
+                // Best-effort
+            }
+        }
+        foreach (var dir in Directory.EnumerateDirectories(source))
+        {
+            CopyDirectoryRecursiveAll(dir, Path.Combine(dest, Path.GetFileName(dir)));
+        }
     }
 
     /// <summary>

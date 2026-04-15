@@ -10,7 +10,11 @@ public class DockerAgentExecutorTests
         string imageName = "aiboard-sandbox:latest",
         string promptMountPoint = "/mnt/aiboard/prompts",
         decimal maxBudgetUsd = 10.00m,
-        Dictionary<string, DockerMount>? additionalMounts = null)
+        Dictionary<string, DockerMount>? additionalMounts = null,
+        string networkMode = "host",
+        string? memoryLimit = null,
+        string? cpuLimit = null,
+        string containerUser = "")
     {
         var opts = Options.Create(new DockerAgentOptions
         {
@@ -19,6 +23,10 @@ public class DockerAgentExecutorTests
             MaxBudgetUsd = maxBudgetUsd,
             ContainerNamePrefix = "aiboard-run",
             AdditionalMounts = additionalMounts ?? [],
+            NetworkMode = networkMode,
+            MemoryLimit = memoryLimit,
+            CpuLimit = cpuLimit,
+            ContainerUser = containerUser,
         });
         return new DockerAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             NullLogger<DockerAgentExecutor>.Instance);
@@ -280,6 +288,109 @@ public class DockerAgentExecutorTests
         Assert.True(imageIdx >= 0, "Image should be present");
         Assert.True(claudeIdx > imageIdx, "claude executable should come after image");
         Assert.True(modelIdx > claudeIdx, "claude args should come after claude executable");
+    }
+
+    // ── BuildDockerArgumentList — network, resource limits, user ─────────────
+
+    [Fact]
+    public void BuildDockerArgumentList_NetworkModeHost_PassesNetworkHostFlag()
+    {
+        var executor = CreateExecutor(networkMode: "host");
+        var dockerArgs = executor.BuildDockerArgumentList(
+            "c1", "/host/prompts", ["--print"]);
+
+        var idx = Array.IndexOf(dockerArgs, "--network");
+        Assert.True(idx >= 0, "Expected --network flag");
+        Assert.Equal("host", dockerArgs[idx + 1]);
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_CustomNetworkMode_PassesConfiguredValue()
+    {
+        // e.g. an operator pointing the sandbox at a docker-compose network by name.
+        var executor = CreateExecutor(networkMode: "task-board_default");
+        var dockerArgs = executor.BuildDockerArgumentList(
+            "c1", "/host/prompts", ["--print"]);
+
+        var idx = Array.IndexOf(dockerArgs, "--network");
+        Assert.True(idx >= 0, "Expected --network flag");
+        Assert.Equal("task-board_default", dockerArgs[idx + 1]);
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_EmptyNetworkMode_OmitsNetworkFlag()
+    {
+        var executor = CreateExecutor(networkMode: "");
+        var dockerArgs = executor.BuildDockerArgumentList(
+            "c1", "/host/prompts", ["--print"]);
+
+        Assert.DoesNotContain("--network", dockerArgs);
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_MemoryLimit_PassesMemoryFlag()
+    {
+        var executor = CreateExecutor(memoryLimit: "4g");
+        var dockerArgs = executor.BuildDockerArgumentList(
+            "c1", "/host/prompts", ["--print"]);
+
+        var idx = Array.IndexOf(dockerArgs, "--memory");
+        Assert.True(idx >= 0, "Expected --memory flag");
+        Assert.Equal("4g", dockerArgs[idx + 1]);
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_NoMemoryLimit_OmitsMemoryFlag()
+    {
+        var executor = CreateExecutor(memoryLimit: null);
+        var dockerArgs = executor.BuildDockerArgumentList(
+            "c1", "/host/prompts", ["--print"]);
+
+        Assert.DoesNotContain("--memory", dockerArgs);
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_CpuLimit_PassesCpusFlag()
+    {
+        var executor = CreateExecutor(cpuLimit: "2.0");
+        var dockerArgs = executor.BuildDockerArgumentList(
+            "c1", "/host/prompts", ["--print"]);
+
+        var idx = Array.IndexOf(dockerArgs, "--cpus");
+        Assert.True(idx >= 0, "Expected --cpus flag");
+        Assert.Equal("2.0", dockerArgs[idx + 1]);
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_NoCpuLimit_OmitsCpusFlag()
+    {
+        var executor = CreateExecutor(cpuLimit: null);
+        var dockerArgs = executor.BuildDockerArgumentList(
+            "c1", "/host/prompts", ["--print"]);
+
+        Assert.DoesNotContain("--cpus", dockerArgs);
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_ContainerUser_PassesUserFlag()
+    {
+        var executor = CreateExecutor(containerUser: "1001:1001");
+        var dockerArgs = executor.BuildDockerArgumentList(
+            "c1", "/host/prompts", ["--print"]);
+
+        var idx = Array.IndexOf(dockerArgs, "--user");
+        Assert.True(idx >= 0, "Expected --user flag");
+        Assert.Equal("1001:1001", dockerArgs[idx + 1]);
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_EmptyContainerUser_OmitsUserFlag()
+    {
+        var executor = CreateExecutor(containerUser: "");
+        var dockerArgs = executor.BuildDockerArgumentList(
+            "c1", "/host/prompts", ["--print"]);
+
+        Assert.DoesNotContain("--user", dockerArgs);
     }
 
     // ── TranslateSystemPromptPath ─────────────────────────────────────────────

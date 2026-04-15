@@ -12,17 +12,20 @@ public sealed class DockerMountContext : IAsyncDisposable
 {
     private readonly IReadOnlyList<(string HostPrefix, string ContainerPrefix)> _pathMap;
     private readonly List<string> _tempFiles;
+    private readonly List<string> _tempDirs;
 
     internal DockerMountContext(
         IReadOnlyList<DockerMount> mounts,
         IReadOnlyDictionary<string, string> environmentVariables,
         IReadOnlyList<(string HostPrefix, string ContainerPrefix)> pathMap,
-        List<string> tempFiles)
+        List<string> tempFiles,
+        List<string>? tempDirs = null)
     {
         Mounts = mounts;
         EnvironmentVariables = environmentVariables;
         _pathMap = pathMap;
         _tempFiles = tempFiles;
+        _tempDirs = tempDirs ?? new List<string>();
     }
 
     /// <summary>Volume mounts to pass to <c>docker run -v</c>.</summary>
@@ -80,6 +83,20 @@ public sealed class DockerMountContext : IAsyncDisposable
             }
         }
         _tempFiles.Clear();
+
+        foreach (var tempDir in _tempDirs)
+        {
+            try
+            {
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+                // Best-effort cleanup
+            }
+        }
+        _tempDirs.Clear();
         return ValueTask.CompletedTask;
     }
 }

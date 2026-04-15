@@ -56,10 +56,11 @@ At startup the worker probes the Docker daemon (`PrerequisiteValidator.IsDockerA
 |---|---|---|
 | `ImageName` | `aiboard-agent-sandbox:latest` | Image to run |
 | `ReuseContainer` | `true` | Session reuse across steps (one container per run). Set `false` for per-step `docker run`. |
-| `NetworkMode` | `host` | `none` for full isolation |
-| `MemoryLimit` | *(unset)* | e.g. `4g` |
-| `CpuLimit` | *(unset)* | e.g. `2.0` |
-| `CredentialPath` | *(auto `~/.claude`)* | Explicit path to Claude credentials |
+| `NetworkMode` | `host` | Forwarded to `docker run --network`. `host` lets the agent reach host-published ports from your local `docker-compose` support stack (Postgres `localhost:5432`, Grafana `localhost:3000`, etc.). Use a compose network name (e.g. `task-board_default` — see `docker network ls`) to reach services by service name instead. `none` for full isolation. Empty value omits the flag (Docker default bridge). **Note:** host networking on Docker Desktop for Windows/Mac requires 4.34+ with *Enable host networking* turned on in Settings → Resources → Network; on older versions it silently falls back to bridge. |
+| `MemoryLimit` | *(unset)* | Forwarded to `docker run --memory` when set. e.g. `4g` |
+| `CpuLimit` | *(unset)* | Forwarded to `docker run --cpus` when set. e.g. `2.0` |
+| `ContainerUser` | *(unset)* | Forwarded to `docker run --user` when set. e.g. `1000:1000` |
+| `CredentialPath` | *(auto `~/.claude`)* | Source for the per-run staged RW copy mounted into the container (so the Claude CLI can create `session-env/` at runtime). Host `~/.claude/` is never written to by the agent. Large subdirs (`projects`, `shell-snapshots`, `todos`, `history`) are skipped during the copy. |
 | `TimeoutSeconds` | `900` | Kill container after N seconds |
 | `MaxBudgetUsd` | `10.00` | Per-invocation CLI budget |
 | `AdditionalMounts` | `{}` | Extra `-v host:container[:ro]` mounts |

@@ -312,6 +312,7 @@ public class DockerMountBuilderTests : IDisposable
     {
         var credDir = Path.Combine(_tempDir, "creds");
         Directory.CreateDirectory(credDir);
+        File.WriteAllText(Path.Combine(credDir, ".credentials.json"), "{\"token\":\"abc\"}");
 
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
@@ -321,8 +322,101 @@ public class DockerMountBuilderTests : IDisposable
         var credMount = ctx.Mounts.FirstOrDefault(
             m => m.ContainerPath == DockerMountBuilder.DefaultCredentialMountPoint);
         Assert.NotNull(credMount);
-        Assert.True(credMount.ReadOnly);
-        Assert.Equal(DockerMountBuilder.NormalizeHostPath(credDir), credMount.HostPath);
+        // Staged RW copy — the CLI needs to create session-env/ at runtime.
+        Assert.False(credMount.ReadOnly);
+        // Host path must NOT be the original source — it is a per-run staged copy.
+        Assert.NotEqual(
+            DockerMountBuilder.NormalizeHostPath(credDir),
+            credMount.HostPath);
+        Assert.Contains("aiboard-claude-", credMount.HostPath);
+    }
+
+    [Fact]
+    public async Task BuildAsync_StagedCredentialCopy_ContainsSourceFiles()
+    {
+        var credDir = Path.Combine(_tempDir, "creds-copy");
+        Directory.CreateDirectory(credDir);
+        File.WriteAllText(Path.Combine(credDir, ".credentials.json"), "{\"token\":\"xyz\"}");
+        File.WriteAllText(Path.Combine(credDir, "settings.json"), "{\"theme\":\"dark\"}");
+
+        await using var ctx = await Builder.BuildAsync(
+            _tempDir,
+            new DockerAgentOptions { CredentialPath = credDir },
+            CancellationToken.None);
+
+        var credMount = ctx.Mounts.First(
+            m => m.ContainerPath == DockerMountBuilder.DefaultCredentialMountPoint);
+        // HostPath uses forward slashes (Docker); convert back to native for File.Exists.
+        var stagedHostPath = credMount.HostPath.Replace('/', Path.DirectorySeparatorChar);
+
+        Assert.True(File.Exists(Path.Combine(stagedHostPath, ".credentials.json")));
+        Assert.True(File.Exists(Path.Combine(stagedHostPath, "settings.json")));
+        Assert.Equal("{\"token\":\"xyz\"}",
+            File.ReadAllText(Path.Combine(stagedHostPath, ".credentials.json")));
+    }
+
+    [Fact]
+    public async Task BuildAsync_StagedCredentialCopy_ExcludesLargeSubdirs()
+    {
+        var credDir = Path.Combine(_tempDir, "creds-excludes");
+        Directory.CreateDirectory(credDir);
+        File.WriteAllText(Path.Combine(credDir, ".credentials.json"), "{}");
+        // Subdirs that should be excluded from the staged copy.
+        Directory.CreateDirectory(Path.Combine(credDir, "projects"));
+        File.WriteAllText(Path.Combine(credDir, "projects", "huge.log"), "noise");
+        Directory.CreateDirectory(Path.Combine(credDir, "shell-snapshots"));
+        File.WriteAllText(Path.Combine(credDir, "shell-snapshots", "snap.txt"), "noise");
+        Directory.CreateDirectory(Path.Combine(credDir, "todos"));
+        File.WriteAllText(Path.Combine(credDir, "todos", "t.md"), "noise");
+        // Subdir that SHOULD be copied.
+        Directory.CreateDirectory(Path.Combine(credDir, "plugins"));
+        File.WriteAllText(Path.Combine(credDir, "plugins", "p.json"), "{}");
+
+        await using var ctx = await Builder.BuildAsync(
+            _tempDir,
+            new DockerAgentOptions { CredentialPath = credDir },
+            CancellationToken.None);
+
+        var credMount = ctx.Mounts.First(
+            m => m.ContainerPath == DockerMountBuilder.DefaultCredentialMountPoint);
+        var stagedHostPath = credMount.HostPath.Replace('/', Path.DirectorySeparatorChar);
+
+        Assert.True(File.Exists(Path.Combine(stagedHostPath, ".credentials.json")));
+        Assert.True(Directory.Exists(Path.Combine(stagedHostPath, "plugins")));
+        Assert.False(Directory.Exists(Path.Combine(stagedHostPath, "projects")));
+        Assert.False(Directory.Exists(Path.Combine(stagedHostPath, "shell-snapshots")));
+        Assert.False(Directory.Exists(Path.Combine(stagedHostPath, "todos")));
+    }
+
+    [Fact]
+    public async Task BuildAsync_StagedCredentialCopy_DeletedOnDispose()
+    {
+        var credDir = Path.Combine(_tempDir, "creds-dispose");
+        Directory.CreateDirectory(credDir);
+        File.WriteAllText(Path.Combine(credDir, ".credentials.json"), "{}");
+
+        string stagedHostPath;
+        var ctx = await Builder.BuildAsync(
+            _tempDir,
+            new DockerAgentOptions { CredentialPath = credDir },
+            CancellationToken.None);
+        try
+        {
+            var credMount = ctx.Mounts.First(
+                m => m.ContainerPath == DockerMountBuilder.DefaultCredentialMountPoint);
+            stagedHostPath = credMount.HostPath.Replace('/', Path.DirectorySeparatorChar);
+            Assert.True(Directory.Exists(stagedHostPath));
+        }
+        finally
+        {
+            await ctx.DisposeAsync();
+        }
+
+        // After disposal, the staged temp directory must be gone — agent writes must
+        // not leak into the user's home on subsequent runs.
+        Assert.False(Directory.Exists(stagedHostPath));
+        // And the host source directory must be untouched.
+        Assert.True(File.Exists(Path.Combine(credDir, ".credentials.json")));
     }
 
     [Fact]

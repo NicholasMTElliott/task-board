@@ -333,6 +333,34 @@ public sealed class DockerAgentExecutor(
             "--name", containerName,
         };
 
+        // Network mode — empty/null leaves Docker default (bridge); "host" gives the
+        // container access to host-published ports (e.g. the docker-compose support
+        // stack on localhost:5432, etc.).
+        if (!string.IsNullOrWhiteSpace(_options.NetworkMode))
+        {
+            args.Add("--network");
+            args.Add(_options.NetworkMode);
+        }
+
+        // Resource limits (optional)
+        if (!string.IsNullOrWhiteSpace(_options.MemoryLimit))
+        {
+            args.Add("--memory");
+            args.Add(_options.MemoryLimit);
+        }
+        if (!string.IsNullOrWhiteSpace(_options.CpuLimit))
+        {
+            args.Add("--cpus");
+            args.Add(_options.CpuLimit);
+        }
+
+        // Container user (empty = image default)
+        if (!string.IsNullOrWhiteSpace(_options.ContainerUser))
+        {
+            args.Add("--user");
+            args.Add(_options.ContainerUser);
+        }
+
         // Workspace, git, and credential mounts from DockerMountBuilder
         if (mountContext is not null)
         {

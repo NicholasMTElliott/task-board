@@ -200,7 +200,7 @@ To avoid per-step container startup overhead, executors that support Docker can 
 - `ContainerUser` (string, default: `""`) — user to run as inside container (empty = image default)
 - `MemoryLimit` (string?, default: `null`) — optional memory limit, e.g. `"4g"`
 - `CpuLimit` (string?, default: `null`) — optional CPU limit, e.g. `"2.0"`
-- `NetworkMode` (string, default: `"host"`) — container network mode; `"none"` for full isolation
+- `NetworkMode` (string, default: `"host"`) — container network mode, forwarded as `--network` to `docker run`. `"host"` gives the sandbox access to host-published ports (e.g. the local `docker-compose` Postgres/Grafana stack on `localhost:5432`, `localhost:3000`). Use a compose network name (e.g. `"task-board_default"`) to reach support services by service name. Empty/null omits the `--network` flag (Docker default bridge). `MemoryLimit`, `CpuLimit`, and `ContainerUser` are likewise forwarded to `--memory`, `--cpus`, and `--user` respectively when set — all built in `DockerAgentExecutor.BuildDockerArgumentList`
 - `CredentialPath` (string, default: `""`) — host path to Claude CLI credentials; auto-detected from `~/.claude` if empty; used by `DockerMountBuilder`
 - `CredentialMountPoint` (string?, default: `null`) — container path for credentials; defaults to `/home/agent/.claude` (matches `agent` user home in sandbox image)
 - `AdditionalMounts` (Dictionary, default: `{}`) — operator-supplied static volume mounts (beyond standard workspace/credential set)
@@ -220,7 +220,7 @@ To avoid per-step container startup overhead, executors that support Docker can 
 | Worktree | `{worktreePath}` | `/workspace` | RW (agent's working dir; `-w /workspace`) |
 | Base `.git` | `{baseRepoPath}/.git` | `/repo/.git` | RO (shared object store + refs) |
 | `.git` file override | temp file | `/workspace/.git` | RO (shadows host-path gitdir reference) |
-| Credentials | `~/.claude/` (or `CredentialPath`) | `/home/agent/.claude` (or `CredentialMountPoint`) | RO (non-interactive auth) |
+| Credentials | per-run temp copy of `~/.claude/` (or `CredentialPath`) | `/home/agent/.claude` (or `CredentialMountPoint`) | RW staged copy — CLI needs to create `session-env/` at runtime. Copy excludes `projects`, `shell-snapshots`, `todos`, `history`. Temp dir deleted on `DockerMountContext` disposal; host `~/.claude/` is never mutated by the agent. |
 
 System prompt files use the pre-existing `DockerAgentOptions.PromptMountPoint` mount (unchanged).
 
