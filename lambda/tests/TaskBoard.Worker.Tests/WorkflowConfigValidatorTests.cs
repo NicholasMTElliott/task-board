@@ -1733,4 +1733,188 @@ public class WorkflowConfigValidatorAllowedChildrenTests
         Assert.Contains(errors, e =>
             e.Contains("shared_review") && e.Contains("unique across the whole config"));
     }
+
+    // ── Audit: Codex sandbox defaults ─────────────────────────────────────────
+
+    private static WorkflowConfig MakeCodexConfig(
+        Dictionary<string, string>? stateProviderParams = null,
+        Dictionary<string, string>? optionalStepProviderParams = null,
+        bool includeOptionalStep = false)
+    {
+        var steps = new List<WorkflowStep>
+        {
+            new("implement", "codex_implementer", "Do the thing."),
+        };
+
+        var optSteps = includeOptionalStep
+            ? new List<OptionalStepDefinition>
+            {
+                new("security_review", "codex_implementer", "Review security.",
+                    Description: "Security review",
+                    Triggers: "security-sensitive",
+                    ProviderParams: optionalStepProviderParams),
+            }
+            : null;
+
+        GateCheckConfig? gate = includeOptionalStep
+            ? new GateCheckConfig("codex_implementer", TaskPrompt: "gate")
+            : null;
+
+        return new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["impl"] = new("Implementing", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("impl"),
+                        ["ERROR"]    = TransitionTarget.ForColumn("impl"),
+                    },
+                    ProviderParams: stateProviderParams,
+                    Steps: steps,
+                    GateCheck: gate,
+                    OptionalSteps: optSteps),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["codex_implementer"] = new("gpt-4.1", "You are a dev.",
+                    new List<string> { "Implementation" }, Provider: "codex"),
+            });
+    }
+
+    [Fact]
+    public void Audit_CodexStepWithoutSandbox_ProducesWarning()
+    {
+        var cfg = MakeCodexConfig();
+
+        var warnings = WorkflowConfigValidator.Audit(cfg);
+
+        Assert.Contains(warnings, w =>
+            w.Contains("Codex role 'codex_implementer'")
+            && w.Contains("no sandbox policy"));
+    }
+
+    [Theory]
+    [InlineData("sandbox", "read-only")]
+    [InlineData("yolo", "true")]
+    [InlineData("fullAuto", "true")]
+    public void Audit_CodexStepWithExplicitSandboxKey_NoWarning(string key, string value)
+    {
+        var cfg = MakeCodexConfig(stateProviderParams: new Dictionary<string, string>
+        {
+            [key] = value,
+        });
+
+        var warnings = WorkflowConfigValidator.Audit(cfg);
+
+        Assert.DoesNotContain(warnings, w => w.Contains("codex_implementer"));
+    }
+
+    [Fact]
+    public void Audit_OptionalCodexStep_InheritsStateSandboxChoice()
+    {
+        var cfg = MakeCodexConfig(
+            stateProviderParams: new Dictionary<string, string> { ["sandbox"] = "read-only" },
+            includeOptionalStep: true);
+
+        var warnings = WorkflowConfigValidator.Audit(cfg);
+
+        Assert.DoesNotContain(warnings, w => w.Contains("security_review"));
+    }
+
+    [Fact]
+    public void Audit_OptionalCodexStep_CanOverrideWithItsOwnParams()
+    {
+        var cfg = MakeCodexConfig(
+            stateProviderParams: null,
+            optionalStepProviderParams: new Dictionary<string, string> { ["sandbox"] = "workspace-write" },
+            includeOptionalStep: true);
+
+        var warnings = WorkflowConfigValidator.Audit(cfg);
+
+        Assert.DoesNotContain(warnings, w => w.Contains("security_review"));
+    }
+
+    [Fact]
+    public void Audit_OptionalCodexStep_NoSandboxAtAll_ProducesWarning()
+    {
+        var cfg = MakeCodexConfig(includeOptionalStep: true);
+
+        var warnings = WorkflowConfigValidator.Audit(cfg);
+
+        Assert.Contains(warnings, w =>
+            w.Contains("optional step 'security_review'")
+            && w.Contains("no sandbox policy"));
+    }
+
+    [Fact]
+    public void Audit_NonAgentRunState_IsIgnored()
+    {
+        // Roles on manual-gate / holding / terminal states never execute,
+        // so no sandbox warning applies.
+        var cfg = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["tested"] = new("Tested", null, "manual_gate", null,
+                    new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new("gpt-4.1", "sys", ["x"], Provider: "codex"),
+            });
+
+        var warnings = WorkflowConfigValidator.Audit(cfg);
+
+        Assert.Empty(warnings);
+    }
+
+    [Fact]
+    public void Audit_NonCodexRole_NoWarning()
+    {
+        var cfg = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["impl"] = new("Implementing", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("impl"),
+                        ["ERROR"]    = TransitionTarget.ForColumn("impl"),
+                    },
+                    Steps: [new("step1", "claude_role", "prompt")]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                // Default Provider = "claude-cli"
+                ["claude_role"] = new("claude-sonnet-4-6", "sys", ["x"]),
+            });
+
+        var warnings = WorkflowConfigValidator.Audit(cfg);
+
+        Assert.Empty(warnings);
+    }
+
+    [Fact]
+    public void Audit_LegacySingleRoleState_WithCodex_WarnsOnMissingSandbox()
+    {
+        // Legacy shape: state.Role set, no Steps array. Audit should still catch this
+        // before Normalise() runs.
+        var cfg = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["impl"] = new("Implementing", "codex_role", "agent_run", "prompt",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("impl"),
+                        ["ERROR"]    = TransitionTarget.ForColumn("impl"),
+                    }),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["codex_role"] = new("gpt-4.1", "sys", ["x"], Provider: "codex"),
+            });
+
+        var warnings = WorkflowConfigValidator.Audit(cfg);
+
+        Assert.Contains(warnings, w =>
+            w.Contains("Codex role 'codex_role'") && w.Contains("no sandbox policy"));
+    }
 }

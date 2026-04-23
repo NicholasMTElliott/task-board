@@ -283,7 +283,7 @@ docker compose --profile build up agent-sandbox
 
 Build args: `-BaseImage`, `-AgentUid`, `-AgentGid`, `-ClaudeCliVersion`, `-Tag`, `-NoCache`.
 
-To enable the sandbox at runtime, set `AGENT_EXECUTOR=docker`. It is off by default.
+To enable the sandbox at runtime, set `AGENT_EXECUTOR=docker-claude-cli`. It is off by default.
 
 ### Run an agent on a card
 

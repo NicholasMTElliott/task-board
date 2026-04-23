@@ -155,6 +155,13 @@ builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
             $"Workflow config post-normalization validation failed:\n{string.Join("\n", postErrors)}");
     }
 
+    // Non-fatal audit — surface configurations that are valid but may not match
+    // operator intent (e.g. Codex role without an explicit sandbox policy).
+    foreach (var warning in WorkflowConfigValidator.Audit(config))
+    {
+        logger.LogWarning("Workflow audit: {Warning}", warning);
+    }
+
     // Set prompt resolution base directory
     config.ConfigDirectory = promptBaseDir;
 

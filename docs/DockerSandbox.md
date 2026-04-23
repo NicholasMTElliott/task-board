@@ -42,15 +42,34 @@ You should see `aiboard-agent-sandbox:latest`.
 
 ## 3. Enable the Docker executor
 
-Set `AGENT_EXECUTOR=docker` in your environment (or `.env.local`):
+Set `AGENT_EXECUTOR=docker-claude-cli` in your environment (or `.env.local`):
 
 ```powershell
-$env:AGENT_EXECUTOR = "docker"
+$env:AGENT_EXECUTOR = "docker-claude-cli"
 ```
 
-At startup the worker probes the Docker daemon (`PrerequisiteValidator.IsDockerAvailableAsync`). If Docker is reachable, the `docker` provider is registered automatically. If not, the worker falls back to `claude-cli` and logs a warning — check the startup log.
+At startup the worker probes the Docker daemon (`PrerequisiteValidator.IsDockerAvailableAsync`). If Docker is reachable, the `docker-claude-cli` provider is registered and `claude-cli` roles are transparently routed through it. If the daemon is unreachable, startup fails fast with a diagnostic message.
 
-### Optional tuning (`appsettings.json`, `Docker` section)
+### Optional tuning (`appsettings.json`, `DockerAgents:Claude` section)
+
+The configuration section was renamed from `Docker` to `DockerAgents:Claude` to make room for future Docker-wrapped executors. The legacy `Docker` section is still honoured, but startup logs a deprecation warning whenever it is populated — migrate to the new section to silence it.
+
+Example (in `appsettings.user.json`):
+
+```json
+{
+  "AgentExecutor": "docker-claude-cli",
+  "DockerAgents": {
+    "Claude": {
+      "ImageName": "aiboard-agent-sandbox:latest",
+      "ReuseContainer": true,
+      "NetworkMode": "host",
+      "TimeoutSeconds": 900,
+      "MaxBudgetUsd": 10.00
+    }
+  }
+}
+```
 
 | Key | Default | Purpose |
 |---|---|---|
@@ -61,8 +80,10 @@ At startup the worker probes the Docker daemon (`PrerequisiteValidator.IsDockerA
 | `CpuLimit` | *(unset)* | Forwarded to `docker run --cpus` when set. e.g. `2.0` |
 | `ContainerUser` | *(unset)* | Forwarded to `docker run --user` when set. e.g. `1000:1000` |
 | `CredentialPath` | *(auto `~/.claude`)* | Source for the per-run staged RW copy mounted into the container (so the Claude CLI can create `session-env/` at runtime). Host `~/.claude/` is never written to by the agent. Large subdirs (`projects`, `shell-snapshots`, `todos`, `history`) are skipped during the copy. |
+| `CredentialMountPoint` | `/home/agent/.claude` | Container-side target for the staged credentials. Matches the `agent` user's home directory in the default sandbox image. |
+| `PromptMountPoint` | `/mnt/aiboard/prompts` | Read-only mount for system-prompt files. |
 | `TimeoutSeconds` | `900` | Kill container after N seconds |
-| `MaxBudgetUsd` | `10.00` | Per-invocation CLI budget |
+| `MaxBudgetUsd` | `10.00` | Per-invocation Claude CLI budget |
 | `AdditionalMounts` | `{}` | Extra `-v host:container[:ro]` mounts |
 
 ---
@@ -115,7 +136,7 @@ dotnet run --project lambda/src/TaskBoard.Worker -- --mode metrics --card-id 3
 - `agent_run.session_startup_ms` — time to create + start the container
 - `step_result.session_exec_ms` — `docker exec` duration per step
 
-If both are `NULL` after a run with `AGENT_EXECUTOR=docker`, the session did not activate. Most common causes:
+If both are `NULL` after a run with `AGENT_EXECUTOR=docker-claude-cli`, the session did not activate. Most common causes:
 
 | Symptom | Cause | Fix |
 |---|---|---|

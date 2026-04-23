@@ -354,6 +354,100 @@ public static class WorkflowConfigValidator
         return errors;
     }
 
+    /// <summary>
+    /// Non-fatal audit checks — return soft warnings about configurations that are
+    /// valid but might not be what the operator intended. Callers log these as
+    /// warnings; they do not block startup.
+    /// </summary>
+    public static List<string> Audit(WorkflowConfig config)
+    {
+        var warnings = new List<string>();
+        AuditCodexSandboxDefaults(config, warnings);
+        return warnings;
+    }
+
+    /// <summary>
+    /// Keys in <c>providerParams</c> that make the Codex sandbox choice explicit.
+    /// Any one of these being set counts as an intentional choice.
+    /// </summary>
+    private static readonly string[] CodexSandboxParamKeys = { "sandbox", "yolo", "fullAuto" };
+
+    /// <summary>
+    /// Warns when a Codex role is invoked by a step whose effective provider params
+    /// set none of <see cref="CodexSandboxParamKeys"/>. The Codex CLI will still run
+    /// (falling back to <see cref="Clients.CodexCliLlmOptions.FullAuto"/>), but an
+    /// implicit sandbox choice is easy to miss on review — surfacing it lets the
+    /// operator opt in to a specific policy per role.
+    /// </summary>
+    private static void AuditCodexSandboxDefaults(WorkflowConfig config, List<string> warnings)
+    {
+        foreach (var (stateId, state) in config.States)
+        {
+            if (!string.Equals(state.GateType, GateTypes.AgentRun, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var stateHasSandboxChoice = HasAnyKey(state.ProviderParams, CodexSandboxParamKeys);
+
+            if (state.Steps is { Count: > 0 })
+            {
+                foreach (var step in state.Steps)
+                {
+                    if (!IsCodexRole(config, step.Role)) continue;
+                    if (stateHasSandboxChoice) continue;
+
+                    warnings.Add(
+                        $"State '{stateId}' ({state.Name}) step '{step.Name}' uses Codex role '{step.Role}' " +
+                        $"but no sandbox policy is configured in providerParams. " +
+                        $"Set one of {string.Join("/", CodexSandboxParamKeys)} on the state's providerParams " +
+                        $"to make the sandbox choice explicit (Codex will otherwise fall back to CodexCliLlmOptions.FullAuto).");
+                }
+            }
+
+            if (state.OptionalSteps is { Count: > 0 })
+            {
+                foreach (var optStep in state.OptionalSteps)
+                {
+                    if (!IsCodexRole(config, optStep.Role)) continue;
+                    var stepHasSandboxChoice = HasAnyKey(optStep.ProviderParams, CodexSandboxParamKeys);
+                    if (stateHasSandboxChoice || stepHasSandboxChoice) continue;
+
+                    warnings.Add(
+                        $"State '{stateId}' ({state.Name}) optional step '{optStep.Name}' uses Codex role " +
+                        $"'{optStep.Role}' but no sandbox policy is configured in providerParams (state or step). " +
+                        $"Set one of {string.Join("/", CodexSandboxParamKeys)} to make the sandbox choice explicit.");
+                }
+            }
+
+            // Legacy single-role states (no steps array) — Normalise() will convert them,
+            // but Audit may run before normalisation. Check the top-level Role too.
+            if ((state.Steps is null or { Count: 0 })
+                && state.Role is { Length: > 0 }
+                && IsCodexRole(config, state.Role)
+                && !stateHasSandboxChoice)
+            {
+                warnings.Add(
+                    $"State '{stateId}' ({state.Name}) uses Codex role '{state.Role}' but no sandbox policy " +
+                    $"is configured in providerParams. Set one of {string.Join("/", CodexSandboxParamKeys)} " +
+                    "to make the sandbox choice explicit.");
+            }
+        }
+    }
+
+    private static bool IsCodexRole(WorkflowConfig config, string? roleId)
+    {
+        if (string.IsNullOrEmpty(roleId)) return false;
+        return config.Roles.TryGetValue(roleId, out var role)
+            && string.Equals(role.Provider, "codex", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasAnyKey(IReadOnlyDictionary<string, string>? dict, IEnumerable<string> keys)
+    {
+        if (dict is null) return false;
+        foreach (var k in keys)
+            if (dict.ContainsKey(k)) return true;
+        return false;
+    }
+
     private static void ValidatePollingConfig(WorkflowConfig config, List<string> errors)
     {
         var runnableStates = config.States

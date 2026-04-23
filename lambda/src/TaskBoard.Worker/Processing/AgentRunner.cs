@@ -1080,13 +1080,15 @@ public sealed partial class AgentRunner(
             gateResult = gateResult2;
             logger.LogInformation("Gate check result for card {CardId}: {Outcome}", cardId, gateResult.Outcome);
 
-            // Save gate check result to DB
+            // Save gate check result to DB.
+            // Gate runs after main steps (or directly if no steps configured); fall back to 0
+            // when Steps is null so the gate still records cleanly.
             var gateRecord = new StepResultRecord(
                 RunId: runId,
                 CardId: cardId,
                 StateName: state.Name,
                 StepName: "gate_check",
-                StepIndex: state.Steps.Count,
+                StepIndex: state.Steps?.Count ?? 0,
                 Role: gateCheck.Role,
                 Model: gateRole.Model,
                 Outcome: gateResult.Outcome,
@@ -1271,13 +1273,15 @@ public sealed partial class AgentRunner(
             var (result, optionalSessionExecMs) = await ExecuteWithSessionAsync(
                 session, stepRole.Provider, context, $"optional:{step.Name}", runId, cancellationToken);
 
-            // Save optional step result to DB
+            // Save optional step result to DB.
+            // Optional steps come after main steps + gate; base index on Steps.Count,
+            // with 0 as a safe default when Steps is null.
             var optionalStepRecord = new StepResultRecord(
                 RunId: runId,
                 CardId: cardId,
                 StateName: state.Name,
                 StepName: $"optional:{step.Name}",
-                StepIndex: state.Steps.Count + 1 + i,
+                StepIndex: (state.Steps?.Count ?? 0) + 1 + i,
                 Role: step.Role,
                 Model: stepRole.Model,
                 Outcome: result.Outcome,
