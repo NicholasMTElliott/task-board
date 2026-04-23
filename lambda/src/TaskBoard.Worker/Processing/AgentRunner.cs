@@ -776,11 +776,23 @@ public sealed partial class AgentRunner(
                 logger.LogWarning(postEx, "Failed to post error feedback to board for card {CardId}", cardId);
             }
 
-            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, AgentOutcome.ERROR, ex.Message, FailureReason.AGENT_ERROR, cancellationToken));
+            await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, AgentOutcome.ERROR, ex.Message, ClassifyFailure(ex), cancellationToken));
             return new AgentRunResult(AgentOutcome.ERROR, ex.Message);
         }
         } // using logger scope
     }
+
+    /// <summary>
+    /// Maps an exception type to a <see cref="FailureReason"/> for persistence.
+    /// <see cref="RateLimitException"/> is handled separately (before this classifier
+    /// is reached) because it also needs to restore the card.
+    /// </summary>
+    internal static FailureReason ClassifyFailure(Exception ex) => ex switch
+    {
+        TimeoutException => FailureReason.TIMEOUT,
+        CliInfrastructureException => FailureReason.INFRASTRUCTURE,
+        _ => FailureReason.AGENT_ERROR,
+    };
 
     private async Task<(string BranchName, bool IsExisting)> ResolveBranchNameAsync(
         string repoPath, string cardId, string title, CancellationToken cancellationToken)

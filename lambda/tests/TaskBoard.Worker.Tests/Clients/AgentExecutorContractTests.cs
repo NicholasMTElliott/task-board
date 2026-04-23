@@ -132,6 +132,29 @@ public abstract class AgentExecutorContractTests
                 () => executor.ExecuteAsync(CreateContext(workspace), CancellationToken.None));
 
             Assert.Contains("exited with code 1", ex.Message);
+            // Generic-exit errors must NOT be classified as infrastructure —
+            // that classification is reserved for shell-level launch failures.
+            Assert.IsNotType<CliInfrastructureException>(ex);
+        }
+        finally { CleanupWorkspace(workspace); }
+    }
+
+    [Theory]
+    [InlineData(126)] // permission denied
+    [InlineData(127)] // command not found
+    public async Task ExecuteAsync_ShellLaunchFailureExitCode_ThrowsInfrastructureException(int exitCode)
+    {
+        var workspace = NewWorkspace();
+        try
+        {
+            var executor = CreateExecutor(StubRunner(
+                exitCode: exitCode, stdout: "", stderr: "bash: claude: " +
+                    (exitCode == 126 ? "permission denied" : "command not found")));
+
+            var ex = await Assert.ThrowsAsync<CliInfrastructureException>(
+                () => executor.ExecuteAsync(CreateContext(workspace), CancellationToken.None));
+
+            Assert.Contains($"exited with code {exitCode}", ex.Message);
         }
         finally { CleanupWorkspace(workspace); }
     }

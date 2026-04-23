@@ -10,12 +10,16 @@ public enum FailureReason
     /// <summary>The agent CLI or board API hit a rate limit.</summary>
     RATE_LIMIT,
 
-    /// <summary>The agent executor threw an unhandled exception.</summary>
+    /// <summary>The agent executor threw an unhandled exception (agent logic failure).</summary>
     AGENT_ERROR,
 
-    /// <summary>Reserved for infrastructure failures (e.g., network, compute). Not yet populated.</summary>
+    /// <summary>
+    /// CLI runtime or container infrastructure failure (e.g., binary missing,
+    /// permission denied, Docker daemon error). Mapped from
+    /// <see cref="Clients.CliInfrastructureException"/>.
+    /// </summary>
     INFRASTRUCTURE,
 
-    /// <summary>Reserved for timeout failures. Not yet populated.</summary>
+    /// <summary>Wall-clock timeout. Mapped from <see cref="TimeoutException"/>.</summary>
     TIMEOUT,
 }

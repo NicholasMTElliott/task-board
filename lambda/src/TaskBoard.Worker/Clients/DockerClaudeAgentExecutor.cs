@@ -145,6 +145,12 @@ public sealed class DockerClaudeAgentExecutor(
                 if (!string.IsNullOrEmpty(stdoutSnippet))
                     detail.Append($"\nStdout: {stdoutSnippet}");
 
+                // Docker daemon-level failures (125/126/127/137) and Claude-CLI
+                // shell-level failures (126/127) are infrastructure problems.
+                if (IsDockerExitCode(exitCode)
+                    || ClaudeAgentExecutor.IsInfrastructureExitCode(exitCode))
+                    throw new CliInfrastructureException(detail.ToString());
+
                 throw new InvalidOperationException(detail.ToString());
             }
 

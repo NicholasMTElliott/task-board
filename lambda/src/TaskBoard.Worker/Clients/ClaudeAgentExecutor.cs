@@ -74,6 +74,11 @@ public sealed class ClaudeAgentExecutor(
             if (!string.IsNullOrEmpty(stdoutSnippet))
                 detail += $"\nStdout: {stdoutSnippet}";
 
+            // Exit 126 (permission denied) / 127 (command not found) indicate
+            // environment / installation problems, not agent-level failures.
+            if (IsInfrastructureExitCode(exitCode))
+                throw new CliInfrastructureException(detail);
+
             throw new InvalidOperationException(detail);
         }
 
@@ -177,6 +182,13 @@ public sealed class ClaudeAgentExecutor(
 
         return args.ToArray();
     }
+
+    /// <summary>
+    /// Returns true for shell-level exit codes that indicate the CLI binary
+    /// could not be launched or exec'd (not an agent-level failure).
+    /// </summary>
+    internal static bool IsInfrastructureExitCode(int exitCode) =>
+        exitCode is 126 or 127;
 
     /// <summary>
     /// Checks stderr for Claude CLI rate-limit signals.

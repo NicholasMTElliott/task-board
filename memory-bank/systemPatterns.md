@@ -354,6 +354,14 @@ Resolved during service registration in `Program.cs` so missing required config 
 
 **Migration path:** V15 drops & recreates tables (no data preserved by design); V16 recreates the four metrics views.
 
+### Failure Classification
+`AgentRunner.ClassifyFailure(Exception)` maps executor-thrown exceptions to the `FailureReason` enum persisted to `agent_run.failure_reason`:
+- `TimeoutException` → `TIMEOUT`
+- `CliInfrastructureException` → `INFRASTRUCTURE` (subclass of `InvalidOperationException`; thrown by `ClaudeAgentExecutor`, `CodexAgentExecutor`, and `DockerClaudeAgentExecutor` for shell-level launch failures — exit 126/127 for all three, plus Docker daemon errors 125/126/127/137 for the Docker wrapper)
+- Everything else → `AGENT_ERROR`
+
+`RateLimitException` is handled in its own catch block (before `ClassifyFailure` is reached) and maps to `RATE_LIMIT`, because rate-limit handling also restores the card to the trigger column for retry.
+
 ### Rate Limiting
 - `CliRateLimitDetector` holds the per-CLI stderr pattern lists and a single `Matches(stderr, patterns)` helper (case-insensitive substring match). `ClaudePatterns` = "rate limit", "overloaded". `CodexDefaultPatterns` = "rate limit" / "rate-limit" / "rate_limit" / "ratelimit" / "too many requests" / "insufficient_quota" / "quota exceeded". Bare "429" is deliberately omitted (false-positive risk on numeric substrings).
 - `ClaudeAgentExecutor.IsRateLimited` is a shim over the shared detector; `DockerClaudeAgentExecutor` reuses it directly. `CodexAgentExecutor.IsRateLimited` (instance method) merges `CodexDefaultPatterns` with operator-supplied `CodexCliLlmOptions.RateLimitPatterns`.

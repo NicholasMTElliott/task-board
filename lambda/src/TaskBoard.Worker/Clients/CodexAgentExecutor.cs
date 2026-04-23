@@ -100,6 +100,9 @@ public sealed class CodexAgentExecutor(
                 if (!string.IsNullOrEmpty(stdoutSnippet))
                     detail += $"\nStdout: {stdoutSnippet}";
 
+                if (ClaudeAgentExecutor.IsInfrastructureExitCode(exitCode))
+                    throw new CliInfrastructureException(detail);
+
                 throw new InvalidOperationException(detail);
             }
 
