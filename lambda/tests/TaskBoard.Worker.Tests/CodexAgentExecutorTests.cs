@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using TaskBoard.Worker.Clients;
 
 namespace TaskBoard.Worker.Tests;
@@ -611,5 +612,110 @@ public class CodexAgentExecutorTests
             var result = CodexCliResolver.Resolve("codex");
             Assert.True(result.Contains("codex", StringComparison.OrdinalIgnoreCase));
         }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // IsRateLimited — merges CodexDefaultPatterns with operator overrides
+    // ──────────────────────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("rate limit exceeded")]
+    [InlineData("HTTP 429 Too Many Requests")]
+    [InlineData("insufficient_quota for current billing period")]
+    [InlineData("rate_limit_exceeded")]
+    public void IsRateLimited_DefaultPatterns_AreDetected(string stderr)
+    {
+        var executor = CreateExecutor();
+        Assert.True(executor.IsRateLimited(stderr));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("generic error")]
+    [InlineData("authentication failed")]
+    public void IsRateLimited_NonMatchingStderr_ReturnsFalse(string stderr)
+    {
+        var executor = CreateExecutor();
+        Assert.False(executor.IsRateLimited(stderr));
+    }
+
+    [Fact]
+    public void IsRateLimited_OperatorOverridePattern_IsDetected()
+    {
+        var options = Microsoft.Extensions.Options.Options.Create(
+            new CodexCliLlmOptions
+            {
+                RateLimitPatterns = { "my-custom-throttle-marker" },
+            });
+        var executor = new CodexAgentExecutor(options,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<CodexAgentExecutor>.Instance);
+
+        Assert.True(executor.IsRateLimited("Error: my-custom-throttle-marker hit"));
+    }
+
+    [Fact]
+    public void IsRateLimited_OperatorOverride_DoesNotReplaceDefaults()
+    {
+        var options = Microsoft.Extensions.Options.Options.Create(
+            new CodexCliLlmOptions
+            {
+                RateLimitPatterns = { "custom-marker" },
+            });
+        var executor = new CodexAgentExecutor(options,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<CodexAgentExecutor>.Instance);
+
+        // Defaults still apply alongside overrides
+        Assert.True(executor.IsRateLimited("rate limit exceeded"));
+        Assert.True(executor.IsRateLimited("custom-marker hit"));
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // EnvVarsToRemove option
+    // ──────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void EnvVarsToRemove_Default_IsEmpty()
+    {
+        var opts = new CodexCliLlmOptions();
+        Assert.Empty(opts.EnvVarsToRemove);
+    }
+
+    [Fact]
+    public void EnvVarsToRemove_BindsFromConfiguration()
+    {
+        var configValues = new Dictionary<string, string?>
+        {
+            ["CodexCli:EnvVarsToRemove:0"] = "CLAUDECODE",
+            ["CodexCli:EnvVarsToRemove:1"] = "CODEX_RUNNING",
+        };
+        var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+            .AddInMemoryCollection(configValues)
+            .Build();
+
+        var opts = new CodexCliLlmOptions();
+        config.GetSection(CodexCliLlmOptions.SectionName).Bind(opts);
+
+        Assert.Equal(2, opts.EnvVarsToRemove.Count);
+        Assert.Contains("CLAUDECODE", opts.EnvVarsToRemove);
+        Assert.Contains("CODEX_RUNNING", opts.EnvVarsToRemove);
+    }
+
+    [Fact]
+    public void RateLimitPatterns_BindsFromConfiguration()
+    {
+        var configValues = new Dictionary<string, string?>
+        {
+            ["CodexCli:RateLimitPatterns:0"] = "custom-throttle",
+            ["CodexCli:RateLimitPatterns:1"] = "backoff-requested",
+        };
+        var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+            .AddInMemoryCollection(configValues)
+            .Build();
+
+        var opts = new CodexCliLlmOptions();
+        config.GetSection(CodexCliLlmOptions.SectionName).Bind(opts);
+
+        Assert.Equal(2, opts.RateLimitPatterns.Count);
+        Assert.Contains("custom-throttle", opts.RateLimitPatterns);
     }
 }

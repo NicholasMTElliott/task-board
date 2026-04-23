@@ -160,17 +160,18 @@ Agent executors are registered via `AgentExecutorResolver` which resolves by pro
 - `docker-claude-cli` — Docker executor registered under both `docker-claude-cli` and `claude-cli` keys; `claude-cli` workflow roles transparently route to Docker without config changes; fails fast at startup if Docker unavailable
 - unset / any other value — production auto-detect mode: real providers detected at startup (docker-available → registered under `docker-claude-cli`; other values trigger a deprecation warning)
 
-**DockerAgentExecutor** (`IAgentExecutor`, provider key `docker-claude-cli`) wraps Claude CLI invocation inside `docker run -i --rm`. Key design:
+**DockerClaudeAgentExecutor** (`IAgentExecutor`, provider key `docker-claude-cli`) wraps Claude CLI invocation inside `docker run -i --rm`. Key design:
 - Standalone class (no inheritance from `ClaudeAgentExecutor`) — differences in process surface are too large
-- System prompt file translated: host directory mounted read-only at `DockerAgentOptions.PromptMountPoint` (`/mnt/aiboard/prompts`); container path computed from `Path.GetFileName`
-- Container named `{prefix}-{cardId}-{random8}` (prefix: `aiboard-run`); random suffix prevents collisions, `--rm` cleans up on normal exit
+- Options bound to `DockerClaudeAgentOptions` (derives from `DockerAgentOptionsBase`); shared Docker-runtime settings (network/CPU/memory limits, reuse, additional mounts) live on the base so a future `DockerCodexAgentExecutor` can share them
+- System prompt file translated: host directory mounted read-only at `DockerClaudeAgentOptions.PromptMountPoint` (`/mnt/aiboard/prompts`); container path computed from `Path.GetFileName`
+- Container named `{prefix}-{tenantHash}-{cardId}-{random8}` (prefix: `aiboard-run`); random suffix prevents collisions, `--rm` cleans up on normal exit
 - On timeout (`TimeoutException`) or cancellation (`OperationCanceledException`), `ExecuteAsync` issues explicit `docker stop -t 30` (30s SIGTERM grace, then SIGKILL) followed by `docker rm -f` fallback; cleanup is best-effort (never throws, never masks original exception); uses `CancellationToken.None` since caller token may already be cancelled
 - Exit codes classified: Docker daemon errors (125/126/127/137) vs. Claude CLI errors (0–124) via `IsDockerExitCode`
 - `CLAUDECODE` env var stripped from subprocess environment
 - Rate-limit detection via `ClaudeAgentExecutor.IsRateLimited(stderr)` (same as host executor)
 - NDJSON parsing via shared `AgentOutputParser.ParseStreamOutput`
-- Workspace/credential mounts built by `DockerMountBuilder` (injected optionally); workspace mounts and env vars passed to `docker run` args and `SessionRequest`
-- Extensible static mounts (`DockerAgentOptions.AdditionalMounts` dictionary) — operator-supplied overrides beyond the standard workspace/credential set
+- Workspace/credential mounts built by `DockerClaudeMountBuilder` (inherits from `DockerMountBuilderBase` for the shared worktree/`.git` mount construction; injected optionally); workspace mounts and env vars passed to `docker run` args and `SessionRequest`
+- Extensible static mounts (`DockerClaudeAgentOptions.AdditionalMounts` dictionary — inherited from the base) — operator-supplied overrides beyond the standard workspace/credential set
 - Registered automatically when Docker daemon is detected at startup (`PrerequisiteValidator.IsDockerAvailableAsync` runs `docker info`)
 
 ### Container Session Reuse (IAgentExecutorSession)
@@ -182,7 +183,7 @@ To avoid per-step container startup overhead, executors that support Docker can 
 - `SessionRequest` record — `CardId`, `RunId`, `ContainerName` (`aiboard-{cardId}`), `ImageName`, optional `Mounts` (`IReadOnlyList<DockerMount>?`) and `EnvironmentVariables`
 
 **Lifecycle in `AgentRunner.ExecuteAsync`:**
-1. Before the step loop, attempt `TryCreateSessionAsync` if the resolved executor implements `ISessionableAgentExecutor` and `DockerAgentOptions.ReuseContainer` is `true`.
+1. Before the step loop, attempt `TryCreateSessionAsync` if the resolved executor implements `ISessionableAgentExecutor` and `DockerClaudeAgentOptions.ReuseContainer` (inherited from `DockerAgentOptionsBase`) is `true`.
 2. All LLM invocations (steps, gate check, optional specialist reviews) go through `ExecuteWithSessionAsync`, which routes through `session.ExecuteInSessionAsync` if the session is alive and the step's provider matches.
 3. Provider mismatch (e.g., haiku gate check on `claude-cli` while session is `docker`) bypasses the session and calls `executor.ExecuteAsync` directly — logged at Debug.
 4. If the session dies between steps, the invocation falls back to `executor.ExecuteAsync` transparently (logged at Warning).
@@ -190,7 +191,7 @@ To avoid per-step container startup overhead, executors that support Docker can 
 
 **Container naming:** `aiboard-{cardId}` — one per card, mutual exclusion enforced by IN_PROGRESS column transition.
 
-**Configuration:** `DockerAgentOptions` section (key `Docker`) in `appsettings.json`:
+**Configuration:** `DockerClaudeAgentOptions` section (key `DockerAgents:Claude`; legacy `Docker` still honoured with a deprecation warning) in `appsettings.json`:
 - `ReuseContainer` (bool, default: `true`) — set to `false` to revert to per-step `docker run`
 - `ImageName` (string, default: `"aiboard-agent-sandbox:latest"`) — Docker image
 - `ContainerNamePrefix` (string, default: `"aiboard-run"`) — prefix for `{prefix}-{cardId}-{random8}` container names
@@ -200,8 +201,8 @@ To avoid per-step container startup overhead, executors that support Docker can 
 - `ContainerUser` (string, default: `""`) — user to run as inside container (empty = image default)
 - `MemoryLimit` (string?, default: `null`) — optional memory limit, e.g. `"4g"`
 - `CpuLimit` (string?, default: `null`) — optional CPU limit, e.g. `"2.0"`
-- `NetworkMode` (string, default: `"host"`) — container network mode, forwarded as `--network` to `docker run`. `"host"` gives the sandbox access to host-published ports (e.g. the local `docker-compose` Postgres/Grafana stack on `localhost:5432`, `localhost:3000`). Use a compose network name (e.g. `"task-board_default"`) to reach support services by service name. Empty/null omits the `--network` flag (Docker default bridge). `MemoryLimit`, `CpuLimit`, and `ContainerUser` are likewise forwarded to `--memory`, `--cpus`, and `--user` respectively when set — all built in `DockerAgentExecutor.BuildDockerArgumentList`
-- `CredentialPath` (string, default: `""`) — host path to Claude CLI credentials; auto-detected from `~/.claude` if empty; used by `DockerMountBuilder`
+- `NetworkMode` (string, default: `"host"`) — container network mode, forwarded as `--network` to `docker run`. `"host"` gives the sandbox access to host-published ports (e.g. the local `docker-compose` Postgres/Grafana stack on `localhost:5432`, `localhost:3000`). Use a compose network name (e.g. `"task-board_default"`) to reach support services by service name. Empty/null omits the `--network` flag (Docker default bridge). `MemoryLimit`, `CpuLimit`, and `ContainerUser` are likewise forwarded to `--memory`, `--cpus`, and `--user` respectively when set — all built in `DockerClaudeAgentExecutor.BuildDockerArgumentList`
+- `CredentialPath` (string, default: `""`) — host path to Claude CLI credentials; auto-detected from `~/.claude` if empty; used by `DockerClaudeMountBuilder`
 - `CredentialMountPoint` (string?, default: `null`) — container path for credentials; defaults to `/home/agent/.claude` (matches `agent` user home in sandbox image)
 - `AdditionalMounts` (Dictionary, default: `{}`) — operator-supplied static volume mounts (beyond standard workspace/credential set)
 
@@ -213,7 +214,7 @@ To avoid per-step container startup overhead, executors that support Docker can 
 
 ### Docker Workspace and Credential Mounting
 
-`DockerMountBuilder` produces up to four bind mounts per run:
+`DockerClaudeMountBuilder` produces up to four bind mounts per run (the first three come from `DockerMountBuilderBase`):
 
 | Mount | Host path | Container path | Access |
 |-------|-----------|----------------|--------|
@@ -222,7 +223,7 @@ To avoid per-step container startup overhead, executors that support Docker can 
 | `.git` file override | temp file | `/workspace/.git` | RO (shadows host-path gitdir reference) |
 | Credentials | per-run temp copy of `~/.claude/` (or `CredentialPath`) | `/home/agent/.claude` (or `CredentialMountPoint`) | RW staged copy — CLI needs to create `session-env/` at runtime. Copy excludes `projects`, `shell-snapshots`, `todos`, `history`. Temp dir deleted on `DockerMountContext` disposal; host `~/.claude/` is never mutated by the agent. |
 
-System prompt files use the pre-existing `DockerAgentOptions.PromptMountPoint` mount (unchanged).
+System prompt files use the pre-existing `DockerClaudeAgentOptions.PromptMountPoint` mount (unchanged).
 
 **`.git` file override:** Git worktrees contain a `.git` file with an absolute host path (`gitdir: /host/path/.git/worktrees/{name}`). Inside the container this path doesn't exist. The override is a temp file containing the container-internal path (`gitdir: /repo/.git/worktrees/{name}`), bind-mounted over `/workspace/.git`. The `commondir` relative path (`../..`) resolves correctly without modification.
 
@@ -230,7 +231,7 @@ System prompt files use the pre-existing `DockerAgentOptions.PromptMountPoint` m
 
 **Path translation:** `DockerMountContext.TranslatePath(hostPath)` maps host absolute paths to container equivalents (e.g., `{worktreePath}/.aiboard/tasks/42.md` → `/workspace/.aiboard/tasks/42.md`). Used for `--append-system-prompt-file` and task file path arguments passed to the Claude CLI.
 
-**Windows paths:** `DockerMountBuilder.NormalizeHostPath` converts Windows backslashes to forward slashes for Docker Desktop compatibility.
+**Windows paths:** `DockerMountBuilderBase.NormalizeHostPath` converts Windows backslashes to forward slashes for Docker Desktop compatibility.
 
 `DockerMountContext` is `IAsyncDisposable`; disposal deletes the temp `.git` override file after the container session ends.
 
@@ -347,18 +348,21 @@ Resolved during service registration in `Program.cs` so missing required config 
 
 **Stores:** `PgRunStore`, `PgMetricsStore`, `CardClaimService` inject `ITenantIdentifier`; every INSERT carries `tenant_id`, every SELECT/UPDATE filters on it (including run-id-keyed updates — prevents cross-tenant clobbering).
 
-**Docker container naming:** `DockerAgentExecutor.BuildContainerName` emits `{prefix}-{tenantHash}-{cardId}-{rand}`; `AgentRunner` session container is `aiboard-{tenantHash}-{cardId}`. Two tenants with the same numeric `card_id` produce different container names. Orphaned-container detection still matches the `aiboard-` prefix.
+**Docker container naming:** `DockerClaudeAgentExecutor.BuildContainerName` emits `{prefix}-{tenantHash}-{cardId}-{rand}`; `AgentRunner` session container is `aiboard-{tenantHash}-{cardId}`. Two tenants with the same numeric `card_id` produce different container names. Orphaned-container detection still matches the `aiboard-` prefix.
 
 **Not (yet) tenant-scoped:** PGMQ queues (`events`, `pings`) remain global; queue mode is legacy/secondary. `ITenantIdentifier.ShortHash` is the intended suffix when this is addressed.
 
 **Migration path:** V15 drops & recreates tables (no data preserved by design); V16 recreates the four metrics views.
 
 ### Rate Limiting
-- `ClaudeAgentExecutor` and `DockerAgentExecutor` detect rate limits via stderr analysis (checks for "rate limit" / "overloaded")
-- `GitHubProjectsClient` detects GitHub API rate limits (HTTP 429, "abuse detection", "secondary rate")
-- Both throw `RateLimitException` with `RateLimitSource` (BoardApi or AgentCli)
-- `AgentRunner` catches `RateLimitException`, restores card to trigger column for retry
-- `PollingRunner` applies aggressive backoff: board API = 2min base, agent CLI = 30min base (cap 2hr)
+- `CliRateLimitDetector` holds the per-CLI stderr pattern lists and a single `Matches(stderr, patterns)` helper (case-insensitive substring match). `ClaudePatterns` = "rate limit", "overloaded". `CodexDefaultPatterns` = "rate limit" / "rate-limit" / "rate_limit" / "ratelimit" / "too many requests" / "insufficient_quota" / "quota exceeded". Bare "429" is deliberately omitted (false-positive risk on numeric substrings).
+- `ClaudeAgentExecutor.IsRateLimited` is a shim over the shared detector; `DockerClaudeAgentExecutor` reuses it directly. `CodexAgentExecutor.IsRateLimited` (instance method) merges `CodexDefaultPatterns` with operator-supplied `CodexCliLlmOptions.RateLimitPatterns`.
+- All three executors throw `RateLimitException(RateLimitSource.AgentCli)` on: non-zero exit + matching stderr, OR exit 0 + empty stdout + matching stderr. `GitHubProjectsClient` detects board-side rate limits (HTTP 429, "abuse detection", "secondary rate") and throws with `RateLimitSource.BoardApi`.
+- `AgentRunner` catches `RateLimitException`, restores card to trigger column for retry.
+- `PollingRunner` applies aggressive backoff: board API = 2min base, agent CLI = 30min base (cap 2hr).
+
+### ProcessRunnerDelegate (test seam)
+All three CLI executors (`ClaudeAgentExecutor`, `CodexAgentExecutor`, `DockerClaudeAgentExecutor`) accept an optional `ProcessRunnerDelegate` constructor parameter that defaults to the static `ProcessRunner.RunProcessAsync`. Tests pass a custom delegate to replay prerecorded `(exitCode, stdout, stderr)` without launching a real subprocess. `AgentExecutorContractTests` (abstract base in `lambda/tests/…/Clients/AgentExecutorContractTests.cs`) defines the shared scenario set every executor must satisfy; per-executor subclasses supply provider-specific stdout shapes (Claude/Docker-Claude use `{"type":"result","structured_output":{…}}`; Codex uses `{"type":"turn.completed","structured_output":{…}}`).
 
 ### Two-Phase Graceful Shutdown
 Applies to `--mode polling` and `--mode queue` (not agent mode — single card, exits naturally).
@@ -395,11 +399,13 @@ Applies to `--mode polling` and `--mode queue` (not agent mode — single card, 
 | CompletionRunner | Polls child cards for `children_complete` gate type |
 | PollingRunner | Automatic card pickup via priority-sorted polling |
 | ClaudeAgentExecutor | Claude CLI subprocess with `--json-schema` structured output |
-| DockerAgentExecutor | Claude CLI inside `docker run -i --rm`; provider key `docker-claude-cli`; auto-registered when Docker daemon detected |
-| DockerMountBuilder | Builds workspace/credential bind mount specifications for containerized agent execution |
+| DockerClaudeAgentExecutor | Claude CLI inside `docker run -i --rm`; provider key `docker-claude-cli`; auto-registered when Docker daemon detected |
+| DockerMountBuilderBase / DockerClaudeMountBuilder | Builds workspace/`.git` bind mounts (base, shared) and credential bind mount (Claude-specific) for containerized agent execution |
 | DockerMountContext | Disposable context: mount list, `GIT_OPTIONAL_LOCKS=0` env var, path translation map, temp file cleanup |
-| DockerAgentOptions / DockerMount | Config: image, user, memory/CPU limits, network mode, credential path/mount point, prompt mount, budget, timeout, extensible mounts |
-| CodexAgentExecutor | OpenAI Codex CLI subprocess (secondary/legacy) |
+| DockerAgentOptionsBase / DockerClaudeAgentOptions / DockerMount | Shared Docker-runtime config on the base (image, user, memory/CPU limits, network mode, reuse, additional mounts); Claude-specific config on the derived class (prompt mount, budget, credential path/mount) |
+| CodexAgentExecutor | OpenAI Codex CLI subprocess (secondary/legacy); rate-limit detection via `CliRateLimitDetector.CodexDefaultPatterns` ∪ operator `RateLimitPatterns`; configurable `EnvVarsToRemove` for subprocess env scrub; throws `RateLimitException(AgentCli)` on matching stderr for parity with Claude |
+| CliRateLimitDetector | Shared stderr pattern matching for CLI executors; exposes `ClaudePatterns`, `CodexDefaultPatterns`, and a `Matches(stderr, patterns)` case-insensitive helper |
+| ProcessRunnerDelegate | Optional delegate seam injected into each CLI executor constructor; defaults to `ProcessRunner.RunProcessAsync`; lets tests replay prerecorded process output via `AgentExecutorContractTests` |
 | AgentExecutorResolver | Multi-executor registry; resolves by provider key (`claude-cli`, `docker-claude-cli`, `codex`, `stub`) |
 | GitWorkspaceManager | Git worktree lifecycle for isolated agent execution |
 | ImageDownloader | Downloads card-referenced images to `.aiboard/images/{cardId}/`; authenticated via `gh auth token` for GitHub |

@@ -19,8 +19,8 @@ public sealed partial class AgentRunner(
     ImageDownloader imageDownloader,
     ITenantIdentifier tenant,
     ILogger<AgentRunner> logger,
-    DockerAgentOptions? dockerOptions = null,
-    DockerMountBuilder? mountBuilder = null,
+    DockerClaudeAgentOptions? dockerOptions = null,
+    DockerClaudeMountBuilder? mountBuilder = null,
     ShutdownCoordinator? shutdownCoordinator = null)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();

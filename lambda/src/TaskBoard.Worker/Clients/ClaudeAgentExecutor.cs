@@ -5,9 +5,11 @@ namespace TaskBoard.Worker.Clients;
 
 public sealed class ClaudeAgentExecutor(
     IOptions<ClaudeCliLlmOptions> options,
-    ILogger<ClaudeAgentExecutor> logger) : IAgentExecutor
+    ILogger<ClaudeAgentExecutor> logger,
+    ProcessRunnerDelegate? processRunner = null) : IAgentExecutor
 {
     private readonly ClaudeCliLlmOptions _options = options.Value;
+    private readonly ProcessRunnerDelegate _runProcess = processRunner ?? ProcessRunner.RunProcessAsync;
 
     public async Task<AgentResult> ExecuteAsync(
         AgentExecutionContext context, CancellationToken cancellationToken)
@@ -29,11 +31,11 @@ public sealed class ClaudeAgentExecutor(
         string stdout, stderr;
         try
         {
-            (exitCode, stdout, stderr) = await ProcessRunner.RunProcessAsync(
+            (exitCode, stdout, stderr) = await _runProcess(
                 _options.ExecutablePath, args, context.WorkspacePath,
                 _options.TimeoutSeconds, cancellationToken,
                 stdinData: userPrompt,
-                envVarsToRemove: ["CLAUDECODE"],
+                envVarsToRemove: new[] { "CLAUDECODE" },
                 agentName: "Claude agent");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -180,14 +182,11 @@ public sealed class ClaudeAgentExecutor(
     /// Checks stderr for Claude CLI rate-limit signals.
     /// Deliberately does NOT check stdout — agent conversation content flows through
     /// stdout as NDJSON and may discuss rate limiting without being rate-limited.
+    /// Thin shim over <see cref="CliRateLimitDetector"/> for backward compatibility
+    /// and for reuse by <see cref="DockerClaudeAgentExecutor"/>.
     /// </summary>
     internal static bool IsRateLimited(string stderr)
-    {
-        if (string.IsNullOrEmpty(stderr)) return false;
-
-        return stderr.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
-            || stderr.Contains("overloaded", StringComparison.OrdinalIgnoreCase);
-    }
+        => CliRateLimitDetector.Matches(stderr, CliRateLimitDetector.ClaudePatterns);
 
     internal static AgentResult ParseResult(string stdout)
         => AgentOutputParser.ParseResult(stdout);

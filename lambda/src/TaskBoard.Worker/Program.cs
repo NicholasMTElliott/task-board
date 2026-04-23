@@ -256,8 +256,13 @@ else
             builder.Services.Configure<ClaudeCliLlmOptions>(builder.Configuration.GetSection(ClaudeCliLlmOptions.SectionName));
         }
 
-        builder.Services.Configure<DockerAgentOptions>(builder.Configuration.GetSection(DockerAgentOptions.SectionName));
-        builder.Services.PostConfigure<DockerAgentOptions>(opts =>
+        // Bind legacy `Docker` section first (deprecated; provides defaults when set),
+        // then the new `DockerAgents:Claude` section on top so new values win on conflict.
+        builder.Services.Configure<DockerClaudeAgentOptions>(
+            builder.Configuration.GetSection(DockerClaudeAgentOptions.LegacySectionName));
+        builder.Services.Configure<DockerClaudeAgentOptions>(
+            builder.Configuration.GetSection(DockerClaudeAgentOptions.SectionName));
+        builder.Services.PostConfigure<DockerClaudeAgentOptions>(opts =>
         {
             if (string.IsNullOrEmpty(opts.CredentialPath))
             {
@@ -267,7 +272,7 @@ else
                     opts.CredentialPath = credPath;
             }
         });
-        builder.Services.AddSingleton<DockerAgentExecutor>();
+        builder.Services.AddSingleton<DockerClaudeAgentExecutor>();
 
         // Only mark docker-claude-cli as available when Docker is actually detected.
         // If dockerModeRequested but docker is absent, the fail-fast check below fires.
@@ -294,7 +299,7 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
 
     if (detectedProviders.Contains("docker") || detectedProviders.Contains("docker-claude-cli"))
     {
-        var dockerExecutor = sp.GetRequiredService<DockerAgentExecutor>();
+        var dockerExecutor = sp.GetRequiredService<DockerClaudeAgentExecutor>();
         executors["docker-claude-cli"] = dockerExecutor;
 
         // In docker-claude-cli mode, transparently redirect "claude-cli" roles to Docker
@@ -348,12 +353,16 @@ builder.Services.AddSingleton(agentIdentity);
 var shutdownCoordinator = new ShutdownCoordinator();
 builder.Services.AddSingleton(shutdownCoordinator);
 
-// Docker agent options (always registered; defaults used when section is absent)
-builder.Services.Configure<DockerAgentOptions>(builder.Configuration.GetSection(DockerAgentOptions.SectionName));
-builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<DockerAgentOptions>>().Value);
+// Docker-Claude agent options (always registered; defaults used when neither section is set).
+// Legacy `Docker` section binds first; new `DockerAgents:Claude` section wins on conflict.
+builder.Services.Configure<DockerClaudeAgentOptions>(
+    builder.Configuration.GetSection(DockerClaudeAgentOptions.LegacySectionName));
+builder.Services.Configure<DockerClaudeAgentOptions>(
+    builder.Configuration.GetSection(DockerClaudeAgentOptions.SectionName));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<DockerClaudeAgentOptions>>().Value);
 
-// Mount builder: builds workspace/credential mounts for Docker container execution
-builder.Services.AddSingleton<DockerMountBuilder>();
+// Mount builder: builds workspace/credential mounts for Docker/Claude container execution
+builder.Services.AddSingleton<DockerClaudeMountBuilder>();
 
 // Agent mode services — resolve GitHub token for authenticated image downloads
 string? ghImageToken = null;
@@ -532,9 +541,9 @@ if (detectedProviders.Contains("claude-cli") && agentExecutorMode != "stub" && !
 }
 if (dockerModeRequested && detectedProviders.Contains("docker-claude-cli"))
 {
-    var dockerOpts = host.Services.GetRequiredService<IOptions<DockerAgentOptions>>().Value;
+    var dockerOpts = host.Services.GetRequiredService<IOptions<DockerClaudeAgentOptions>>().Value;
     logger.LogInformation(
-        "DockerAgentOptions: ImageName={Image}, NetworkMode={Network}, MemoryLimit={Memory}, CredentialPath={Creds}",
+        "DockerClaudeAgentOptions: ImageName={Image}, NetworkMode={Network}, MemoryLimit={Memory}, CredentialPath={Creds}",
         dockerOpts.ImageName, dockerOpts.NetworkMode, dockerOpts.MemoryLimit ?? "(none)", dockerOpts.CredentialPath);
 }
 

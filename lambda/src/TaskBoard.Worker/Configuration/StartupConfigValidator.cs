@@ -111,6 +111,30 @@ public static class StartupConfigValidator
                 "Falling back to auto-detect."));
         }
 
+        // ── Warning 9: legacy `Docker` section is deprecated ─────────────────
+        // Fires whenever the legacy section has any values, regardless of whether
+        // the new section is also set — operators should always be told to migrate.
+        var legacyDockerPresent = SectionHasValues(config.GetSection(DockerClaudeAgentOptions.LegacySectionName));
+        if (legacyDockerPresent)
+        {
+            findings.Add(new Finding(Severity.Warning, DockerClaudeAgentOptions.LegacySectionName,
+                $"Config section '{DockerClaudeAgentOptions.LegacySectionName}' is populated. " +
+                $"This section is deprecated — migrate to '{DockerClaudeAgentOptions.SectionName}'. " +
+                "The legacy section is still honoured for backward compatibility; " +
+                "values in the new section override the legacy section on conflict."));
+        }
+
+        // ── Warning 10: CodexCli:MaxBudgetUsd is not supported ───────────────
+        // Codex CLI has no budget-cap flag. Setting this value silently no-ops
+        // today; the warning makes the misconfiguration visible.
+        if (!string.IsNullOrWhiteSpace(config["CodexCli:MaxBudgetUsd"]))
+        {
+            findings.Add(new Finding(Severity.Warning, "CodexCli:MaxBudgetUsd",
+                "CodexCli:MaxBudgetUsd is set but Codex CLI has no budget-cap flag; " +
+                "the value is ignored. Use CodexCli:TimeoutSeconds to bound run cost " +
+                "by wall-clock time, or remove the setting."));
+        }
+
         return findings;
     }
 

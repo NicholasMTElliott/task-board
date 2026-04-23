@@ -1,12 +1,12 @@
 namespace TaskBoard.Worker.Clients;
 
 /// <summary>
-/// Configuration options for Docker-based agent execution.
+/// Shared Docker-runtime configuration for any Docker-wrapped CLI agent executor.
+/// CLI-specific subclasses (e.g., <see cref="DockerClaudeAgentOptions"/>) add provider
+/// settings such as credential paths and prompt mount points.
 /// </summary>
-public sealed class DockerAgentOptions
+public abstract class DockerAgentOptionsBase
 {
-    public const string SectionName = "Docker";
-
     /// <summary>
     /// When true (default), a Docker container is created before the first step and reused
     /// for all subsequent steps within the same agent run (via docker exec).
@@ -14,20 +14,13 @@ public sealed class DockerAgentOptions
     /// </summary>
     public bool ReuseContainer { get; set; } = true;
 
-    /// <summary>Docker image to use for the agent container.</summary>
-    public string ImageName { get; set; } = "aiboard-agent-sandbox:latest";
-
-    /// <summary>Prefix for auto-generated container names: {prefix}-{cardId}-{suffix}.</summary>
-    public string ContainerNamePrefix { get; set; } = "aiboard-run";
-
     /// <summary>
-    /// Mount point inside the container for host-side system prompt files (read-only).
-    /// The parent directory of <c>SystemPromptFilePath</c> is mounted here.
+    /// Docker image to run. Defaults are set by the provider-specific subclass.
     /// </summary>
-    public string PromptMountPoint { get; set; } = "/mnt/aiboard/prompts";
+    public string ImageName { get; set; } = "";
 
-    /// <summary>Maximum Claude CLI budget per container invocation.</summary>
-    public decimal MaxBudgetUsd { get; set; } = 10.00m;
+    /// <summary>Prefix for auto-generated container names: {prefix}-{tenantHash}-{cardId}-{suffix}.</summary>
+    public string ContainerNamePrefix { get; set; } = "aiboard-run";
 
     /// <summary>Timeout in seconds before the container is killed.</summary>
     public int TimeoutSeconds { get; set; } = 900;
@@ -52,20 +45,6 @@ public sealed class DockerAgentOptions
     /// Key: a human-readable label for logging; value: mount details.
     /// </summary>
     public Dictionary<string, DockerMount> AdditionalMounts { get; set; } = [];
-
-    /// <summary>
-    /// Host path to the Claude CLI credential directory (e.g., <c>~/.claude/</c>).
-    /// When null, <see cref="DockerMountBuilder"/> auto-detects by probing <c>~/.claude/</c>.
-    /// Set explicitly if credentials are stored in a non-standard location.
-    /// </summary>
-    public string? CredentialPath { get; set; }
-
-    /// <summary>
-    /// Container path where Claude credentials are mounted (read-only).
-    /// Defaults to <see cref="DockerMountBuilder.DefaultCredentialMountPoint"/> (<c>/home/agent/.claude</c>),
-    /// which matches the <c>agent</c> user in the aiboard-agent-sandbox image.
-    /// </summary>
-    public string? CredentialMountPoint { get; set; }
 }
 
 /// <summary>A volume mount entry for <c>docker run -v {host}:{container}[:ro]</c>.</summary>

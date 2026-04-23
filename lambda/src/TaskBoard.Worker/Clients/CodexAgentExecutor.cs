@@ -10,9 +10,11 @@ namespace TaskBoard.Worker.Clients;
 /// </summary>
 public sealed class CodexAgentExecutor(
     IOptions<CodexCliLlmOptions> options,
-    ILogger<CodexAgentExecutor> logger) : IAgentExecutor
+    ILogger<CodexAgentExecutor> logger,
+    ProcessRunnerDelegate? processRunner = null) : IAgentExecutor
 {
     private readonly CodexCliLlmOptions _options = options.Value;
+    private readonly ProcessRunnerDelegate _runProcess = processRunner ?? ProcessRunner.RunProcessAsync;
 
     public async Task<AgentResult> ExecuteAsync(
         AgentExecutionContext context, CancellationToken cancellationToken)
@@ -44,10 +46,13 @@ public sealed class CodexAgentExecutor(
             string stdout, stderr;
             try
             {
-                (exitCode, stdout, stderr) = await ProcessRunner.RunProcessAsync(
+                (exitCode, stdout, stderr) = await _runProcess(
                     _options.ExecutablePath, args, context.WorkspacePath,
                     _options.TimeoutSeconds, cancellationToken,
                     stdinData: combinedPrompt,
+                    envVarsToRemove: _options.EnvVarsToRemove.Count > 0
+                        ? _options.EnvVarsToRemove.ToArray()
+                        : null,
                     agentName: "Codex agent");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -68,6 +73,17 @@ public sealed class CodexAgentExecutor(
 
             if (exitCode != 0)
             {
+                if (IsRateLimited(stderr))
+                {
+                    var snippet = stderr[..Math.Min(500, stderr.Length)].Trim();
+                    logger.LogWarning(
+                        "Codex CLI rate limited for card {CardId}. Exit code {ExitCode}. Stderr: {Stderr}",
+                        context.TargetCardId, exitCode, snippet);
+                    throw new RateLimitException(
+                        $"Codex CLI rate limited (exit code {exitCode}). Stderr: {snippet}",
+                        RateLimitSource.AgentCli);
+                }
+
                 logger.LogError(
                     "Codex agent exited with code {ExitCode}. Stderr: {Stderr}. Stdout: {Stdout}",
                     exitCode, stderr, stdout[..Math.Min(500, stdout.Length)]);
@@ -89,6 +105,17 @@ public sealed class CodexAgentExecutor(
 
             if (string.IsNullOrWhiteSpace(stdout))
             {
+                if (IsRateLimited(stderr))
+                {
+                    var snippet = stderr[..Math.Min(500, stderr.Length)].Trim();
+                    logger.LogWarning(
+                        "Codex CLI rate limited for card {CardId} (exit code 0, empty output). Stderr: {Stderr}",
+                        context.TargetCardId, snippet);
+                    throw new RateLimitException(
+                        $"Codex CLI rate limited (exit code 0, empty output). Stderr: {snippet}",
+                        RateLimitSource.AgentCli);
+                }
+
                 logger.LogError("Codex agent returned empty stdout. Stderr: {Stderr}", stderr);
                 AgentOutputParser.LogReproductionInfo(
                     logger, "Codex", _options.ExecutablePath, args,
@@ -228,6 +255,21 @@ public sealed class CodexAgentExecutor(
 
     internal static AgentResult ParseResult(string stdout)
         => AgentOutputParser.ParseResult(stdout);
+
+    /// <summary>
+    /// Checks Codex CLI stderr for rate-limit signals.
+    /// Merges <see cref="CliRateLimitDetector.CodexDefaultPatterns"/> with
+    /// operator-supplied <see cref="CodexCliLlmOptions.RateLimitPatterns"/>.
+    /// </summary>
+    internal bool IsRateLimited(string stderr)
+    {
+        if (CliRateLimitDetector.Matches(stderr, CliRateLimitDetector.CodexDefaultPatterns))
+            return true;
+        if (_options.RateLimitPatterns.Count > 0
+            && CliRateLimitDetector.Matches(stderr, _options.RateLimitPatterns))
+            return true;
+        return false;
+    }
 
     /// <summary>
     /// Parses the NDJSON stream emitted by <c>codex exec --json</c>.

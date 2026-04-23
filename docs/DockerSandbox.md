@@ -125,7 +125,7 @@ If both are `NULL` after a run with `AGENT_EXECUTOR=docker`, the session did not
 | Container exits 137 | OOM kill | Raise `MemoryLimit` |
 
 ### 5.5 Sanity toggle
-Confirm both code paths work by flipping `Docker:ReuseContainer` between `true` and `false` and re-running. Session mode fills the `session_*` columns; per-step mode still runs inside Docker but leaves them `NULL`.
+Confirm both code paths work by flipping `DockerAgents:Claude:ReuseContainer` (legacy: `Docker:ReuseContainer`) between `true` and `false` and re-running. Session mode fills the `session_*` columns; per-step mode still runs inside Docker but leaves them `NULL`.
 
 ---
 

@@ -8,17 +8,19 @@ namespace TaskBoard.Worker.Clients;
 /// Reuses <see cref="AgentOutputParser"/> for NDJSON stream parsing and
 /// <see cref="ClaudeAgentExecutor.IsRateLimited"/> for rate-limit detection.
 /// </summary>
-public sealed class DockerAgentExecutor(
-    IOptions<DockerAgentOptions> options,
+public sealed class DockerClaudeAgentExecutor(
+    IOptions<DockerClaudeAgentOptions> options,
     ITenantIdentifier tenant,
-    ILogger<DockerAgentExecutor> logger,
-    DockerMountBuilder? mountBuilder = null) : IAgentExecutor
+    ILogger<DockerClaudeAgentExecutor> logger,
+    DockerClaudeMountBuilder? mountBuilder = null,
+    ProcessRunnerDelegate? processRunner = null) : IAgentExecutor
 {
-    private readonly DockerAgentOptions _options = options.Value;
+    private readonly DockerClaudeAgentOptions _options = options.Value;
+    private readonly ProcessRunnerDelegate _runProcess = processRunner ?? ProcessRunner.RunProcessAsync;
 
     private const string DockerExecutable = "docker";
 
-    // Claude CLI is installed at this path inside the aiboard-sandbox image (#61).
+    // Claude CLI is installed at this path inside the aiboard-sandbox image.
     private const string ContainerClaudeExecutable = "claude";
 
     // Grace period passed to `docker stop -t` (seconds before SIGKILL is sent).
@@ -83,11 +85,11 @@ public sealed class DockerAgentExecutor(
             string stdout, stderr;
             try
             {
-                (exitCode, stdout, stderr) = await ProcessRunner.RunProcessAsync(
+                (exitCode, stdout, stderr) = await _runProcess(
                     DockerExecutable, dockerArgs, context.WorkspacePath,
                     _options.TimeoutSeconds, cancellationToken,
                     stdinData: userPrompt,
-                    envVarsToRemove: ["CLAUDECODE"],
+                    envVarsToRemove: new[] { "CLAUDECODE" },
                     agentName: $"Docker agent ({containerName})");
             }
             catch (TimeoutException)
@@ -287,7 +289,7 @@ public sealed class DockerAgentExecutor(
 
     /// <summary>
     /// Translates the host-side system prompt file path into a container-side path
-    /// by mapping its parent directory to <see cref="DockerAgentOptions.PromptMountPoint"/>.
+    /// by mapping its parent directory to <see cref="DockerClaudeAgentOptions.PromptMountPoint"/>.
     /// </summary>
     internal (string HostPromptDir, string ContainerPromptPath) TranslateSystemPromptPath(
         string hostFilePath)
@@ -316,7 +318,7 @@ public sealed class DockerAgentExecutor(
     /// <param name="hostPromptDir">Host directory containing system prompt files (mounted read-only).</param>
     /// <param name="claudeArgs">Claude CLI arguments.</param>
     /// <param name="mountContext">
-    /// Optional workspace mount context from <see cref="DockerMountBuilder"/>.
+    /// Optional workspace mount context from <see cref="DockerClaudeMountBuilder"/>.
     /// When provided, adds workspace/git/.git-override/credential mounts, env vars, and <c>-w /workspace</c>.
     /// </param>
     internal string[] BuildDockerArgumentList(
@@ -361,7 +363,7 @@ public sealed class DockerAgentExecutor(
             args.Add(_options.ContainerUser);
         }
 
-        // Workspace, git, and credential mounts from DockerMountBuilder
+        // Workspace, git, and credential mounts from DockerClaudeMountBuilder
         if (mountContext is not null)
         {
             foreach (var mount in mountContext.Mounts)
@@ -381,7 +383,7 @@ public sealed class DockerAgentExecutor(
 
             // Set container working directory to the mounted worktree
             args.Add("-w");
-            args.Add(DockerMountBuilder.WorkspaceMountPoint);
+            args.Add(DockerMountBuilderBase.WorkspaceMountPoint);
         }
 
         // Mount the system prompt directory read-only
@@ -391,7 +393,7 @@ public sealed class DockerAgentExecutor(
             args.Add($"{hostPromptDir}:{_options.PromptMountPoint}:ro");
         }
 
-        // Additional configured mounts (e.g. workspace, credentials — see #65)
+        // Additional configured mounts (operator-supplied extras)
         foreach (var (label, mount) in _options.AdditionalMounts)
         {
             if (string.IsNullOrEmpty(mount.HostPath) || string.IsNullOrEmpty(mount.ContainerPath))
@@ -423,7 +425,7 @@ public sealed class DockerAgentExecutor(
     /// <summary>
     /// Builds the Claude CLI argument list using the container-side system prompt path.
     /// Mirrors <see cref="ClaudeAgentExecutor.BuildArgumentList"/> with budget sourced
-    /// from <see cref="DockerAgentOptions"/> instead of <see cref="ClaudeCliLlmOptions"/>.
+    /// from <see cref="DockerClaudeAgentOptions"/> instead of <see cref="ClaudeCliLlmOptions"/>.
     /// </summary>
     internal string[] BuildClaudeArgumentList(
         AgentExecutionContext context,

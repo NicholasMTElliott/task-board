@@ -214,4 +214,73 @@ public class StartupConfigValidatorTests
         Assert.False(StartupConfigValidator.LogAndMaybeExit(
             findings, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance));
     }
+
+    // ── Warning 9: legacy Docker section is deprecated ───────────────────────
+
+    [Fact]
+    public void LegacyDockerSection_Populated_ProducesWarning()
+    {
+        var findings = StartupConfigValidator.Validate(Build(
+            ("Docker:ImageName", "custom:1.0")));
+
+        Assert.Contains(findings, f =>
+            f.Severity == StartupConfigValidator.Severity.Warning
+            && f.Key == "Docker"
+            && f.Message.Contains("deprecated"));
+    }
+
+    [Fact]
+    public void LegacyDockerSection_AlsoWarns_WhenNewSectionIsAlsoSet()
+    {
+        // Regression guard: warning must fire even when both sections exist,
+        // so operators are always nudged to clean up legacy config.
+        var findings = StartupConfigValidator.Validate(Build(
+            ("Docker:ImageName", "legacy:1.0"),
+            ("DockerAgents:Claude:ImageName", "new:1.0")));
+
+        Assert.Contains(findings, f =>
+            f.Severity == StartupConfigValidator.Severity.Warning
+            && f.Key == "Docker");
+    }
+
+    [Fact]
+    public void LegacyDockerSection_Absent_NoWarning()
+    {
+        var findings = StartupConfigValidator.Validate(Build(
+            ("DockerAgents:Claude:ImageName", "custom:1.0")));
+
+        Assert.DoesNotContain(findings, f =>
+            f.Key == "Docker" && f.Message.Contains("deprecated"));
+    }
+
+    // ── Warning 10: CodexCli:MaxBudgetUsd is unsupported ─────────────────────
+
+    [Fact]
+    public void CodexCliMaxBudgetUsd_Set_ProducesWarning()
+    {
+        var findings = StartupConfigValidator.Validate(Build(
+            ("CodexCli:MaxBudgetUsd", "5.00")));
+
+        Assert.Contains(findings, f =>
+            f.Severity == StartupConfigValidator.Severity.Warning
+            && f.Key == "CodexCli:MaxBudgetUsd");
+    }
+
+    [Fact]
+    public void CodexCliMaxBudgetUsd_Absent_NoWarning()
+    {
+        var findings = StartupConfigValidator.Validate(Build(
+            ("CodexCli:TimeoutSeconds", "600")));
+
+        Assert.DoesNotContain(findings, f => f.Key == "CodexCli:MaxBudgetUsd");
+    }
+
+    [Fact]
+    public void CodexCliMaxBudgetUsd_Empty_NoWarning()
+    {
+        var findings = StartupConfigValidator.Validate(Build(
+            ("CodexCli:MaxBudgetUsd", "")));
+
+        Assert.DoesNotContain(findings, f => f.Key == "CodexCli:MaxBudgetUsd");
+    }
 }

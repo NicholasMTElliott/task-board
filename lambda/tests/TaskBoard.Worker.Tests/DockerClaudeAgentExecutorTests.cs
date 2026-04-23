@@ -4,9 +4,9 @@ using TaskBoard.Worker.Clients;
 
 namespace TaskBoard.Worker.Tests;
 
-public class DockerAgentExecutorTests
+public class DockerClaudeAgentExecutorTests
 {
-    private static DockerAgentExecutor CreateExecutor(
+    private static DockerClaudeAgentExecutor CreateExecutor(
         string imageName = "aiboard-sandbox:latest",
         string promptMountPoint = "/mnt/aiboard/prompts",
         decimal maxBudgetUsd = 10.00m,
@@ -16,7 +16,7 @@ public class DockerAgentExecutorTests
         string? cpuLimit = null,
         string containerUser = "")
     {
-        var opts = Options.Create(new DockerAgentOptions
+        var opts = Options.Create(new DockerClaudeAgentOptions
         {
             ImageName = imageName,
             PromptMountPoint = promptMountPoint,
@@ -28,8 +28,8 @@ public class DockerAgentExecutorTests
             CpuLimit = cpuLimit,
             ContainerUser = containerUser,
         });
-        return new DockerAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
-            NullLogger<DockerAgentExecutor>.Instance);
+        return new DockerClaudeAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
+            NullLogger<DockerClaudeAgentExecutor>.Instance);
     }
 
     private static AgentExecutionContext CreateContext(
@@ -439,7 +439,7 @@ public class DockerAgentExecutorTests
     [InlineData(137)] // Container killed (OOM / SIGKILL)
     public void IsDockerExitCode_DockerSpecificCodes_ReturnsTrue(int exitCode)
     {
-        Assert.True(DockerAgentExecutor.IsDockerExitCode(exitCode));
+        Assert.True(DockerClaudeAgentExecutor.IsDockerExitCode(exitCode));
     }
 
     [Theory]
@@ -449,7 +449,7 @@ public class DockerAgentExecutorTests
     [InlineData(124)] // Highest non-Docker code
     public void IsDockerExitCode_NonDockerCodes_ReturnsFalse(int exitCode)
     {
-        Assert.False(DockerAgentExecutor.IsDockerExitCode(exitCode));
+        Assert.False(DockerClaudeAgentExecutor.IsDockerExitCode(exitCode));
     }
 
     // ── BuildContainerName ───────────────────────────────────────────────────
@@ -485,7 +485,7 @@ public class DockerAgentExecutorTests
     }
 
     // ── ParseStreamOutput delegation ─────────────────────────────────────────
-    // ParseStreamOutput is shared via AgentOutputParser; verify DockerAgentExecutor
+    // ParseStreamOutput is shared via AgentOutputParser; verify DockerClaudeAgentExecutor
     // produces correct results via the same parser path.
 
     [Fact]
@@ -569,17 +569,17 @@ public class DockerAgentExecutorTests
         // ProcessRunner timeout for docker stop must be > grace period so docker stop
         // has time to complete its full SIGTERM window before being killed.
         Assert.True(
-            DockerAgentExecutor.StopCommandTimeoutSeconds > DockerAgentExecutor.StopGracePeriodSeconds,
+            DockerClaudeAgentExecutor.StopCommandTimeoutSeconds > DockerClaudeAgentExecutor.StopGracePeriodSeconds,
             "StopCommandTimeoutSeconds must exceed StopGracePeriodSeconds");
-        Assert.Equal(30, DockerAgentExecutor.StopGracePeriodSeconds);
-        Assert.True(DockerAgentExecutor.RemoveCommandTimeoutSeconds > 0,
+        Assert.Equal(30, DockerClaudeAgentExecutor.StopGracePeriodSeconds);
+        Assert.True(DockerClaudeAgentExecutor.RemoveCommandTimeoutSeconds > 0,
             "RemoveCommandTimeoutSeconds must be positive");
     }
 
     // ── Integration: StopAndRemoveContainerAsync ──────────────────────────────
 
     /// <summary>
-    /// Verifies that <see cref="DockerAgentExecutor.StopAndRemoveContainerAsync"/> stops
+    /// Verifies that <see cref="DockerClaudeAgentExecutor.StopAndRemoveContainerAsync"/> stops
     /// a running container without throwing.
     /// </summary>
     [Fact(Timeout = 60_000)]
@@ -613,7 +613,7 @@ public class DockerAgentExecutorTests
     }
 
     /// <summary>
-    /// Verifies that <see cref="DockerAgentExecutor.StopAndRemoveContainerAsync"/> does
+    /// Verifies that <see cref="DockerClaudeAgentExecutor.StopAndRemoveContainerAsync"/> does
     /// not throw when the container does not exist.
     /// </summary>
     [Fact(Timeout = 30_000)]
@@ -632,7 +632,7 @@ public class DockerAgentExecutorTests
     }
 
     /// <summary>
-    /// Verifies that <see cref="DockerAgentExecutor.StopAndRemoveContainerAsync"/> does
+    /// Verifies that <see cref="DockerClaudeAgentExecutor.StopAndRemoveContainerAsync"/> does
     /// not throw when the container is already stopped.
     /// </summary>
     [Fact(Timeout = 30_000)]

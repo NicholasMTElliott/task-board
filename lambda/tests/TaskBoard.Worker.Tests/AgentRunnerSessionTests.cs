@@ -135,7 +135,7 @@ public class AgentRunnerSessionTests : IDisposable
     private AgentRunner BuildRunner(
         IAgentExecutorResolver resolver,
         WorkflowConfig config,
-        DockerAgentOptions? dockerOptions = null)
+        DockerClaudeAgentOptions? dockerOptions = null)
     {
         return new AgentRunner(
             _boardClient,
@@ -231,7 +231,7 @@ public class AgentRunnerSessionTests : IDisposable
 
         var config = BuildSingleStepConfig("test-provider");
         var resolver = BuildResolverWithSessionable(sessionable);
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act
         var result = await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -252,7 +252,7 @@ public class AgentRunnerSessionTests : IDisposable
 
         var config = BuildSingleStepConfig("test-provider");
         var resolver = BuildResolverWithSessionable(sessionable);
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act
         await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -272,7 +272,7 @@ public class AgentRunnerSessionTests : IDisposable
 
         var config = BuildMultiStepConfig("test-provider", "test-provider");
         var resolver = BuildResolverWithSessionable(sessionable);
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act
         var result = await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -293,7 +293,7 @@ public class AgentRunnerSessionTests : IDisposable
 
         var config = BuildSingleStepConfig("test-provider");
         var resolver = BuildResolverWithSessionable(sessionable);
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act
         await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -313,7 +313,7 @@ public class AgentRunnerSessionTests : IDisposable
 
         var config = BuildSingleStepConfig("test-provider");
         var resolver = BuildResolverWithSessionable(sessionable);
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act
         var result = await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -335,7 +335,7 @@ public class AgentRunnerSessionTests : IDisposable
 
         var config = BuildSingleStepConfig("test-provider");
         var resolver = BuildResolverWithSessionable(sessionable);
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act - should complete successfully via direct execution fallback
         var result = await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -358,7 +358,7 @@ public class AgentRunnerSessionTests : IDisposable
 
         var config = BuildSingleStepConfig("test-provider");
         var resolver = BuildResolverWithSessionable(sessionable);
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act - should still succeed via direct execution
         var result = await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -378,7 +378,7 @@ public class AgentRunnerSessionTests : IDisposable
 
         var config = BuildSingleStepConfig("test-provider");
         var resolver = BuildResolverWithSessionable(sessionable);
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act
         var result = await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -398,7 +398,7 @@ public class AgentRunnerSessionTests : IDisposable
 
         var config = BuildSingleStepConfig("test-provider");
         var resolver = BuildResolverWithSessionable(sessionable);
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = false });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = false });
 
         // Act
         var result = await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -443,7 +443,7 @@ public class AgentRunnerSessionTests : IDisposable
             {
                 ["test-provider"] = inner, // plain IAgentExecutor, no session support
             });
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act
         var result = await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -473,7 +473,7 @@ public class AgentRunnerSessionTests : IDisposable
                 ["provider-a"] = sessionable,
                 ["provider-b"] = otherInner,
             });
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act
         var result = await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -494,7 +494,7 @@ public class AgentRunnerSessionTests : IDisposable
 
         var config = BuildSingleStepConfig("test-provider");
         var resolver = BuildResolverWithSessionable(sessionable);
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act
         await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -517,7 +517,7 @@ public class AgentRunnerSessionTests : IDisposable
             {
                 ["test-provider"] = inner,
             });
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act
         await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -538,7 +538,7 @@ public class AgentRunnerSessionTests : IDisposable
 
         var config = BuildSingleStepConfig("test-provider");
         var resolver = BuildResolverWithSessionable(sessionable);
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act
         await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -562,7 +562,7 @@ public class AgentRunnerSessionTests : IDisposable
             {
                 ["test-provider"] = inner,
             });
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act
         await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -591,7 +591,7 @@ public class AgentRunnerSessionTests : IDisposable
             {
                 ["test-provider"] = interceptingExecutor,
             });
-        var runner = BuildRunner(resolver, config, new DockerAgentOptions { ReuseContainer = true });
+        var runner = BuildRunner(resolver, config, new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act
         await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
@@ -786,7 +786,7 @@ public class AgentRunnerSessionIntegrationTests : IDisposable
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             NullLogger<AgentRunner>.Instance,
-            new DockerAgentOptions { ReuseContainer = true });
+            new DockerClaudeAgentOptions { ReuseContainer = true });
 
         // Act
         var result = await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);

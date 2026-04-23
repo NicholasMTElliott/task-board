@@ -9,15 +9,15 @@ using static TaskBoard.Worker.Tests.Helpers.TestGitHelper;
 namespace TaskBoard.Worker.Tests;
 
 /// <summary>
-/// Unit and integration tests for <see cref="DockerMountBuilder"/> and <see cref="DockerMountContext"/>.
+/// Unit and integration tests for <see cref="DockerClaudeMountBuilder"/> and <see cref="DockerMountContext"/>.
 /// </summary>
-public class DockerMountBuilderTests : IDisposable
+public class DockerClaudeMountBuilderTests : IDisposable
 {
     private readonly string _tempDir;
-    private static readonly DockerMountBuilder Builder =
-        new(NullLogger<DockerMountBuilder>.Instance);
+    private static readonly DockerClaudeMountBuilder Builder =
+        new(NullLogger<DockerClaudeMountBuilder>.Instance);
 
-    public DockerMountBuilderTests()
+    public DockerClaudeMountBuilderTests()
     {
         _tempDir = Path.Combine(
             Path.GetTempPath(),
@@ -41,7 +41,7 @@ public class DockerMountBuilderTests : IDisposable
             Path.Combine(worktreeDir, ".git"),
             "gitdir: /repo/.git/worktrees/my-branch\n");
 
-        var result = DockerMountBuilder.ReadWorktreeGitdirPath(worktreeDir);
+        var result = DockerMountBuilderBase.ReadWorktreeGitdirPath(worktreeDir);
 
         Assert.Equal("/repo/.git/worktrees/my-branch", result);
     }
@@ -55,7 +55,7 @@ public class DockerMountBuilderTests : IDisposable
             Path.Combine(worktreeDir, ".git"),
             "GITDIR: /repo/.git/worktrees/branch\n");
 
-        var result = DockerMountBuilder.ReadWorktreeGitdirPath(worktreeDir);
+        var result = DockerMountBuilderBase.ReadWorktreeGitdirPath(worktreeDir);
 
         Assert.Equal("/repo/.git/worktrees/branch", result);
     }
@@ -68,7 +68,7 @@ public class DockerMountBuilderTests : IDisposable
         Directory.CreateDirectory(repoDir);
         Directory.CreateDirectory(Path.Combine(repoDir, ".git"));
 
-        var result = DockerMountBuilder.ReadWorktreeGitdirPath(repoDir);
+        var result = DockerMountBuilderBase.ReadWorktreeGitdirPath(repoDir);
 
         Assert.Null(result);
     }
@@ -79,7 +79,7 @@ public class DockerMountBuilderTests : IDisposable
         var emptyDir = Path.Combine(_tempDir, "empty");
         Directory.CreateDirectory(emptyDir);
 
-        var result = DockerMountBuilder.ReadWorktreeGitdirPath(emptyDir);
+        var result = DockerMountBuilderBase.ReadWorktreeGitdirPath(emptyDir);
 
         Assert.Null(result);
     }
@@ -91,7 +91,7 @@ public class DockerMountBuilderTests : IDisposable
         Directory.CreateDirectory(worktreeDir);
         File.WriteAllText(Path.Combine(worktreeDir, ".git"), "This is not a gitfile");
 
-        var result = DockerMountBuilder.ReadWorktreeGitdirPath(worktreeDir);
+        var result = DockerMountBuilderBase.ReadWorktreeGitdirPath(worktreeDir);
 
         Assert.Null(result);
     }
@@ -101,7 +101,7 @@ public class DockerMountBuilderTests : IDisposable
     [Fact]
     public void GetWorktreeName_UnixPath_ReturnsName()
     {
-        var name = DockerMountBuilder.GetWorktreeName(
+        var name = DockerMountBuilderBase.GetWorktreeName(
             "/home/user/repo/.git/worktrees/my-feature");
 
         Assert.Equal("my-feature", name);
@@ -110,7 +110,7 @@ public class DockerMountBuilderTests : IDisposable
     [Fact]
     public void GetWorktreeName_WindowsPath_ReturnsName()
     {
-        var name = DockerMountBuilder.GetWorktreeName(
+        var name = DockerMountBuilderBase.GetWorktreeName(
             @"C:\Users\user\repo\.git\worktrees\feature-branch");
 
         Assert.Equal("feature-branch", name);
@@ -119,7 +119,7 @@ public class DockerMountBuilderTests : IDisposable
     [Fact]
     public void GetWorktreeName_NoWorkteesSubdir_ReturnsNull()
     {
-        var name = DockerMountBuilder.GetWorktreeName("/repo/.git/refs/heads/main");
+        var name = DockerMountBuilderBase.GetWorktreeName("/repo/.git/refs/heads/main");
 
         Assert.Null(name);
     }
@@ -127,7 +127,7 @@ public class DockerMountBuilderTests : IDisposable
     [Fact]
     public void GetWorktreeName_TrailingSlash_ReturnsName()
     {
-        var name = DockerMountBuilder.GetWorktreeName(
+        var name = DockerMountBuilderBase.GetWorktreeName(
             "/repo/.git/worktrees/my-branch/");
 
         Assert.Equal("my-branch", name);
@@ -138,7 +138,7 @@ public class DockerMountBuilderTests : IDisposable
     [Fact]
     public void GetBaseGitPath_UnixPath_ReturnsBaseGit()
     {
-        var path = DockerMountBuilder.GetBaseGitPath(
+        var path = DockerMountBuilderBase.GetBaseGitPath(
             "/home/user/repo/.git/worktrees/my-feature");
 
         Assert.Equal("/home/user/repo/.git", path);
@@ -147,7 +147,7 @@ public class DockerMountBuilderTests : IDisposable
     [Fact]
     public void GetBaseGitPath_WindowsPath_ReturnsBaseGitWithForwardSlashes()
     {
-        var path = DockerMountBuilder.GetBaseGitPath(
+        var path = DockerMountBuilderBase.GetBaseGitPath(
             @"C:\Users\user\repo\.git\worktrees\feature-branch");
 
         Assert.Equal(@"C:/Users/user/repo/.git", path);
@@ -156,7 +156,7 @@ public class DockerMountBuilderTests : IDisposable
     [Fact]
     public void GetBaseGitPath_NoWorkteesSubdir_ReturnsNull()
     {
-        var path = DockerMountBuilder.GetBaseGitPath("/repo/.git/heads/main");
+        var path = DockerMountBuilderBase.GetBaseGitPath("/repo/.git/heads/main");
 
         Assert.Null(path);
     }
@@ -166,7 +166,7 @@ public class DockerMountBuilderTests : IDisposable
     [Fact]
     public void NormalizeHostPath_WindowsBackslashes_ConvertedToForwardSlashes()
     {
-        var result = DockerMountBuilder.NormalizeHostPath(@"C:\Users\Nicho\repos\project");
+        var result = DockerMountBuilderBase.NormalizeHostPath(@"C:\Users\Nicho\repos\project");
 
         Assert.Equal("C:/Users/Nicho/repos/project", result);
     }
@@ -174,7 +174,7 @@ public class DockerMountBuilderTests : IDisposable
     [Fact]
     public void NormalizeHostPath_UnixPath_Unchanged()
     {
-        var result = DockerMountBuilder.NormalizeHostPath("/home/user/repo");
+        var result = DockerMountBuilderBase.NormalizeHostPath("/home/user/repo");
 
         Assert.Equal("/home/user/repo", result);
     }
@@ -182,7 +182,7 @@ public class DockerMountBuilderTests : IDisposable
     [Fact]
     public void NormalizeHostPath_MixedSlashes_AllConvertedToForward()
     {
-        var result = DockerMountBuilder.NormalizeHostPath(@"C:/Users\Nicho/repos");
+        var result = DockerMountBuilderBase.NormalizeHostPath(@"C:/Users\Nicho/repos");
 
         Assert.Equal("C:/Users/Nicho/repos", result);
     }
@@ -194,11 +194,11 @@ public class DockerMountBuilderTests : IDisposable
     {
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         var workspace = ctx.Mounts.FirstOrDefault(
-            m => m.ContainerPath == DockerMountBuilder.WorkspaceMountPoint);
+            m => m.ContainerPath == DockerMountBuilderBase.WorkspaceMountPoint);
         Assert.NotNull(workspace);
         Assert.False(workspace.ReadOnly);
     }
@@ -207,15 +207,15 @@ public class DockerMountBuilderTests : IDisposable
     public async Task BuildAsync_Always_WorkspaceMountUsesNormalizedHostPath()
     {
         // Normalize the expected path the same way the builder does
-        var expected = DockerMountBuilder.NormalizeHostPath(_tempDir);
+        var expected = DockerMountBuilderBase.NormalizeHostPath(_tempDir);
 
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         var workspace = ctx.Mounts.First(
-            m => m.ContainerPath == DockerMountBuilder.WorkspaceMountPoint);
+            m => m.ContainerPath == DockerMountBuilderBase.WorkspaceMountPoint);
         Assert.Equal(expected, workspace.HostPath);
     }
 
@@ -232,11 +232,11 @@ public class DockerMountBuilderTests : IDisposable
 
         await using var ctx = await Builder.BuildAsync(
             worktreeDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         var gitMount = ctx.Mounts.FirstOrDefault(
-            m => m.ContainerPath == DockerMountBuilder.BaseGitMountPoint);
+            m => m.ContainerPath == DockerMountBuilderBase.BaseGitMountPoint);
         Assert.NotNull(gitMount);
         Assert.True(gitMount.ReadOnly);
         Assert.Equal("/repo/.git", gitMount.HostPath);
@@ -253,11 +253,11 @@ public class DockerMountBuilderTests : IDisposable
 
         await using var ctx = await Builder.BuildAsync(
             worktreeDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         var gitOverride = ctx.Mounts.FirstOrDefault(
-            m => m.ContainerPath == $"{DockerMountBuilder.WorkspaceMountPoint}/.git");
+            m => m.ContainerPath == $"{DockerMountBuilderBase.WorkspaceMountPoint}/.git");
         Assert.NotNull(gitOverride);
         Assert.True(gitOverride.ReadOnly);
     }
@@ -273,19 +273,19 @@ public class DockerMountBuilderTests : IDisposable
 
         await using var ctx = await Builder.BuildAsync(
             worktreeDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         // Find the temp .git override file
         var gitOverride = ctx.Mounts.First(
-            m => m.ContainerPath == $"{DockerMountBuilder.WorkspaceMountPoint}/.git");
+            m => m.ContainerPath == $"{DockerMountBuilderBase.WorkspaceMountPoint}/.git");
 
         // Read the content of the temp file (HostPath)
         Assert.True(File.Exists(gitOverride.HostPath),
             "Temp .git override file should exist before context is disposed");
         var content = await File.ReadAllTextAsync(gitOverride.HostPath);
         Assert.Equal(
-            $"gitdir: {DockerMountBuilder.BaseGitMountPoint}/worktrees/feature-x",
+            $"gitdir: {DockerMountBuilderBase.BaseGitMountPoint}/worktrees/feature-x",
             content);
     }
 
@@ -295,14 +295,14 @@ public class DockerMountBuilderTests : IDisposable
         // Graceful degradation: worktree has no .git file
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         Assert.Contains(ctx.Mounts,
-            m => m.ContainerPath == DockerMountBuilder.WorkspaceMountPoint);
+            m => m.ContainerPath == DockerMountBuilderBase.WorkspaceMountPoint);
         // No base git mount or override
         Assert.DoesNotContain(ctx.Mounts,
-            m => m.ContainerPath == DockerMountBuilder.BaseGitMountPoint);
+            m => m.ContainerPath == DockerMountBuilderBase.BaseGitMountPoint);
     }
 
     // ── BuildAsync — credential mount ────────────────────────────────────────
@@ -316,17 +316,17 @@ public class DockerMountBuilderTests : IDisposable
 
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = credDir },
+            new DockerClaudeAgentOptions { CredentialPath = credDir },
             CancellationToken.None);
 
         var credMount = ctx.Mounts.FirstOrDefault(
-            m => m.ContainerPath == DockerMountBuilder.DefaultCredentialMountPoint);
+            m => m.ContainerPath == DockerClaudeMountBuilder.DefaultCredentialMountPoint);
         Assert.NotNull(credMount);
         // Staged RW copy — the CLI needs to create session-env/ at runtime.
         Assert.False(credMount.ReadOnly);
         // Host path must NOT be the original source — it is a per-run staged copy.
         Assert.NotEqual(
-            DockerMountBuilder.NormalizeHostPath(credDir),
+            DockerMountBuilderBase.NormalizeHostPath(credDir),
             credMount.HostPath);
         Assert.Contains("aiboard-claude-", credMount.HostPath);
     }
@@ -341,11 +341,11 @@ public class DockerMountBuilderTests : IDisposable
 
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = credDir },
+            new DockerClaudeAgentOptions { CredentialPath = credDir },
             CancellationToken.None);
 
         var credMount = ctx.Mounts.First(
-            m => m.ContainerPath == DockerMountBuilder.DefaultCredentialMountPoint);
+            m => m.ContainerPath == DockerClaudeMountBuilder.DefaultCredentialMountPoint);
         // HostPath uses forward slashes (Docker); convert back to native for File.Exists.
         var stagedHostPath = credMount.HostPath.Replace('/', Path.DirectorySeparatorChar);
 
@@ -374,11 +374,11 @@ public class DockerMountBuilderTests : IDisposable
 
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = credDir },
+            new DockerClaudeAgentOptions { CredentialPath = credDir },
             CancellationToken.None);
 
         var credMount = ctx.Mounts.First(
-            m => m.ContainerPath == DockerMountBuilder.DefaultCredentialMountPoint);
+            m => m.ContainerPath == DockerClaudeMountBuilder.DefaultCredentialMountPoint);
         var stagedHostPath = credMount.HostPath.Replace('/', Path.DirectorySeparatorChar);
 
         Assert.True(File.Exists(Path.Combine(stagedHostPath, ".credentials.json")));
@@ -398,12 +398,12 @@ public class DockerMountBuilderTests : IDisposable
         string stagedHostPath;
         var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = credDir },
+            new DockerClaudeAgentOptions { CredentialPath = credDir },
             CancellationToken.None);
         try
         {
             var credMount = ctx.Mounts.First(
-                m => m.ContainerPath == DockerMountBuilder.DefaultCredentialMountPoint);
+                m => m.ContainerPath == DockerClaudeMountBuilder.DefaultCredentialMountPoint);
             stagedHostPath = credMount.HostPath.Replace('/', Path.DirectorySeparatorChar);
             Assert.True(Directory.Exists(stagedHostPath));
         }
@@ -427,7 +427,7 @@ public class DockerMountBuilderTests : IDisposable
 
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions
+            new DockerClaudeAgentOptions
             {
                 CredentialPath = credDir,
                 CredentialMountPoint = "/home/custom/.claude",
@@ -436,7 +436,7 @@ public class DockerMountBuilderTests : IDisposable
 
         Assert.Contains(ctx.Mounts, m => m.ContainerPath == "/home/custom/.claude");
         Assert.DoesNotContain(ctx.Mounts,
-            m => m.ContainerPath == DockerMountBuilder.DefaultCredentialMountPoint);
+            m => m.ContainerPath == DockerClaudeMountBuilder.DefaultCredentialMountPoint);
     }
 
     [Fact]
@@ -444,11 +444,11 @@ public class DockerMountBuilderTests : IDisposable
     {
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = "/this/path/does/not/exist" },
+            new DockerClaudeAgentOptions { CredentialPath = "/this/path/does/not/exist" },
             CancellationToken.None);
 
         Assert.DoesNotContain(ctx.Mounts,
-            m => m.ContainerPath == DockerMountBuilder.DefaultCredentialMountPoint);
+            m => m.ContainerPath == DockerClaudeMountBuilder.DefaultCredentialMountPoint);
     }
 
     // ── BuildAsync — environment variables ──────────────────────────────────
@@ -458,7 +458,7 @@ public class DockerMountBuilderTests : IDisposable
     {
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         Assert.True(ctx.EnvironmentVariables.TryGetValue("GIT_OPTIONAL_LOCKS", out var value));
@@ -472,7 +472,7 @@ public class DockerMountBuilderTests : IDisposable
     {
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         var subPath = Path.Combine(_tempDir, ".aiboard", "tasks", "42-feature.md");
@@ -487,12 +487,12 @@ public class DockerMountBuilderTests : IDisposable
     {
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         var result = ctx.TranslatePath(_tempDir);
 
-        Assert.Equal(DockerMountBuilder.WorkspaceMountPoint, result);
+        Assert.Equal(DockerMountBuilderBase.WorkspaceMountPoint, result);
     }
 
     [Fact]
@@ -500,7 +500,7 @@ public class DockerMountBuilderTests : IDisposable
     {
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         var result = ctx.TranslatePath("/some/completely/different/path/file.md");
@@ -516,7 +516,7 @@ public class DockerMountBuilderTests : IDisposable
 
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         // TranslatePath should handle backslash normalization
@@ -534,7 +534,7 @@ public class DockerMountBuilderTests : IDisposable
 
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         var result = ctx.TranslatePath(similar);
@@ -556,11 +556,11 @@ public class DockerMountBuilderTests : IDisposable
         DockerMount? gitOverrideMount;
         var ctx = await Builder.BuildAsync(
             worktreeDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         gitOverrideMount = ctx.Mounts.FirstOrDefault(
-            m => m.ContainerPath == $"{DockerMountBuilder.WorkspaceMountPoint}/.git");
+            m => m.ContainerPath == $"{DockerMountBuilderBase.WorkspaceMountPoint}/.git");
 
         Assert.NotNull(gitOverrideMount);
         Assert.True(File.Exists(gitOverrideMount.HostPath), "Temp file should exist before dispose");
@@ -575,7 +575,7 @@ public class DockerMountBuilderTests : IDisposable
     {
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         // First dispose
@@ -584,28 +584,28 @@ public class DockerMountBuilderTests : IDisposable
         await ctx.DisposeAsync();
     }
 
-    // ── DockerAgentExecutor.BuildDockerArgumentList with mount context ────────
+    // ── DockerClaudeAgentExecutor.BuildDockerArgumentList with mount context ────────
 
     [Fact]
     public async Task BuildDockerArgumentList_WithMountContext_IncludesWorkspaceVolumeArg()
     {
-        var opts = Options.Create(new DockerAgentOptions
+        var opts = Options.Create(new DockerClaudeAgentOptions
         {
             ImageName = "aiboard-test:latest",
             PromptMountPoint = "/mnt/prompts",
         });
-        var executor = new DockerAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerAgentExecutor>.Instance);
+        var executor = new DockerClaudeAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerClaudeAgentExecutor>.Instance);
 
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         var args = executor.BuildDockerArgumentList("test-container", "/host/prompts", [], ctx);
 
         // Should contain -v {normalized_tempDir}:/workspace
-        var normalizedTempDir = DockerMountBuilder.NormalizeHostPath(_tempDir);
-        var volumeArg = $"{normalizedTempDir}:{DockerMountBuilder.WorkspaceMountPoint}";
+        var normalizedTempDir = DockerMountBuilderBase.NormalizeHostPath(_tempDir);
+        var volumeArg = $"{normalizedTempDir}:{DockerMountBuilderBase.WorkspaceMountPoint}";
         var vIdx = FindArgIndex(args, "-v");
         Assert.True(vIdx >= 0 && args.Contains(volumeArg),
             $"Expected '-v {volumeArg}' in args. Got: {string.Join(' ', args)}");
@@ -614,30 +614,30 @@ public class DockerMountBuilderTests : IDisposable
     [Fact]
     public async Task BuildDockerArgumentList_WithMountContext_SetsWorkingDirectory()
     {
-        var opts = Options.Create(new DockerAgentOptions { ImageName = "aiboard-test:latest" });
-        var executor = new DockerAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerAgentExecutor>.Instance);
+        var opts = Options.Create(new DockerClaudeAgentOptions { ImageName = "aiboard-test:latest" });
+        var executor = new DockerClaudeAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerClaudeAgentExecutor>.Instance);
 
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         var args = executor.BuildDockerArgumentList("test-container", "/host/prompts", [], ctx);
 
         var wIdx = Array.IndexOf(args, "-w");
         Assert.True(wIdx >= 0, "Expected -w flag");
-        Assert.Equal(DockerMountBuilder.WorkspaceMountPoint, args[wIdx + 1]);
+        Assert.Equal(DockerMountBuilderBase.WorkspaceMountPoint, args[wIdx + 1]);
     }
 
     [Fact]
     public async Task BuildDockerArgumentList_WithMountContext_InjectsGitOptionalLocksEnvVar()
     {
-        var opts = Options.Create(new DockerAgentOptions { ImageName = "aiboard-test:latest" });
-        var executor = new DockerAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerAgentExecutor>.Instance);
+        var opts = Options.Create(new DockerClaudeAgentOptions { ImageName = "aiboard-test:latest" });
+        var executor = new DockerClaudeAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerClaudeAgentExecutor>.Instance);
 
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         var args = executor.BuildDockerArgumentList("test-container", "/host/prompts", [], ctx);
@@ -650,8 +650,8 @@ public class DockerMountBuilderTests : IDisposable
     [Fact]
     public void BuildDockerArgumentList_WithoutMountContext_NoWorkingDirectoryFlag()
     {
-        var opts = Options.Create(new DockerAgentOptions { ImageName = "aiboard-test:latest" });
-        var executor = new DockerAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerAgentExecutor>.Instance);
+        var opts = Options.Create(new DockerClaudeAgentOptions { ImageName = "aiboard-test:latest" });
+        var executor = new DockerClaudeAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerClaudeAgentExecutor>.Instance);
 
         var args = executor.BuildDockerArgumentList("test-container", "/host/prompts", [], mountContext: null);
 
@@ -710,7 +710,7 @@ public class DockerMountBuilderTests : IDisposable
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             NullLogger<AgentRunner>.Instance,
-            dockerOptions: new DockerAgentOptions { ReuseContainer = true, CredentialPath = "nonexistent-path" },
+            dockerOptions: new DockerClaudeAgentOptions { ReuseContainer = true, CredentialPath = "nonexistent-path" },
             mountBuilder: Builder);
 
         // Act
@@ -723,7 +723,7 @@ public class DockerMountBuilderTests : IDisposable
 
         // Workspace mount must be present
         Assert.Contains(capturedRequest.Mounts,
-            m => m.ContainerPath == DockerMountBuilder.WorkspaceMountPoint);
+            m => m.ContainerPath == DockerMountBuilderBase.WorkspaceMountPoint);
     }
 
     // ── Integration: Docker container git ops ────────────────────────────────
@@ -752,7 +752,7 @@ public class DockerMountBuilderTests : IDisposable
 
         await using var ctx = await Builder.BuildAsync(
             worktreeDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         // Build docker args: mount context volumes + run git log
@@ -790,7 +790,7 @@ public class DockerMountBuilderTests : IDisposable
 
         await using var ctx = await Builder.BuildAsync(
             worktreeDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         // Try to write to the base .git mount — should fail due to :ro
@@ -831,7 +831,7 @@ public class DockerMountBuilderTests : IDisposable
 
         await using var ctx = await Builder.BuildAsync(
             worktreeDir,
-            new DockerAgentOptions { CredentialPath = "nonexistent-path" },
+            new DockerClaudeAgentOptions { CredentialPath = "nonexistent-path" },
             CancellationToken.None);
 
         // Check if the file is readable inside the container
@@ -869,7 +869,7 @@ public class DockerMountBuilderTests : IDisposable
         // even when its UID doesn't match the container user (CI-only issue:
         // the GitHub runner mounts repos owned by `runner` while the alpine
         // container runs as root, triggering git's "dubious ownership" check).
-        args.AddRange(["-w", DockerMountBuilder.WorkspaceMountPoint,
+        args.AddRange(["-w", DockerMountBuilderBase.WorkspaceMountPoint,
             "alpine/git", "-c", "safe.directory=*", "log", "--oneline"]);
         return args.ToArray();
     }
@@ -885,7 +885,7 @@ public class DockerMountBuilderTests : IDisposable
             args.Add(spec);
         }
         // Attempt to write to the base .git mount (should fail — it's :ro)
-        args.AddRange(["alpine", "sh", "-c", $"echo test > {DockerMountBuilder.BaseGitMountPoint}/test-write.txt"]);
+        args.AddRange(["alpine", "sh", "-c", $"echo test > {DockerMountBuilderBase.BaseGitMountPoint}/test-write.txt"]);
         return args.ToArray();
     }
 

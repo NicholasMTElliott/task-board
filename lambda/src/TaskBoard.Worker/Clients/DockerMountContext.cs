@@ -5,7 +5,8 @@ namespace TaskBoard.Worker.Clients;
 /// Owns any temporary files created for the run (e.g., the .git override file) and deletes them on dispose.
 /// </summary>
 /// <remarks>
-/// Created by <see cref="DockerMountBuilder.BuildAsync"/>. Lifetime matches the container:
+/// Created by <see cref="DockerClaudeMountBuilder.BuildAsync"/> (or another subclass of
+/// <see cref="DockerMountBuilderBase"/>). Lifetime matches the container:
 /// dispose after the container exits so that temp files outlive the container run.
 /// </remarks>
 public sealed class DockerMountContext : IAsyncDisposable

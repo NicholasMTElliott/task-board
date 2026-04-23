@@ -58,7 +58,8 @@ public sealed record SessionRequest(
     /// <summary>Docker image name to start the container from.</summary>
     string ImageName,
     /// <summary>
-    /// Volume mounts to attach to the container. Populated by <see cref="DockerMountBuilder"/>
+    /// Volume mounts to attach to the container. Populated by a subclass of
+    /// <see cref="DockerMountBuilderBase"/> (e.g. <see cref="DockerClaudeMountBuilder"/>)
     /// with workspace, base .git, .git override, and credential mounts.
     /// </summary>
     IReadOnlyList<DockerMount>? Mounts = null,
