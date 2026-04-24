@@ -700,6 +700,21 @@ public class CodexAgentExecutorTests
         Assert.Contains("CODEX_RUNNING", opts.EnvVarsToRemove);
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // CodexCliResolver.TryGetVersionAsync
+    // ──────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task TryGetVersionAsync_MissingExecutable_ReturnsUnknownMarker()
+    {
+        // A guaranteed-missing path exercises the catch branch and proves
+        // the probe never throws.
+        var result = await CodexCliResolver.TryGetVersionAsync(
+            "/definitely-does-not-exist/codex-binary-xyz-123");
+
+        Assert.StartsWith("(unknown:", result);
+    }
+
     [Fact]
     public void RateLimitPatterns_BindsFromConfiguration()
     {

@@ -502,6 +502,25 @@ void LogMissingConfig(string requiredKeys)
     logger.LogInformation("Available AI providers: {Providers}",
         string.Join(", ", detectedProviders.Where(p => p != "stub").Order()));
 
+    // Codex version probe — emit at Info so ops can correlate behaviour changes with CLI upgrades.
+    // Never throws; "(unknown: ...)" indicates probe failure but does not block startup.
+    if (detectedProviders.Contains("codex"))
+    {
+        var codexOpts = host.Services.GetRequiredService<IOptions<CodexCliLlmOptions>>().Value;
+        var codexVersion = await CodexCliResolver.TryGetVersionAsync(codexOpts.ExecutablePath);
+        logger.LogInformation(
+            "Codex CLI resolved to '{Path}', version: {Version}",
+            codexOpts.ExecutablePath, codexVersion);
+        if (codexVersion.StartsWith("(unknown:", StringComparison.Ordinal))
+        {
+            logger.LogWarning(
+                "Codex CLI version probe failed. Executor runs will still be attempted, " +
+                "but CLI-version-drift bugs will be harder to diagnose without a recorded version. " +
+                "Run '{Path} --version' manually to investigate.",
+                codexOpts.ExecutablePath);
+        }
+    }
+
     // Check for orphaned aiboard-* containers from prior crashed runs
     var orphanedContainers = await PrerequisiteValidator.DetectOrphanedContainersAsync();
     if (orphanedContainers.Count > 0)

@@ -72,4 +72,65 @@ public static class CodexCliResolver
             return false;
         }
     }
+
+    /// <summary>
+    /// Runs <c>codex --version</c> and returns the trimmed stdout on success,
+    /// or an <c>(unknown: reason)</c> marker on failure. Intended for one-shot
+    /// startup logging — we want version drift to be visible in logs so that
+    /// post-mortems can correlate behaviour changes with CLI upgrades. Never throws.
+    /// </summary>
+    public static async Task<string> TryGetVersionAsync(
+        string executablePath, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var process = new System.Diagnostics.Process();
+            process.StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = executablePath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            process.StartInfo.ArgumentList.Add("--version");
+            process.Start();
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                timeoutCts.Token, cancellationToken);
+
+            try
+            {
+                await process.WaitForExitAsync(linked.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* best-effort */ }
+                return "(unknown: --version timed out after 5s)";
+            }
+
+            var stdout = (await process.StandardOutput.ReadToEndAsync(cancellationToken)).Trim();
+            var stderr = (await process.StandardError.ReadToEndAsync(cancellationToken)).Trim();
+
+            if (process.ExitCode != 0)
+                return $"(unknown: exit {process.ExitCode}; stderr={Truncate(stderr, 200)})";
+
+            if (!string.IsNullOrWhiteSpace(stdout))
+                return stdout;
+
+            // Some CLIs print version to stderr
+            if (!string.IsNullOrWhiteSpace(stderr))
+                return stderr;
+
+            return "(unknown: no output)";
+        }
+        catch (Exception ex)
+        {
+            return $"(unknown: {ex.GetType().Name}: {Truncate(ex.Message, 200)})";
+        }
+    }
+
+    private static string Truncate(string s, int max)
+        => s.Length <= max ? s : s[..max] + "...";
 }

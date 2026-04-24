@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
@@ -20,25 +21,54 @@ public sealed class CodexAgentExecutor(
         AgentExecutionContext context, CancellationToken cancellationToken)
     {
         logger.LogInformation(
-            "Launching Codex agent for card {CardId} in {Workspace}, model={Model}",
-            context.TargetCardId, context.WorkspacePath, context.Model);
+            "Launching Codex agent for card {CardId} in {Workspace}, model={Model}, timeoutSec={Timeout}",
+            context.TargetCardId, context.WorkspacePath, context.Model, _options.TimeoutSeconds);
+
+        // Sanity check: warn (do not fail) when the workspace is not a git checkout.
+        // Codex tooling generally assumes a git worktree; silent success against a
+        // non-git dir is a common confusion source.
+        if (!IsGitWorkspace(context.WorkspacePath))
+        {
+            logger.LogWarning(
+                "Workspace {Workspace} has no visible .git — Codex typically expects a git worktree. " +
+                "Git-aware operations (diff, status, log) will fail inside the agent. " +
+                "If this is intentional, ignore this warning.",
+                context.WorkspacePath);
+        }
 
         // Build combined prompt: system prompt prepended to task prompt
         // (Codex CLI has no --append-system-prompt-file equivalent)
         var combinedPrompt = await BuildCombinedPromptAsync(context, cancellationToken);
 
-        logger.LogDebug("Combined prompt length: {Length} chars", combinedPrompt.Length);
+        logger.LogInformation(
+            "Codex combined prompt: {Length} chars ({KB} KB)",
+            combinedPrompt.Length, combinedPrompt.Length / 1024);
+
+        if (combinedPrompt.Length > 200_000)
+        {
+            logger.LogWarning(
+                "Codex combined prompt is very large ({Length} chars). " +
+                "Large prompts may hit Codex CLI input limits or cause provider-side truncation. " +
+                "Consider trimming system prompt or prior-conversation context.",
+                combinedPrompt.Length);
+        }
+
+        var schemaJson = AgentOutputParser.MinifyJson(AgentSchemas.OutcomeSchemaOpenAI);
+        var schemaHash = Sha256Prefix(schemaJson);
+        logger.LogInformation(
+            "Codex output schema: {Length} chars, sha256={Hash}",
+            schemaJson.Length, schemaHash);
 
         // Write schema to temp file (Codex uses --output-schema <filepath>)
         var schemaFilePath = Path.Combine(Path.GetTempPath(), $"codex-schema-{Guid.NewGuid():N}.json");
         try
         {
-            await File.WriteAllTextAsync(schemaFilePath, AgentOutputParser.MinifyJson(AgentSchemas.OutcomeSchemaOpenAI), cancellationToken);
+            await File.WriteAllTextAsync(schemaFilePath, schemaJson, cancellationToken);
             logger.LogDebug("Schema written to temp file: {SchemaFile}", schemaFilePath);
 
             var args = BuildArgumentList(context, schemaFilePath);
 
-            logger.LogDebug("Codex CLI command: {FileName} {Args}",
+            logger.LogInformation("Codex CLI command: {FileName} {Args}",
                 _options.ExecutablePath, ProcessRunner.FormatArgsForLogging(args));
 
             // Pipe prompt via stdin ("-" arg) to avoid Windows command-line length limits
@@ -68,14 +98,25 @@ public sealed class CodexAgentExecutor(
             if (!string.IsNullOrWhiteSpace(stderr))
             {
                 logger.LogInformation("Codex agent stderr ({Length} chars):\n{Stderr}",
-                    stderr.Length, stderr[..Math.Min(5000, stderr.Length)]);
+                    stderr.Length, Truncate(stderr, 10_000));
+            }
+
+            // Pattern-match stderr for known failure signatures so the operator sees
+            // an actionable hint instead of a raw dump. Purely advisory — the actual
+            // exception is still thrown below based on exit/stdout shape.
+            var hint = DetectStderrFailureHint(stderr);
+            if (hint is not null)
+            {
+                logger.LogError(
+                    "Codex stderr matches known failure signature: {Category}. Hint: {Hint}",
+                    hint.Category, hint.Hint);
             }
 
             if (exitCode != 0)
             {
                 if (IsRateLimited(stderr))
                 {
-                    var snippet = stderr[..Math.Min(500, stderr.Length)].Trim();
+                    var snippet = Truncate(stderr, 1000).Trim();
                     logger.LogWarning(
                         "Codex CLI rate limited for card {CardId}. Exit code {ExitCode}. Stderr: {Stderr}",
                         context.TargetCardId, exitCode, snippet);
@@ -86,15 +127,17 @@ public sealed class CodexAgentExecutor(
 
                 logger.LogError(
                     "Codex agent exited with code {ExitCode}. Stderr: {Stderr}. Stdout: {Stdout}",
-                    exitCode, stderr, stdout[..Math.Min(500, stdout.Length)]);
+                    exitCode, Truncate(stderr, 10_000), Truncate(stdout, 2_000));
 
                 AgentOutputParser.LogReproductionInfo(
                     logger, "Codex", _options.ExecutablePath, args,
                     combinedPrompt, context.WorkspacePath);
 
-                var stderrSnippet = stderr[..Math.Min(1000, stderr.Length)].Trim();
-                var stdoutSnippet = stdout[..Math.Min(500, stdout.Length)].Trim();
+                var stderrSnippet = Truncate(stderr, 4000).Trim();
+                var stdoutSnippet = Truncate(stdout, 2000).Trim();
                 var detail = $"Codex CLI exited with code {exitCode}.";
+                if (hint is not null)
+                    detail += $"\n[Hint] {hint.Category}: {hint.Hint}";
                 if (!string.IsNullOrEmpty(stderrSnippet))
                     detail += $"\nStderr: {stderrSnippet}";
                 if (!string.IsNullOrEmpty(stdoutSnippet))
@@ -110,7 +153,7 @@ public sealed class CodexAgentExecutor(
             {
                 if (IsRateLimited(stderr))
                 {
-                    var snippet = stderr[..Math.Min(500, stderr.Length)].Trim();
+                    var snippet = Truncate(stderr, 1000).Trim();
                     logger.LogWarning(
                         "Codex CLI rate limited for card {CardId} (exit code 0, empty output). Stderr: {Stderr}",
                         context.TargetCardId, snippet);
@@ -119,28 +162,61 @@ public sealed class CodexAgentExecutor(
                         RateLimitSource.AgentCli);
                 }
 
-                logger.LogError("Codex agent returned empty stdout. Stderr: {Stderr}", stderr);
+                logger.LogError("Codex agent returned empty stdout. Stderr: {Stderr}",
+                    Truncate(stderr, 10_000));
                 AgentOutputParser.LogReproductionInfo(
                     logger, "Codex", _options.ExecutablePath, args,
                     combinedPrompt, context.WorkspacePath);
-                throw new InvalidOperationException(
-                    $"Codex CLI returned empty output. Stderr: {stderr[..Math.Min(500, stderr.Length)].Trim()}");
+                var emptyDetail = $"Codex CLI returned empty output. Stderr: {Truncate(stderr, 4000).Trim()}";
+                if (hint is not null)
+                    emptyDetail = $"[Hint] {hint.Category}: {hint.Hint}\n{emptyDetail}";
+                throw new InvalidOperationException(emptyDetail);
             }
 
             logger.LogDebug("Codex agent raw stdout ({Length} chars):\n{Stdout}",
-                stdout.Length, stdout[..Math.Min(10000, stdout.Length)]);
+                stdout.Length, Truncate(stdout, 10_000));
 
             var (resultJson, conversationLog) = ParseStreamOutput(stdout);
 
             if (!string.IsNullOrEmpty(conversationLog))
             {
                 logger.LogInformation("Codex agent conversation ({Length} chars):\n{Log}",
-                    conversationLog.Length, conversationLog[..Math.Min(5000, conversationLog.Length)]);
+                    conversationLog.Length, Truncate(conversationLog, 5000));
             }
 
-            var result = resultJson is not null
-                ? ParseResult(resultJson)
-                : ParseResult(stdout); // fallback: treat entire stdout as single JSON (backward compat)
+            AgentResult result;
+            if (resultJson is not null)
+            {
+                result = ParseResult(resultJson);
+            }
+            else
+            {
+                // No structured_output was seen in any NDJSON line. Before silently
+                // falling back to text-keyword scanning (which can misclassify the
+                // prompt echo as COMPLETE), try the backward-compat path: stdout as a
+                // single JSON document with a top-level structured_output. Only that
+                // path is safe; anything else blows up loudly.
+                if (TryParseSingleDocumentStructured(stdout, out var singleDocResult))
+                {
+                    logger.LogInformation(
+                        "Codex stdout parsed as single-document JSON with structured_output (no NDJSON stream).");
+                    result = singleDocResult;
+                }
+                else
+                {
+                    AgentOutputParser.LogReproductionInfo(
+                        logger, "Codex", _options.ExecutablePath, args,
+                        combinedPrompt, context.WorkspacePath);
+
+                    var diagnostic = BuildNoStructuredOutputDiagnostic(stdout, stderr, hint);
+                    logger.LogError(
+                        "Codex stdout contained no structured_output. Refusing to guess outcome.\n{Diagnostic}",
+                        diagnostic);
+                    throw new InvalidOperationException(
+                        "Codex CLI produced no structured_output event. " +
+                        "See log for full diagnostic.\n" + diagnostic);
+                }
+            }
 
             var resultWithLog = result with { ConversationLog = conversationLog };
             logger.LogInformation(
@@ -220,9 +296,19 @@ public sealed class CodexAgentExecutor(
         // Schema file for structured output validation
         args.AddRange(["--output-schema", schemaFilePath]);
 
-        var useYolo = context.ProviderParams?.TryGetValue("yolo", out var yolo) == true
-            ? string.Equals(yolo, "true", StringComparison.OrdinalIgnoreCase)
-            : _options.Yolo;
+        bool useYolo;
+        string yoloSource;
+        if (context.ProviderParams is not null
+            && context.ProviderParams.TryGetValue("yolo", out var yoloStr))
+        {
+            useYolo = string.Equals(yoloStr, "true", StringComparison.OrdinalIgnoreCase);
+            yoloSource = "providerParams";
+        }
+        else
+        {
+            useYolo = _options.Yolo;
+            yoloSource = "config";
+        }
 
         if (useYolo)
         {
@@ -231,9 +317,19 @@ public sealed class CodexAgentExecutor(
 
         // Automation preset: --full-auto enables workspace-write sandbox + on-request approvals.
         // providerParams can override via "fullAuto" (truthy string) or "sandbox" (explicit policy).
-        var useFullAuto = context.ProviderParams?.TryGetValue("fullAuto", out var fa) == true
-            ? string.Equals(fa, "true", StringComparison.OrdinalIgnoreCase)
-            : _options.FullAuto;
+        bool useFullAuto;
+        string fullAutoSource;
+        if (context.ProviderParams is not null
+            && context.ProviderParams.TryGetValue("fullAuto", out var fullAutoStr))
+        {
+            useFullAuto = string.Equals(fullAutoStr, "true", StringComparison.OrdinalIgnoreCase);
+            fullAutoSource = "providerParams";
+        }
+        else
+        {
+            useFullAuto = _options.FullAuto;
+            fullAutoSource = "config";
+        }
 
         if (!useYolo && useFullAuto)
         {
@@ -241,13 +337,40 @@ public sealed class CodexAgentExecutor(
         }
 
         // Explicit sandbox policy overrides --full-auto's default sandbox level
-        var sandbox = context.ProviderParams?.TryGetValue("sandbox", out var sb) == true
-            ? sb
-            : _options.Sandbox;
+        string? sandbox;
+        string sandboxSource;
+        if (context.ProviderParams is not null
+            && context.ProviderParams.TryGetValue("sandbox", out var sandboxStr))
+        {
+            sandbox = sandboxStr;
+            sandboxSource = "providerParams";
+        }
+        else
+        {
+            sandbox = _options.Sandbox;
+            sandboxSource = string.IsNullOrWhiteSpace(_options.Sandbox) ? "(none)" : "config";
+        }
 
         if (!useYolo && !string.IsNullOrWhiteSpace(sandbox))
         {
             args.AddRange(["--sandbox", sandbox]);
+        }
+
+        // Surface the effective policy so the operator can see — in logs at Info —
+        // exactly what Codex is being asked to do, and where each value came from.
+        // No silent defaults: values resolved from config are annotated as such.
+        logger.LogInformation(
+            "Codex effective policy: yolo={Yolo} ({YoloSrc}), fullAuto={FullAuto} ({FullAutoSrc}), sandbox={Sandbox} ({SandboxSrc})",
+            useYolo, yoloSource,
+            useFullAuto, fullAutoSource,
+            string.IsNullOrWhiteSpace(sandbox) ? "(unset)" : sandbox, sandboxSource);
+
+        if (useYolo && (useFullAuto || !string.IsNullOrWhiteSpace(sandbox)))
+        {
+            logger.LogWarning(
+                "Codex --yolo is enabled; --full-auto and --sandbox flags will be omitted. " +
+                "Configured fullAuto={FullAuto}, sandbox={Sandbox} have no effect in yolo mode.",
+                useFullAuto, sandbox ?? "(unset)");
         }
 
         // Read prompt from stdin
@@ -280,6 +403,25 @@ public sealed class CodexAgentExecutor(
     /// <c>turn.completed</c>, and <c>response.completed</c>. The exact event vocabulary
     /// may vary across versions — this parser is intentionally defensive.
     /// </summary>
+    /// <summary>
+    /// Top-level NDJSON event types we know how to handle. Anything outside this set
+    /// is surfaced as a warning at end-of-parse so CLI-version drift is visible.
+    /// </summary>
+    private static readonly HashSet<string> KnownEventTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "thread.started",
+        "turn.started",
+        "turn.completed",
+        "item.started",
+        "item.completed",
+        "item.updated",
+        "response.completed",
+        "response.started",
+        "assistant",
+        "user",
+        "system",
+    };
+
     internal (string? ResultJson, string ConversationLog) ParseStreamOutput(string stdout)
     {
         const int MaxConversationLogChars = 50_000;
@@ -288,14 +430,19 @@ public sealed class CodexAgentExecutor(
         string? lastResultJson = null;
         int resultMessageCount = 0;
         int structuredOutputCount = 0;
+        int malformedLineCount = 0;
+        int nonEmptyLineCount = 0;
         var conversationLog = new StringBuilder();
         var lineNumber = 0;
+        var unknownTypeCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var errorEventSamples = new List<string>();
 
         foreach (var line in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             lineNumber++;
             var trimmed = line.Trim();
             if (trimmed.Length == 0) continue;
+            nonEmptyLineCount++;
 
             try
             {
@@ -306,7 +453,21 @@ public sealed class CodexAgentExecutor(
                 var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
 
                 logger.LogDebug("NDJSON line {LineNumber}: type={Type}, raw={Raw}",
-                    lineNumber, type ?? "(no-type)", trimmed[..Math.Min(500, trimmed.Length)]);
+                    lineNumber, type ?? "(no-type)", Truncate(trimmed, 500));
+
+                // Track unknown top-level event types — CLI-version drift shows up here first.
+                if (type is not null && !KnownEventTypes.Contains(type))
+                {
+                    unknownTypeCounts[type] = unknownTypeCounts.TryGetValue(type, out var c) ? c + 1 : 1;
+                }
+
+                // Error-shaped events always deserve visibility; capture a sample.
+                if (type is not null
+                    && type.Contains("error", StringComparison.OrdinalIgnoreCase)
+                    && errorEventSamples.Count < 3)
+                {
+                    errorEventSamples.Add($"line {lineNumber}: {Truncate(trimmed, 500)}");
+                }
 
                 // Check for structured_output in any message
                 var hasStructuredOutput = root.TryGetProperty("structured_output", out var so)
@@ -322,7 +483,7 @@ public sealed class CodexAgentExecutor(
                     logger.LogInformation(
                         "NDJSON structured_output in event type={Type} #{Count} at line {LineNumber}: {Raw}",
                         eventType, structuredOutputCount + 1, lineNumber,
-                        trimmed[..Math.Min(2000, trimmed.Length)]);
+                        Truncate(trimmed, 2000));
 
                     if (structuredOutputCount == 0)
                     {
@@ -345,8 +506,9 @@ public sealed class CodexAgentExecutor(
             }
             catch (JsonException)
             {
+                malformedLineCount++;
                 logger.LogDebug("NDJSON line {LineNumber}: malformed JSON, skipping. Raw: {Raw}",
-                    lineNumber, trimmed[..Math.Min(200, trimmed.Length)]);
+                    lineNumber, Truncate(trimmed, 200));
             }
         }
 
@@ -361,10 +523,46 @@ public sealed class CodexAgentExecutor(
                 resultWithStructuredOutputLine, resultMessageCount);
         }
 
+        // Warn once about unknown event types — signals CLI-version drift.
+        if (unknownTypeCounts.Count > 0)
+        {
+            var summary = string.Join(", ", unknownTypeCounts
+                .OrderByDescending(kv => kv.Value)
+                .Select(kv => $"{kv.Key}={kv.Value}"));
+            logger.LogWarning(
+                "NDJSON parsing saw {Count} unknown top-level event type(s): {Summary}. " +
+                "This is likely Codex CLI version drift — update KnownEventTypes or verify parser coverage.",
+                unknownTypeCounts.Count, summary);
+        }
+
+        // Warn if a meaningful share of non-empty lines was malformed (>10%, min 2 lines).
+        // Occasional buffering noise is fine; systematic malformed output signals a bug.
+        if (nonEmptyLineCount > 0 && malformedLineCount >= 2
+            && (double)malformedLineCount / nonEmptyLineCount > 0.10)
+        {
+            logger.LogWarning(
+                "NDJSON parsing saw {Malformed}/{Total} malformed lines ({Pct:P1}). " +
+                "Codex stream output may be corrupt or buffered across event boundaries.",
+                malformedLineCount, nonEmptyLineCount,
+                (double)malformedLineCount / nonEmptyLineCount);
+        }
+
+        // Surface error-shaped events — these are sometimes the ONLY signal when
+        // Codex reports a provider-side failure but exits 0.
+        if (errorEventSamples.Count > 0)
+        {
+            logger.LogWarning(
+                "NDJSON stream contained error-shaped event(s):\n{Samples}",
+                string.Join("\n", errorEventSamples));
+        }
+
         logger.LogInformation(
-            "NDJSON parsing complete: {TotalLines} lines, resultEvents={ResultCount}, " +
-            "structuredOutputEvents={StructuredCount}, conversationLogChars={LogChars}",
-            lineNumber, resultMessageCount, structuredOutputCount, conversationLog.Length);
+            "NDJSON parsing complete: {TotalLines} lines ({NonEmpty} non-empty, {Malformed} malformed), " +
+            "resultEvents={ResultCount}, structuredOutputEvents={StructuredCount}, " +
+            "unknownTypes={UnknownTypeCount}, conversationLogChars={LogChars}",
+            lineNumber, nonEmptyLineCount, malformedLineCount,
+            resultMessageCount, structuredOutputCount,
+            unknownTypeCounts.Count, conversationLog.Length);
 
         var log = conversationLog.Length > MaxConversationLogChars
             ? conversationLog.ToString()[..MaxConversationLogChars] + "\n...[truncated]"
@@ -454,6 +652,179 @@ public sealed class CodexAgentExecutor(
         if (string.IsNullOrEmpty(text) || sb.Length >= maxChars) return;
         if (sb.Length > 0) sb.AppendLine("\n---\n");
         sb.Append(text);
+    }
+
+    // ─── Diagnostic helpers ─────────────────────────────────────────────────
+
+    private static string Truncate(string s, int max)
+        => s.Length <= max ? s : s[..max] + "...[truncated]";
+
+    /// <summary>
+    /// Returns the first 12 hex chars of SHA256(text) — stable identifier suitable
+    /// for correlating schema content across log lines ("did the schema change
+    /// between the run that worked and the run that didn't?").
+    /// </summary>
+    private static string Sha256Prefix(string text)
+    {
+        var bytes = Encoding.UTF8.GetBytes(text);
+        var hash = SHA256.HashData(bytes);
+        return Convert.ToHexString(hash, 0, 6).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// True if the workspace directory appears to be a git checkout (has a .git
+    /// file or directory, or an ancestor does). Non-throwing — returns false on
+    /// any IO error.
+    /// </summary>
+    private static bool IsGitWorkspace(string workspacePath)
+    {
+        try
+        {
+            var dir = new DirectoryInfo(workspacePath);
+            while (dir is not null)
+            {
+                var gitPath = Path.Combine(dir.FullName, ".git");
+                if (File.Exists(gitPath) || Directory.Exists(gitPath))
+                    return true;
+                dir = dir.Parent;
+            }
+        }
+        catch
+        {
+            // swallow — advisory check only
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Known failure signatures in Codex stderr. Each entry pairs a case-insensitive
+    /// substring with a short, actionable hint. Purely advisory — the actual
+    /// exception still carries the raw stderr; this just surfaces likely root causes
+    /// at the top of the log so the operator sees them first.
+    /// </summary>
+    private sealed record FailureHint(string Category, string Hint);
+
+    private static FailureHint? DetectStderrFailureHint(string stderr)
+    {
+        if (string.IsNullOrWhiteSpace(stderr)) return null;
+
+        // Order matters: check specific-then-generic. First match wins.
+        var signatures = new (string Pattern, string Category, string Hint)[]
+        {
+            ("OPENAI_API_KEY", "Auth",
+             "OPENAI_API_KEY is missing or empty. Set the env var or run 'codex login'."),
+            ("not authenticated", "Auth",
+             "Codex CLI reports it is not authenticated. Run 'codex login' and verify."),
+            ("invalid_api_key", "Auth",
+             "OPENAI_API_KEY is rejected by the provider. Rotate the key or re-run 'codex login'."),
+            ("401 Unauthorized", "Auth",
+             "Provider returned HTTP 401. Re-authenticate via 'codex login' or verify OPENAI_API_KEY."),
+            ("403 Forbidden", "Auth",
+             "Provider returned HTTP 403. The account may lack access to the requested model."),
+            ("model_not_found", "Model",
+             "The configured model is unknown to the provider. Check Role.Model against the current Codex model catalog."),
+            ("unknown model", "Model",
+             "Codex reports an unknown model name. Check Role.Model against the current Codex model catalog."),
+            ("unrecognized subcommand", "VersionDrift",
+             "Codex CLI rejected a subcommand. The installed Codex version may not support 'exec --json --output-schema'. Check 'codex --version' and compare to the tested baseline."),
+            ("unknown command", "VersionDrift",
+             "Codex CLI rejected a command. Likely a CLI version change; check 'codex --version'."),
+            ("error: unexpected argument", "VersionDrift",
+             "Codex CLI rejected a flag. Likely a CLI version change; check 'codex --version'."),
+            ("schema validation", "Schema",
+             "Codex rejected the output schema. If OutcomeSchemaOpenAI was updated, run Codex manually with the schema file to see the specific validation message."),
+            ("sandbox policy", "Sandbox",
+             "Codex sandbox policy blocked an operation. Review the role's providerParams (sandbox/fullAuto/yolo) against the action attempted."),
+            ("insufficient_quota", "Quota",
+             "OpenAI account quota exhausted. Add credits or wait for the billing window to roll over."),
+            ("Failed to connect", "Network",
+             "Codex CLI could not reach the provider. Check network/firewall; a local proxy may be intercepting."),
+            ("timed out", "Network",
+             "Provider request timed out. Could be transient load or a network issue."),
+        };
+
+        foreach (var (pattern, category, hint) in signatures)
+        {
+            if (stderr.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+                return new FailureHint(category, hint);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Backward-compat path: if stdout was a single JSON document (not NDJSON)
+    /// containing a top-level <c>structured_output.outcome</c>, parse it. Returns
+    /// false for anything else — callers should then fail loudly, not guess.
+    /// </summary>
+    private static bool TryParseSingleDocumentStructured(string stdout, out AgentResult result)
+    {
+        result = default!;
+        var trimmed = stdout.Trim();
+        if (trimmed.Length == 0 || trimmed[0] != '{') return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(trimmed);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("structured_output", out var so)
+                || so.ValueKind != JsonValueKind.Object
+                || !so.TryGetProperty("outcome", out _))
+                return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        result = AgentOutputParser.ParseResult(trimmed);
+        return true;
+    }
+
+    /// <summary>
+    /// Builds a compact, high-signal diagnostic block for the "no structured_output"
+    /// failure path. Includes first/last stdout lines, line counts, stderr head,
+    /// and any detected hint — everything an operator needs to reproduce locally.
+    /// </summary>
+    private static string BuildNoStructuredOutputDiagnostic(
+        string stdout, string stderr, FailureHint? hint)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("=== Codex no-structured-output diagnostic ===");
+        if (hint is not null)
+            sb.AppendLine($"Hint: {hint.Category}: {hint.Hint}");
+
+        var stdoutLines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        sb.AppendLine($"stdout: {stdout.Length} chars across {stdoutLines.Length} non-empty lines");
+
+        if (stdoutLines.Length > 0)
+        {
+            sb.AppendLine("first 3 lines:");
+            foreach (var line in stdoutLines.Take(3))
+                sb.AppendLine($"  | {Truncate(line.Trim(), 500)}");
+
+            if (stdoutLines.Length > 6)
+            {
+                sb.AppendLine("...");
+                sb.AppendLine("last 3 lines:");
+                foreach (var line in stdoutLines.Skip(Math.Max(0, stdoutLines.Length - 3)))
+                    sb.AppendLine($"  | {Truncate(line.Trim(), 500)}");
+            }
+            else if (stdoutLines.Length > 3)
+            {
+                foreach (var line in stdoutLines.Skip(3))
+                    sb.AppendLine($"  | {Truncate(line.Trim(), 500)}");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(stderr))
+        {
+            sb.AppendLine($"stderr (first 2000 chars):");
+            sb.AppendLine(Truncate(stderr, 2000));
+        }
+
+        sb.Append("===");
+        return sb.ToString();
     }
 
 }
