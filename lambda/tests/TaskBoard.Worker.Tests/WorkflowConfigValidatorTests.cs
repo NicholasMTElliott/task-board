@@ -1892,6 +1892,176 @@ public class WorkflowConfigValidatorAllowedChildrenTests
         Assert.Empty(warnings);
     }
 
+    // ── Candidate-group validation (Part 2) ──────────────────────────────────
+
+    private static WorkflowConfig MakeCandidateConfig(
+        WorkflowStep step, string gitBehavior = "commit_and_push") =>
+        new(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["impl"] = new(
+                    Name: "Implementing",
+                    Role: null,
+                    GateType: "agent_run",
+                    TaskPrompt: null,
+                    Transitions: new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("impl"),
+                        ["ERROR"]    = TransitionTarget.ForColumn("impl"),
+                    },
+                    GitBehavior: gitBehavior,
+                    Steps: [step]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["implementer"] = new("claude-sonnet-4-6", "sys", ["Implementation"]),
+                ["evaluator"] = new("claude-opus-4-6", "sys", []),
+            });
+
+    [Fact]
+    public void Candidates_WithoutEvaluator_ReportsError()
+    {
+        var step = new WorkflowStep(
+            Name: "implement",
+            Role: "implementer",
+            TaskPromptFile: "prompts/states/impl.md",
+            Candidates: [new CandidateOverride("docker-claude-cli")]);
+
+        var errors = WorkflowConfigValidator.Validate(MakeCandidateConfig(step));
+
+        Assert.Contains(errors, e =>
+            e.Contains("candidates but no evaluator", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Evaluator_WithoutCandidates_ReportsError()
+    {
+        var step = new WorkflowStep(
+            Name: "implement",
+            Role: "implementer",
+            TaskPromptFile: "prompts/states/impl.md",
+            Evaluator: new EvaluatorConfig("evaluator", TaskPrompt: "evaluate"));
+
+        var errors = WorkflowConfigValidator.Validate(MakeCandidateConfig(step));
+
+        Assert.Contains(errors, e =>
+            e.Contains("evaluator but no candidates", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Candidates_DuplicateProviders_ReportsError()
+    {
+        var step = new WorkflowStep(
+            Name: "implement",
+            Role: "implementer",
+            TaskPromptFile: "prompts/states/impl.md",
+            Candidates:
+            [
+                new CandidateOverride("docker-claude-cli"),
+                new CandidateOverride("docker-claude-cli"),
+            ],
+            Evaluator: new EvaluatorConfig("evaluator", TaskPrompt: "evaluate"));
+
+        var errors = WorkflowConfigValidator.Validate(MakeCandidateConfig(step));
+
+        Assert.Contains(errors, e =>
+            e.Contains("duplicate candidate provider", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Candidates_TooMany_ReportsError()
+    {
+        var step = new WorkflowStep(
+            Name: "implement",
+            Role: "implementer",
+            TaskPromptFile: "prompts/states/impl.md",
+            Candidates:
+            [
+                new CandidateOverride("p1"),
+                new CandidateOverride("p2"),
+                new CandidateOverride("p3"),
+                new CandidateOverride("p4"),
+                new CandidateOverride("p5"),
+            ],
+            Evaluator: new EvaluatorConfig("evaluator", TaskPrompt: "evaluate"));
+
+        var errors = WorkflowConfigValidator.Validate(MakeCandidateConfig(step));
+
+        Assert.Contains(errors, e =>
+            e.Contains("cap is 4", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Candidates_OnDiscardState_ReportsError()
+    {
+        var step = new WorkflowStep(
+            Name: "implement",
+            Role: "implementer",
+            TaskPromptFile: "prompts/states/impl.md",
+            Candidates: [new CandidateOverride("docker-claude-cli"), new CandidateOverride("docker-opencode")],
+            Evaluator: new EvaluatorConfig("evaluator", TaskPrompt: "evaluate"));
+
+        var errors = WorkflowConfigValidator.Validate(MakeCandidateConfig(step, gitBehavior: "discard"));
+
+        Assert.Contains(errors, e =>
+            e.Contains("gitBehavior is 'discard'", StringComparison.OrdinalIgnoreCase)
+            && e.Contains("commit_only", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Evaluator_MissingRoleInRoles_ReportsError()
+    {
+        var step = new WorkflowStep(
+            Name: "implement",
+            Role: "implementer",
+            TaskPromptFile: "prompts/states/impl.md",
+            Candidates: [new CandidateOverride("docker-claude-cli"), new CandidateOverride("docker-opencode")],
+            Evaluator: new EvaluatorConfig("ghost_judge", TaskPrompt: "evaluate"));
+
+        var errors = WorkflowConfigValidator.Validate(MakeCandidateConfig(step));
+
+        Assert.Contains(errors, e =>
+            e.Contains("ghost_judge", StringComparison.OrdinalIgnoreCase)
+            && e.Contains("does not exist", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Evaluator_MissingTaskPrompt_ReportsError()
+    {
+        var step = new WorkflowStep(
+            Name: "implement",
+            Role: "implementer",
+            TaskPromptFile: "prompts/states/impl.md",
+            Candidates: [new CandidateOverride("docker-claude-cli"), new CandidateOverride("docker-opencode")],
+            Evaluator: new EvaluatorConfig("evaluator"));
+
+        var errors = WorkflowConfigValidator.Validate(MakeCandidateConfig(step));
+
+        Assert.Contains(errors, e =>
+            e.Contains("evaluator has neither", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Candidates_ValidConfig_ReturnsNoErrors()
+    {
+        var step = new WorkflowStep(
+            Name: "implement",
+            Role: "implementer",
+            TaskPromptFile: "prompts/states/impl.md",
+            Candidates:
+            [
+                new CandidateOverride("docker-claude-cli"),
+                new CandidateOverride("docker-opencode", Model: "qwen3.6-35b-a3b"),
+            ],
+            Evaluator: new EvaluatorConfig(
+                "evaluator",
+                TaskPromptFile: "prompts/evaluator/code_review_candidates.md"));
+
+        var errors = WorkflowConfigValidator.Validate(MakeCandidateConfig(step));
+
+        Assert.Empty(errors);
+    }
+
     [Fact]
     public void Audit_LegacySingleRoleState_WithCodex_WarnsOnMissingSandbox()
     {

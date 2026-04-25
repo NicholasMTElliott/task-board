@@ -222,6 +222,64 @@ public static class WorkflowConfigValidator
                     errors.Add($"State '{stateId}' ({state.Name}) is children_complete but has no 'COMPLETE' transition.");
             }
 
+            // ── candidate / evaluator validation ─────────────────────────────
+            if (state.Steps is { Count: > 0 })
+            {
+                foreach (var step in state.Steps)
+                {
+                    var hasCandidates = step.Candidates is { Count: > 0 };
+                    var hasEvaluator = step.Evaluator is not null;
+
+                    if (hasCandidates && !hasEvaluator)
+                        errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' has candidates but no evaluator. Add an evaluator config or remove the candidates.");
+
+                    if (!hasCandidates && hasEvaluator)
+                        errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' has an evaluator but no candidates. Remove the evaluator or add at least one candidate.");
+
+                    if (hasCandidates)
+                    {
+                        if (step.Candidates!.Count > 4)
+                            errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' declares {step.Candidates.Count} candidates; the cap is 4 to keep evaluator prompts manageable.");
+
+                        // Promotion of the winner relies on git commits. Discard-mode states
+                        // would need a different mechanism (file copy from winner worktree),
+                        // which v1 does not support — fail loudly so the operator sees this
+                        // upfront rather than getting opaque runtime errors.
+                        if (string.Equals(state.GitBehavior, "discard", StringComparison.OrdinalIgnoreCase))
+                        {
+                            errors.Add(
+                                $"State '{stateId}' ({state.Name}) step '{step.Name}' has candidates but state's gitBehavior is 'discard'. " +
+                                "Candidate-group steps require 'commit_only' or 'commit_and_push' so the winner's commits can be promoted to the canonical worktree.");
+                        }
+
+                        var seenProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var cand in step.Candidates)
+                        {
+                            if (string.IsNullOrWhiteSpace(cand.Provider))
+                            {
+                                errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' has a candidate with an empty provider.");
+                                continue;
+                            }
+
+                            if (!seenProviders.Add(cand.Provider))
+                                errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' has duplicate candidate provider '{cand.Provider}'. Each provider may appear at most once per group.");
+                        }
+                    }
+
+                    if (hasEvaluator)
+                    {
+                        var ev = step.Evaluator!;
+                        if (string.IsNullOrWhiteSpace(ev.Role))
+                            errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' evaluator has no role.");
+                        else if (!config.Roles.ContainsKey(ev.Role))
+                            errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' evaluator references role '{ev.Role}' which does not exist in Roles.");
+
+                        if (string.IsNullOrWhiteSpace(ev.TaskPrompt) && string.IsNullOrWhiteSpace(ev.TaskPromptFile))
+                            errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' evaluator has neither taskPrompt nor taskPromptFile.");
+                    }
+                }
+            }
+
             // ── generationConfig validation ──────────────────────────────────
             if (state.Steps is { Count: > 0 })
             {

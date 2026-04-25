@@ -244,6 +244,7 @@ See [docs/CardTypesAndGeneration.md](docs/CardTypesAndGeneration.md) for a walkt
 | Agent executor (host) | Claude CLI subprocess (`ClaudeAgentExecutor`, `--output-format stream-json` + `--json-schema`) |
 | Agent executor (container) | `DockerClaudeAgentExecutor` — Claude CLI inside `docker run -i --rm`; provider key `docker-claude-cli`; select via `AGENT_EXECUTOR=docker-claude-cli` |
 | Agent executor (local LLM) | `DockerOpenCodeAgentExecutor` — OpenCode CLI inside `docker run -i --rm`, targeting a local llama.cpp server on the `llm-net` bridge network (e.g. Qwen3.6 via the `local-llm` project); provider key `docker-opencode`; select via `AGENT_EXECUTOR=docker-opencode`. See [docs/OpenCodeSandbox.md](docs/OpenCodeSandbox.md) |
+| Multi-agent candidate evaluation | `CandidateExecutor` — opt-in per step. Runs N agents in parallel against the same task, an evaluator picks a winner, the winner's branch is promoted, and per-(role, provider) win-rate + quality-score metrics accumulate. See [docs/CandidateEvaluation.md](docs/CandidateEvaluation.md) |
 | Agent sandbox image | `docker/agent-sandbox/Dockerfile` — node:22-slim + Claude CLI + git + ripgrep; `aiboard-agent-sandbox:latest` |
 | Git isolation | Git worktrees (`GitWorkspaceManager`) |
 | Task files | `.aiboard/tasks/{id}.md` (ephemeral, gitignored) |

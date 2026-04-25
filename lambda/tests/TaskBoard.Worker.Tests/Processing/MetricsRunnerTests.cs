@@ -168,6 +168,8 @@ public class MetricsRunnerTests
         public CycleTimePerPointSummary CycleTimePerPoint { get; set; } =
             new(new CycleTimePerPoint(null, null), new CycleTimePerPoint(null, null),
                 new CycleTimePerPoint(null, null), new CycleTimePerPoint(null, null));
+        public List<ProviderRoleMetric> ProviderRoleMetrics { get; set; } = [];
+        public List<HeadToHeadRecord> HeadToHead { get; set; } = [];
 
         public Task<RunSummary> GetRunSummaryAsync(DateTimeOffset? since, CancellationToken ct)
             => Task.FromResult(Summary);
@@ -183,5 +185,11 @@ public class MetricsRunnerTests
 
         public Task<CycleTimePerPointSummary> GetCycleTimePerPointAsync(DateTimeOffset? since, CancellationToken ct)
             => Task.FromResult(CycleTimePerPoint);
+
+        public Task<IReadOnlyList<ProviderRoleMetric>> GetProviderRoleMetricsAsync(DateTimeOffset? since, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<ProviderRoleMetric>>(ProviderRoleMetrics);
+
+        public Task<IReadOnlyList<HeadToHeadRecord>> GetCandidateHeadToHeadAsync(DateTimeOffset? since, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<HeadToHeadRecord>>(HeadToHead);
     }
 }

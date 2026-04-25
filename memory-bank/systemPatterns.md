@@ -415,7 +415,8 @@ Applies to `--mode polling` and `--mode queue` (not agent mode — single card, 
 | ITaskBoardClient | Provider-agnostic board abstraction |
 | GitHubProjectsClient | GitHub Projects v2 via `gh` CLI (GraphQL + REST) |
 | TrelloClient | Trello REST API |
-| AgentRunner | Direct agent execution: fetch cards → worktree → steps → post-process |
+| AgentRunner | Direct agent execution: fetch cards → worktree → steps → post-process. Per-step branch into single-agent (existing path) vs candidate-group (delegates to CandidateExecutor) when `step.Candidates` is non-empty |
+| CandidateExecutor | Optional service. For a step with `Candidates`: spawns N branches/worktrees off canonical HEAD via `GitWorkspaceManager.CreateWorktreeFromStartPointAsync`, runs each provider against its own worktree, persists per-candidate `step_result` rows (`candidate_group_id`/`candidate_index`/`provider`), runs the evaluator (separate `step_result` with name suffix `:evaluator`, no `candidate_group_id`), parses `winner_index` + `scores` from the evaluator output, calls `IRunStore.UpdateCandidateEvaluationAsync` per row, promotes winner via `git reset --hard`, removes loser worktrees + branches. Short-circuits to ERROR (no evaluator run) when every candidate returned non-COMPLETE. Candidate branch shape: `aiboard-cand/{cardId}-{groupShort}-{index}-{provider}` (deliberately a sibling-of-canonical, NOT nested under the canonical worktree path) |
 | MergeRunner | Git merge + push for `system_merge` gate type |
 | CompletionRunner | Polls child cards for `children_complete` gate type |
 | PollingRunner | Automatic card pickup via priority-sorted polling |

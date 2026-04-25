@@ -47,3 +47,33 @@ public sealed record CycleTimePerPointSummary(
     CycleTimePerPoint Last24h,
     CycleTimePerPoint Last7d,
     CycleTimePerPoint Last30d);
+
+/// <summary>
+/// Per-(role, provider) aggregate from <c>v_provider_role_metrics</c>. Drives
+/// "is provider X worth keeping for role Y" decisions. <c>WinRatePercent</c>
+/// and <c>AvgQualityScore</c> can be null when no candidate group has been
+/// evaluated yet for this combination.
+/// </summary>
+public sealed record ProviderRoleMetric(
+    string Role,
+    string Provider,
+    int TotalRuns,
+    int Wins,
+    int RunsWithDecision,
+    double? WinRatePercent,
+    double? AvgQualityScore,
+    double? AvgDurationSeconds);
+
+/// <summary>
+/// Pairwise head-to-head record: how many times <c>ProviderA</c> beat
+/// <c>ProviderB</c> (and vice versa) within candidate groups where both
+/// participated for the same role. <c>Ties</c> covers groups where neither
+/// was selected (e.g., evaluator NEEDS_INFO outcome left selected = NULL).
+/// </summary>
+public sealed record HeadToHeadRecord(
+    string Role,
+    string ProviderA,
+    string ProviderB,
+    int AWins,
+    int BWins,
+    int Ties);

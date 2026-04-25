@@ -177,6 +177,123 @@ public sealed class PgMetricsStore(
         return new CycleTimePerPointSummary(overall, last24h, last7d, last30d);
     }
 
+    public async Task<IReadOnlyList<ProviderRoleMetric>> GetProviderRoleMetricsAsync(
+        DateTimeOffset? since, CancellationToken ct)
+    {
+        // We can't use v_provider_role_metrics directly with a since-filter,
+        // because the view doesn't carry started_at_utc. Inline the same
+        // aggregation here so we can apply the time window.
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                role,
+                provider,
+                COUNT(*)                                                   AS total_runs,
+                COUNT(*) FILTER (WHERE selected = true)                    AS wins,
+                COUNT(*) FILTER (WHERE selected IS NOT NULL)               AS runs_with_decision,
+                CASE
+                    WHEN COUNT(*) FILTER (WHERE selected IS NOT NULL) = 0 THEN NULL
+                    ELSE 100.0 *
+                        COUNT(*) FILTER (WHERE selected = true) /
+                        COUNT(*) FILTER (WHERE selected IS NOT NULL)
+                END                                                         AS win_rate_percent,
+                AVG(quality_score) FILTER (WHERE quality_score IS NOT NULL) AS avg_quality_score,
+                AVG(EXTRACT(EPOCH FROM (completed_at_utc - started_at_utc))) AS avg_duration_seconds
+            FROM step_result
+            WHERE tenant_id = $1
+              AND candidate_group_id IS NOT NULL
+              AND completed_at_utc IS NOT NULL
+              AND ($2::timestamptz IS NULL OR started_at_utc >= $2)
+            GROUP BY role, provider
+            ORDER BY role, provider
+            """;
+        cmd.Parameters.AddWithValue(tenant.Value);
+        cmd.Parameters.AddWithValue(since.HasValue ? (object)since.Value : DBNull.Value);
+
+        var results = new List<ProviderRoleMetric>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            results.Add(new ProviderRoleMetric(
+                Role: reader.GetString(0),
+                Provider: reader.GetString(1),
+                TotalRuns: (int)reader.GetInt64(2),
+                Wins: (int)reader.GetInt64(3),
+                RunsWithDecision: (int)reader.GetInt64(4),
+                WinRatePercent: reader.IsDBNull(5) ? null : (double?)reader.GetDouble(5),
+                AvgQualityScore: reader.IsDBNull(6) ? null : (double?)(double)reader.GetDecimal(6),
+                AvgDurationSeconds: reader.IsDBNull(7) ? null : (double?)reader.GetDouble(7)));
+        }
+
+        logger.LogDebug("GetProviderRoleMetricsAsync returned {Count} (role, provider) row(s)", results.Count);
+        return results;
+    }
+
+    public async Task<IReadOnlyList<HeadToHeadRecord>> GetCandidateHeadToHeadAsync(
+        DateTimeOffset? since, CancellationToken ct)
+    {
+        // Self-join on candidate_group_id, restricting to providerA < providerB
+        // (alphabetical) so each pair shows up exactly once. For each pair, count:
+        //   AWins  — groups where A.selected = true
+        //   BWins  — groups where B.selected = true
+        //   Ties   — groups where neither selected = true (e.g., evaluator NEEDS_INFO,
+        //            or both lost to a third candidate that competed in the same group)
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            WITH pairs AS (
+                SELECT
+                    a.role,
+                    a.provider AS provider_a,
+                    b.provider AS provider_b,
+                    a.candidate_group_id,
+                    a.selected AS a_selected,
+                    b.selected AS b_selected
+                FROM step_result a
+                JOIN step_result b
+                  ON a.tenant_id = b.tenant_id
+                 AND a.candidate_group_id = b.candidate_group_id
+                 AND a.role = b.role
+                 AND a.provider < b.provider
+                WHERE a.tenant_id = $1
+                  AND a.candidate_group_id IS NOT NULL
+                  AND a.completed_at_utc IS NOT NULL
+                  AND b.completed_at_utc IS NOT NULL
+                  AND ($2::timestamptz IS NULL OR a.started_at_utc >= $2)
+            )
+            SELECT
+                role,
+                provider_a,
+                provider_b,
+                COUNT(*) FILTER (WHERE a_selected = true)                                   AS a_wins,
+                COUNT(*) FILTER (WHERE b_selected = true)                                   AS b_wins,
+                COUNT(*) FILTER (WHERE COALESCE(a_selected, false) = false
+                                   AND COALESCE(b_selected, false) = false)                AS ties
+            FROM pairs
+            GROUP BY role, provider_a, provider_b
+            ORDER BY role, provider_a, provider_b
+            """;
+        cmd.Parameters.AddWithValue(tenant.Value);
+        cmd.Parameters.AddWithValue(since.HasValue ? (object)since.Value : DBNull.Value);
+
+        var results = new List<HeadToHeadRecord>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            results.Add(new HeadToHeadRecord(
+                Role: reader.GetString(0),
+                ProviderA: reader.GetString(1),
+                ProviderB: reader.GetString(2),
+                AWins: (int)reader.GetInt64(3),
+                BWins: (int)reader.GetInt64(4),
+                Ties: (int)reader.GetInt64(5)));
+        }
+
+        logger.LogDebug("GetCandidateHeadToHeadAsync returned {Count} pair row(s)", results.Count);
+        return results;
+    }
+
     private async Task<CycleTimePerPoint> GetCycleTimePerPointWindowAsync(
         DateTimeOffset? since, CancellationToken ct)
     {

@@ -111,6 +111,36 @@
           "format": "table"
         }
       ]
+    },
+    {
+      "id": 9,
+      "title": "Candidate Win Rate by Provider × Role",
+      "type": "bargauge",
+      "description": "Per-(role, provider) win rate from v_provider_role_metrics. Rows appear only for combinations that have participated in at least one candidate group.",
+      "gridPos": { "x": 0, "y": 32, "w": 12, "h": 10 },
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "showUnfilled": true },
+      "targets": [
+        {
+          "datasource": "aiboard-postgres",
+          "rawSql": "SELECT role || ' / ' || provider AS metric, win_rate_percent AS value FROM v_provider_role_metrics WHERE win_rate_percent IS NOT NULL ORDER BY role, provider",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Avg Quality Score by Provider × Role",
+      "type": "bargauge",
+      "description": "Mean evaluator quality score (0–10) per (role, provider). Surfaces the 'how close was it' signal that win rate alone hides.",
+      "gridPos": { "x": 12, "y": 32, "w": 12, "h": 10 },
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "showUnfilled": true, "min": 0, "max": 10 },
+      "targets": [
+        {
+          "datasource": "aiboard-postgres",
+          "rawSql": "SELECT role || ' / ' || provider AS metric, ROUND(avg_quality_score::numeric, 2) AS value FROM v_provider_role_metrics WHERE avg_quality_score IS NOT NULL ORDER BY role, provider",
+          "format": "table"
+        }
+      ]
     }
   ]
 }

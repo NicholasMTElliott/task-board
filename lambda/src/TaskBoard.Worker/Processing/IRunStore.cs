@@ -23,4 +23,19 @@ public interface IRunStore
 
     /// <summary>Persists the container session startup time in milliseconds for an agent run.</summary>
     Task UpdateRunSessionStartupMsAsync(string runId, int startupMs, CancellationToken ct);
+
+    /// <summary>
+    /// Records the evaluator's verdict for a single candidate row identified by
+    /// (run_id, candidate_group_id, candidate_index). Updates <c>selected</c>,
+    /// <c>quality_score</c>, and <c>evaluator_reasoning</c>. Other columns are
+    /// untouched.
+    /// </summary>
+    Task UpdateCandidateEvaluationAsync(
+        string runId,
+        Guid candidateGroupId,
+        int candidateIndex,
+        bool selected,
+        decimal? qualityScore,
+        string? evaluatorReasoning,
+        CancellationToken ct);
 }

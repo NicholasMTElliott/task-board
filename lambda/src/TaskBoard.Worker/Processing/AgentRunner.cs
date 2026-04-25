@@ -21,7 +21,8 @@ public sealed partial class AgentRunner(
     ILogger<AgentRunner> logger,
     DockerClaudeAgentOptions? dockerOptions = null,
     DockerClaudeMountBuilder? mountBuilder = null,
-    ShutdownCoordinator? shutdownCoordinator = null)
+    ShutdownCoordinator? shutdownCoordinator = null,
+    CandidateExecutor? candidateExecutor = null)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
 
@@ -428,19 +429,64 @@ public sealed partial class AgentRunner(
                     }
                 }
 
-                // 6c. Execute agent for this step (via session if available, direct otherwise)
-                var context = new AgentExecutionContext(
-                    TargetCardId: cardId,
-                    TargetCardTitle: targetCard.Title,
-                    WorkspacePath: worktreePath,
-                    TaskPrompt: resolvedPrompt,
-                    SystemPromptFilePath: systemPromptFilePath,
-                    Model: stepRole.Model,
-                    ProviderParams: state.ProviderParams,
-                    CommentsFilePath: commentsFilePath);
+                // 6c. Execute agent for this step.
+                // Two paths: candidate-group (parallel race + evaluator) or single-agent (canonical).
+                AgentResult stepResult;
+                int? stepSessionExecMs;
+                var stepRanAsCandidateGroup = false;
 
-                var (stepResult, stepSessionExecMs) = await ExecuteWithSessionAsync(
-                    session, stepRole.Provider, context, step.Name, runId, cancellationToken);
+                if (step.Candidates is { Count: > 0 })
+                {
+                    if (candidateExecutor is null)
+                    {
+                        logger.LogError(
+                            "Step '{StepName}' declares candidates but CandidateExecutor is not registered — candidate execution requires the optional service",
+                            step.Name);
+                        stepResult = new AgentResult(
+                            AgentOutcome.ERROR,
+                            "Candidate-group execution unavailable: CandidateExecutor not registered.");
+                        stepSessionExecMs = null;
+                    }
+                    else
+                    {
+                        stepRanAsCandidateGroup = true;
+                        var groupRequest = new CandidateGroupRequest(
+                            RunId: runId,
+                            CardId: cardId,
+                            CardTitle: targetCard.Title,
+                            StateName: state.Name,
+                            StepIndex: stepIndex,
+                            Step: step,
+                            Role: stepRole,
+                            WorkflowRoles: workflowConfig.Roles,
+                            StateProviderParams: state.ProviderParams,
+                            TaskPrompt: resolvedPrompt,
+                            SystemPromptFilePath: systemPromptFilePath,
+                            WorktreePath: worktreePath,
+                            RepoPath: workspacePath,
+                            GitBehavior: gitBehavior,
+                            CommentsFilePath: commentsFilePath,
+                            PromptBaseDirectory: workflowConfig.ConfigDirectory);
+                        stepResult = await candidateExecutor.ExecuteCandidateGroupAsync(
+                            groupRequest, cancellationToken);
+                        stepSessionExecMs = null;
+                    }
+                }
+                else
+                {
+                    var context = new AgentExecutionContext(
+                        TargetCardId: cardId,
+                        TargetCardTitle: targetCard.Title,
+                        WorkspacePath: worktreePath,
+                        TaskPrompt: resolvedPrompt,
+                        SystemPromptFilePath: systemPromptFilePath,
+                        Model: stepRole.Model,
+                        ProviderParams: state.ProviderParams,
+                        CommentsFilePath: commentsFilePath);
+
+                    (stepResult, stepSessionExecMs) = await ExecuteWithSessionAsync(
+                        session, stepRole.Provider, context, step.Name, runId, cancellationToken);
+                }
                 lastResult = stepResult;
 
                 // Capture estimate if this step returned one and persist it to DB
@@ -481,7 +527,12 @@ public sealed partial class AgentRunner(
                         capturedEstimate, updateResult.CreatedTickets.Count);
                 }
 
-                // 6d-iii. Save step result to DB
+                // 6d-iii. Save step result to DB.
+                // Skip when the step ran as a candidate group: CandidateExecutor
+                // already persisted N candidate rows + 1 evaluator row, and a
+                // single rolled-up step row would muddy the (role, provider)
+                // metrics by attributing outcome to no concrete candidate.
+                if (!stepRanAsCandidateGroup)
                 {
                     var stepCompletedAt = DateTimeOffset.UtcNow;
 
@@ -518,10 +569,11 @@ public sealed partial class AgentRunner(
                         RequestedSteps: lastResult.RequestedSteps,
                         StartedAtUtc: stepStartedAt,
                         CompletedAtUtc: stepCompletedAt,
-                        SessionExecMs: stepSessionExecMs);
+                        SessionExecMs: stepSessionExecMs,
+                        Provider: stepRole.Provider);
                     await SafeDbCallAsync(() => runStore.SaveStepResultAsync(stepRecord, cancellationToken));
-                    await SafeDbCallAsync(() => runStore.UpdateRunProgressAsync(runId, stepIndex + 1, cancellationToken));
                 }
+                await SafeDbCallAsync(() => runStore.UpdateRunProgressAsync(runId, stepIndex + 1, cancellationToken));
 
                 // 6e. Upsert step-specific comment (augmented with update file summary if applicable)
                 var stepMarker = $"<!-- agent-step:{step.Name} -->";
@@ -1100,7 +1152,8 @@ public sealed partial class AgentRunner(
                 RequestedSteps: gateResult.RequestedSteps,
                 StartedAtUtc: gateStartedAt,
                 CompletedAtUtc: DateTimeOffset.UtcNow,
-                SessionExecMs: gateSessionExecMs);
+                SessionExecMs: gateSessionExecMs,
+                Provider: gateRole.Provider);
             await SafeDbCallAsync(() => runStore.SaveStepResultAsync(gateRecord, cancellationToken));
         }
         catch (Exception ex)
@@ -1293,7 +1346,8 @@ public sealed partial class AgentRunner(
                 RequestedSteps: result.RequestedSteps,
                 StartedAtUtc: optionalStepStartedAt,
                 CompletedAtUtc: DateTimeOffset.UtcNow,
-                SessionExecMs: optionalSessionExecMs);
+                SessionExecMs: optionalSessionExecMs,
+                Provider: stepRole.Provider);
             await SafeDbCallAsync(() => runStore.SaveStepResultAsync(optionalStepRecord, cancellationToken));
 
             // Update card body

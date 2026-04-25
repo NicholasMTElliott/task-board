@@ -85,8 +85,11 @@ public sealed class PgRunStore(
             INSERT INTO step_result
                 (tenant_id, run_id, card_id, state_name, step_name, step_index, role, model,
                  outcome, summary, detail, reference_content, conversation_log,
-                 questions, requested_steps, started_at_utc, completed_at_utc, session_exec_ms)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16, $17, $18)
+                 questions, requested_steps, started_at_utc, completed_at_utc, session_exec_ms,
+                 provider, candidate_group_id, candidate_index,
+                 selected, quality_score, evaluator_reasoning)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16, $17, $18,
+                    $19, $20, $21, $22, $23, $24)
             ON CONFLICT (tenant_id, run_id, step_name) DO NOTHING
             """;
         cmd.Parameters.AddWithValue(tenant.Value);
@@ -113,9 +116,53 @@ public sealed class PgRunStore(
         cmd.Parameters.AddWithValue(result.CompletedAtUtc);
         cmd.Parameters.AddWithValue(result.SessionExecMs.HasValue ? (object)result.SessionExecMs.Value : DBNull.Value);
 
+        // V17 candidate-group metadata (provider always populated; the rest are
+        // null for traditional non-candidate steps).
+        cmd.Parameters.AddWithValue(result.Provider);
+        cmd.Parameters.AddWithValue(result.CandidateGroupId.HasValue ? (object)result.CandidateGroupId.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue(result.CandidateIndex.HasValue ? (object)result.CandidateIndex.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue(result.Selected.HasValue ? (object)result.Selected.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue(result.QualityScore.HasValue ? (object)result.QualityScore.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue(result.EvaluatorReasoning is null ? DBNull.Value : (object)result.EvaluatorReasoning);
+
         await cmd.ExecuteNonQueryAsync(ct);
 
         logger.LogDebug("Saved step_result for run {RunId} step '{StepName}'", result.RunId, result.StepName);
+    }
+
+    public async Task UpdateCandidateEvaluationAsync(
+        string runId,
+        Guid candidateGroupId,
+        int candidateIndex,
+        bool selected,
+        decimal? qualityScore,
+        string? evaluatorReasoning,
+        CancellationToken ct)
+    {
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE step_result
+            SET selected = $4,
+                quality_score = $5,
+                evaluator_reasoning = $6
+            WHERE tenant_id = $1
+              AND run_id = $2
+              AND candidate_group_id = $3
+              AND candidate_index = $7
+            """;
+        cmd.Parameters.AddWithValue(tenant.Value);
+        cmd.Parameters.AddWithValue(runId);
+        cmd.Parameters.AddWithValue(candidateGroupId);
+        cmd.Parameters.AddWithValue(selected);
+        cmd.Parameters.AddWithValue(qualityScore.HasValue ? (object)qualityScore.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue(evaluatorReasoning is null ? DBNull.Value : (object)evaluatorReasoning);
+        cmd.Parameters.AddWithValue(candidateIndex);
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        logger.LogDebug(
+            "Updated candidate evaluation for run {RunId} group {Group} index {Index}: selected={Selected}, score={Score}",
+            runId, candidateGroupId, candidateIndex, selected, qualityScore);
     }
 
     public async Task<IReadOnlyList<StepResultRecord>> GetStepResultsForCardAsync(
@@ -126,7 +173,9 @@ public sealed class PgRunStore(
         cmd.CommandText = """
             SELECT id, run_id, card_id, state_name, step_name, step_index, role, model,
                    outcome, summary, detail, reference_content, conversation_log,
-                   questions, requested_steps, started_at_utc, completed_at_utc, session_exec_ms
+                   questions, requested_steps, started_at_utc, completed_at_utc, session_exec_ms,
+                   provider, candidate_group_id, candidate_index,
+                   selected, quality_score, evaluator_reasoning
             FROM step_result
             WHERE tenant_id = $1
               AND card_id = $2
@@ -149,7 +198,9 @@ public sealed class PgRunStore(
         cmd.CommandText = """
             SELECT sr.id, sr.run_id, sr.card_id, sr.state_name, sr.step_name, sr.step_index, sr.role, sr.model,
                    sr.outcome, sr.summary, sr.detail, sr.reference_content, sr.conversation_log,
-                   sr.questions, sr.requested_steps, sr.started_at_utc, sr.completed_at_utc, sr.session_exec_ms
+                   sr.questions, sr.requested_steps, sr.started_at_utc, sr.completed_at_utc, sr.session_exec_ms,
+                   sr.provider, sr.candidate_group_id, sr.candidate_index,
+                   sr.selected, sr.quality_score, sr.evaluator_reasoning
             FROM step_result sr
             INNER JOIN (
                 SELECT run_id FROM agent_run
@@ -202,7 +253,13 @@ public sealed class PgRunStore(
                 RequestedSteps: requestedSteps,
                 StartedAtUtc: reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("started_at_utc")),
                 CompletedAtUtc: reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("completed_at_utc")),
-                SessionExecMs: reader.IsDBNull(reader.GetOrdinal("session_exec_ms")) ? null : reader.GetInt32(reader.GetOrdinal("session_exec_ms"))));
+                SessionExecMs: reader.IsDBNull(reader.GetOrdinal("session_exec_ms")) ? null : reader.GetInt32(reader.GetOrdinal("session_exec_ms")),
+                Provider: reader.GetString(reader.GetOrdinal("provider")),
+                CandidateGroupId: reader.IsDBNull(reader.GetOrdinal("candidate_group_id")) ? null : reader.GetGuid(reader.GetOrdinal("candidate_group_id")),
+                CandidateIndex: reader.IsDBNull(reader.GetOrdinal("candidate_index")) ? null : reader.GetInt32(reader.GetOrdinal("candidate_index")),
+                Selected: reader.IsDBNull(reader.GetOrdinal("selected")) ? null : reader.GetBoolean(reader.GetOrdinal("selected")),
+                QualityScore: reader.IsDBNull(reader.GetOrdinal("quality_score")) ? null : reader.GetDecimal(reader.GetOrdinal("quality_score")),
+                EvaluatorReasoning: reader.IsDBNull(reader.GetOrdinal("evaluator_reasoning")) ? null : reader.GetString(reader.GetOrdinal("evaluator_reasoning"))));
         }
         return results;
     }

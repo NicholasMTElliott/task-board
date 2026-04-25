@@ -288,7 +288,61 @@ public sealed record WorkflowStep(
     string Role,
     string? TaskPrompt = null,
     string? TaskPromptFile = null,
-    GenerationConfig? GenerationConfig = null);
+    GenerationConfig? GenerationConfig = null,
+    /// <summary>
+    /// When non-empty, the step runs as a parallel candidate group: each
+    /// override produces an independent execution against a different provider
+    /// (and optionally a different model / providerParams). The step's own
+    /// <see cref="Role"/> still controls system prompt and sections; only the
+    /// provider, model, and providerParams may differ per candidate. Requires
+    /// <see cref="Evaluator"/> to be set; the validator rejects candidates
+    /// without an evaluator.
+    /// </summary>
+    List<CandidateOverride>? Candidates = null,
+    /// <summary>
+    /// Evaluator config for a candidate-group step. Required whenever
+    /// <see cref="Candidates"/> is non-empty.
+    /// </summary>
+    EvaluatorConfig? Evaluator = null);
+
+/// <summary>
+/// Override for a single candidate in a parallel evaluation group. The
+/// <see cref="Provider"/> key must resolve to a registered executor at runtime;
+/// <see cref="Model"/> and <see cref="ProviderParams"/> default to the role's
+/// configured values when omitted.
+/// </summary>
+public sealed record CandidateOverride(
+    string Provider,
+    string? Model = null,
+    Dictionary<string, string>? ProviderParams = null);
+
+/// <summary>
+/// Configures the evaluator step that follows a candidate group. The evaluator
+/// reads the task plus all candidate outputs and emits a winner index plus
+/// per-candidate scores.
+/// </summary>
+public sealed record EvaluatorConfig(
+    string Role,
+    string? TaskPromptFile = null,
+    string? TaskPrompt = null,
+    EvaluatorScoring Scoring = EvaluatorScoring.WinnerWithScores);
+
+/// <summary>
+/// How richly the evaluator should score candidates.
+/// <para>
+/// <c>WinnerOnly</c> — pick a winner; do not record per-candidate scores.
+/// </para>
+/// <para>
+/// <c>WinnerWithScores</c> (default) — pick a winner AND record a 0–10 quality
+/// score plus reasoning for every candidate, so the metrics surface includes
+/// "how close was it" data.
+/// </para>
+/// </summary>
+public enum EvaluatorScoring
+{
+    WinnerOnly,
+    WinnerWithScores,
+}
 
 public sealed record WorkflowRole(
     string Model,

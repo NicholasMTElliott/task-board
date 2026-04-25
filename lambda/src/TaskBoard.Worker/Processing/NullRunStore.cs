@@ -39,4 +39,14 @@ public sealed class NullRunStore : IRunStore
 
     public Task UpdateRunSessionStartupMsAsync(string runId, int startupMs, CancellationToken ct)
         => Task.CompletedTask;
+
+    public Task UpdateCandidateEvaluationAsync(
+        string runId,
+        Guid candidateGroupId,
+        int candidateIndex,
+        bool selected,
+        decimal? qualityScore,
+        string? evaluatorReasoning,
+        CancellationToken ct)
+        => Task.CompletedTask;
 }

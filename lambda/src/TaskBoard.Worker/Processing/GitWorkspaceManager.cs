@@ -79,6 +79,78 @@ public sealed class GitWorkspaceManager(
         return fullWorktreePath;
     }
 
+    /// <summary>
+    /// Creates a new worktree on a brand-new branch that starts at <paramref name="startPoint"/>.
+    /// <paramref name="startPoint"/> can be a branch name, a tag, or a commit SHA. Used by the
+    /// candidate-evaluation flow to spawn N parallel worktrees off a canonical branch's HEAD.
+    /// </summary>
+    /// <remarks>
+    /// Differs from <see cref="CreateWorktreeAsync"/> in two ways:
+    /// <list type="bullet">
+    ///   <item>Always creates a new branch — does not reuse an existing one.</item>
+    ///   <item>Uses an explicit start point so the new branch starts at the right commit
+    ///         instead of inheriting the base repo's current HEAD.</item>
+    /// </list>
+    /// Throws <see cref="GitOperationException"/> if a branch with <paramref name="newBranchName"/>
+    /// already exists, since reusing a candidate branch across runs would silently merge stale
+    /// state into the new candidate.
+    /// </remarks>
+    public async Task<string> CreateWorktreeFromStartPointAsync(
+        string repoPath, string newBranchName, string startPoint, CancellationToken cancellationToken)
+    {
+        var worktreePath = GetWorktreePath(repoPath, newBranchName, worktreeBasePath);
+        var fullWorktreePath = Path.GetFullPath(worktreePath);
+
+        if (await BranchExistsAsync(repoPath, newBranchName, cancellationToken))
+        {
+            throw new GitOperationException(
+                $"Cannot create candidate worktree: branch '{newBranchName}' already exists. " +
+                "Candidate branch names must be unique per group; the runner generates them with " +
+                "a per-run UUID, so a collision indicates leftover state from a prior crash.", -1);
+        }
+
+        if (Directory.Exists(fullWorktreePath))
+        {
+            logger.LogWarning(
+                "Stale candidate worktree directory at {Path} — removing and pruning",
+                fullWorktreePath);
+            Directory.Delete(fullWorktreePath, recursive: true);
+            try { await RunGitAsync(repoPath, ["worktree", "prune"], cancellationToken); }
+            catch (GitOperationException) { /* best effort */ }
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(fullWorktreePath)!);
+
+        logger.LogInformation(
+            "Creating candidate worktree at {Path} on new branch {Branch} from start point {Start}",
+            fullWorktreePath, newBranchName, startPoint);
+        await RunGitAsync(repoPath,
+            ["worktree", "add", fullWorktreePath, "-b", newBranchName, startPoint],
+            cancellationToken);
+
+        return fullWorktreePath;
+    }
+
+    /// <summary>
+    /// Resets the worktree at <paramref name="worktreePath"/> to the HEAD of
+    /// <paramref name="sourceBranch"/> with <c>git reset --hard</c>. Used by the
+    /// candidate-evaluation flow to promote the winner's branch into the canonical
+    /// worktree before subsequent steps run.
+    /// </summary>
+    /// <remarks>
+    /// Destructive: any uncommitted changes in <paramref name="worktreePath"/> are
+    /// discarded. The caller must have already moved the candidate's commits onto
+    /// <paramref name="sourceBranch"/> (i.e. the candidate ran with
+    /// <c>commit_only</c> or <c>commit_and_push</c>).
+    /// </remarks>
+    public async Task ResetWorktreeToBranchAsync(
+        string worktreePath, string sourceBranch, CancellationToken cancellationToken)
+    {
+        logger.LogInformation(
+            "Resetting worktree {Worktree} to branch {Branch}", worktreePath, sourceBranch);
+        await RunGitAsync(worktreePath, ["reset", "--hard", sourceBranch], cancellationToken);
+    }
+
     public async Task RemoveWorktreeAsync(
         string repoPath, string branchName, bool deleteBranch, CancellationToken cancellationToken)
     {

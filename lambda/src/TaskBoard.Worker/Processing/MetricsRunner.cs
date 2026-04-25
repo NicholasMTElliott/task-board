@@ -32,12 +32,16 @@ public sealed class MetricsRunner(
             var steps = await metricsStore.GetTopStepDurationsAsync(10, since, ct);
             var rework = await metricsStore.GetReworkCardsAsync(since, ct);
             var cyclePerPoint = await metricsStore.GetCycleTimePerPointAsync(since, ct);
+            var providerRole = await metricsStore.GetProviderRoleMetricsAsync(since, ct);
+            var headToHead = await metricsStore.GetCandidateHeadToHeadAsync(since, ct);
 
             PrintRunSummary(summary);
             PrintCardMetrics(cards);
             PrintTopStepDurations(steps);
             PrintRework(rework);
             PrintCycleTimePerPoint(cyclePerPoint);
+            PrintProviderRoleMetrics(providerRole);
+            PrintHeadToHead(headToHead);
         }
         catch (Exception ex)
         {
@@ -154,6 +158,50 @@ public sealed class MetricsRunner(
             ? FormatDuration(row.StdDevCycleTimePerPointSeconds.Value)
             : "—";
         Console.WriteLine($"  {label,-10}  {avg,-12}  {stddev,-12}");
+    }
+
+    private static void PrintProviderRoleMetrics(IReadOnlyList<ProviderRoleMetric> rows)
+    {
+        // Suppressed entirely when no candidate-group runs have been recorded —
+        // the section header on its own would just be noise for users who haven't
+        // opted into multi-agent evaluation yet.
+        if (rows.Count == 0) return;
+
+        Console.WriteLine("── Provider × Role Metrics (candidate runs) ─────────────");
+        Console.WriteLine(
+            $"  {"Role",-26}  {"Provider",-22}  {"Runs",4}  {"Wins",4}  {"Win%",6}  {"AvgScore",8}  {"AvgDur",8}");
+        Console.WriteLine(
+            $"  {"──────────────────────────",-26}  {"──────────────────────",-22}  {"────",4}  {"────",4}  {"──────",6}  {"────────",8}  {"────────",8}");
+
+        foreach (var r in rows)
+        {
+            var winPct = r.WinRatePercent.HasValue ? $"{r.WinRatePercent.Value:F1}%" : "—";
+            var score = r.AvgQualityScore.HasValue ? r.AvgQualityScore.Value.ToString("F2") : "—";
+            var dur = r.AvgDurationSeconds.HasValue ? FormatDuration(r.AvgDurationSeconds.Value) : "—";
+            Console.WriteLine(
+                $"  {r.Role,-26}  {r.Provider,-22}  {r.TotalRuns,4}  {r.Wins,4}  {winPct,6}  {score,8}  {dur,8}");
+        }
+
+        Console.WriteLine();
+    }
+
+    private static void PrintHeadToHead(IReadOnlyList<HeadToHeadRecord> rows)
+    {
+        if (rows.Count == 0) return;
+
+        Console.WriteLine("── Head-to-Head (candidate pairs) ───────────────────────");
+        Console.WriteLine(
+            $"  {"Role",-26}  {"Provider A",-22}  {"Provider B",-22}  {"A",3}  {"B",3}  {"Tie",3}");
+        Console.WriteLine(
+            $"  {"──────────────────────────",-26}  {"──────────────────────",-22}  {"──────────────────────",-22}  {"───",3}  {"───",3}  {"───",3}");
+
+        foreach (var r in rows)
+        {
+            Console.WriteLine(
+                $"  {r.Role,-26}  {r.ProviderA,-22}  {r.ProviderB,-22}  {r.AWins,3}  {r.BWins,3}  {r.Ties,3}");
+        }
+
+        Console.WriteLine();
     }
 
     private static string FormatDuration(double seconds)

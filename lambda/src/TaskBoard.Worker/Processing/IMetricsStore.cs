@@ -20,4 +20,19 @@ public interface IMetricsStore
 
     /// <summary>Cycle time per story point with rolling window averages and deviations.</summary>
     Task<CycleTimePerPointSummary> GetCycleTimePerPointAsync(DateTimeOffset? since, CancellationToken ct);
+
+    /// <summary>
+    /// Aggregated metrics by (role, provider) from <c>v_provider_role_metrics</c>.
+    /// Empty when no candidate-group data exists yet.
+    /// </summary>
+    Task<IReadOnlyList<ProviderRoleMetric>> GetProviderRoleMetricsAsync(
+        DateTimeOffset? since, CancellationToken ct);
+
+    /// <summary>
+    /// Pairwise head-to-head records between providers within the same role.
+    /// Returns one row per (role, providerA, providerB) where providerA &lt; providerB
+    /// alphabetically, so callers don't need to dedupe symmetric pairs.
+    /// </summary>
+    Task<IReadOnlyList<HeadToHeadRecord>> GetCandidateHeadToHeadAsync(
+        DateTimeOffset? since, CancellationToken ct);
 }

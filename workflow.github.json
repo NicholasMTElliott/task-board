@@ -586,6 +586,11 @@
       "model": "claude-opus-4-6",
       "systemPromptFile": "prompts/senior_specialist_reviewer.md",
       "sections": []
+    },
+    "evaluator": {
+      "model": "claude-opus-4-6",
+      "systemPromptFile": "prompts/evaluator.md",
+      "sections": []
     }
   },
   "mergeResolution": {

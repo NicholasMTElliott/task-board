@@ -28,4 +28,12 @@ public sealed class NullMetricsStore : IMetricsStore
         var empty = new CycleTimePerPoint(null, null);
         return Task.FromResult(new CycleTimePerPointSummary(empty, empty, empty, empty));
     }
+
+    public Task<IReadOnlyList<ProviderRoleMetric>> GetProviderRoleMetricsAsync(
+        DateTimeOffset? since, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<ProviderRoleMetric>>([]);
+
+    public Task<IReadOnlyList<HeadToHeadRecord>> GetCandidateHeadToHeadAsync(
+        DateTimeOffset? since, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<HeadToHeadRecord>>([]);
 }
