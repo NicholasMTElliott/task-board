@@ -66,6 +66,22 @@ services:
     profiles:
       - build
 
+  # Build-only service for the OpenCode sandbox image (Qwen3.6 via llama.cpp).
+  # Run: docker compose --profile build build opencode-sandbox
+  # Or use: scripts/build-opencode-sandbox.ps1
+  opencode-sandbox:
+    build:
+      context: ./docker/opencode-sandbox
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: node:22-slim
+        AGENT_UID: 1000
+        AGENT_GID: 1000
+        OPENCODE_CLI_VERSION: latest
+    image: aiboard-opencode-sandbox:latest
+    profiles:
+      - build
+
 volumes:
   pgdata:
   grafana_data:

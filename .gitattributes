@@ -1,1 +1,8 @@
 prompts/**/*.md text eol=lf
+
+# Files that run inside Linux containers must keep LF endings even when
+# checked out on Windows. CRLF in a #! script breaks the shebang at runtime.
+docker/**/*.sh text eol=lf
+docker/**/Dockerfile text eol=lf
+docker/**/.dockerignore text eol=lf
+docker/**/*.json text eol=lf

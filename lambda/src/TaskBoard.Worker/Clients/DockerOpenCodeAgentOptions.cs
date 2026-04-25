@@ -1,0 +1,95 @@
+namespace TaskBoard.Worker.Clients;
+
+/// <summary>
+/// Configuration for running the OpenCode CLI inside a Docker container
+/// (see <see cref="DockerOpenCodeAgentExecutor"/>) against a local
+/// Anthropic-compatible llama.cpp server such as the `local-llm` Qwen3.6
+/// deployment.
+/// </summary>
+/// <remarks>
+/// Bound from the <c>DockerAgents:OpenCode</c> configuration section. Unlike
+/// <see cref="DockerClaudeAgentOptions"/>, there is no credential directory —
+/// the local server accepts a dummy token, passed via the
+/// <see cref="AuthToken"/> env var to the sandbox entrypoint.
+/// </remarks>
+public sealed class DockerOpenCodeAgentOptions : DockerAgentOptionsBase
+{
+    /// <summary>Configuration section: <c>DockerAgents:OpenCode</c>.</summary>
+    public const string SectionName = "DockerAgents:OpenCode";
+
+    public DockerOpenCodeAgentOptions()
+    {
+        // Default image is the OpenCode sandbox built by scripts/build-opencode-sandbox.ps1.
+        ImageName = "aiboard-opencode-sandbox:latest";
+        // Must be attached to the external llm-net bridge network (created by
+        // the `local-llm` compose project) so the container can resolve
+        // `llama-server` by DNS name.
+        NetworkMode = "llm-net";
+        // Short prefix keeps container names readable while preserving the
+        // `aiboard-` marker that orphaned-container detection filters on.
+        ContainerNamePrefix = "aiboard-oc";
+        // Cold prefix cache on the first request to a 128K ctx llama.cpp
+        // instance can take 1–2 minutes; give the run generous headroom.
+        TimeoutSeconds = 600;
+    }
+
+    /// <summary>
+    /// Base URL of the OpenCode-facing Anthropic-compatible API. Default
+    /// is <c>http://llama-server:8080</c>, which is the service DNS name
+    /// inside the `llm-net` bridge network managed by the local-llm project.
+    /// </summary>
+    public string ProviderBaseUrl { get; set; } = "http://llama-server:8080";
+
+    /// <summary>
+    /// Auth token sent to the local server. llama.cpp validates nothing,
+    /// so any non-empty string works. Never commit a real secret here —
+    /// this is a local-only dummy value.
+    /// </summary>
+    public string AuthToken { get; set; } = "local";
+
+    /// <summary>
+    /// Model alias to request. Must match the model name exposed by the
+    /// llama-server (see local-llm/docker-compose.yml). Default matches the
+    /// Qwen3.6-35B-A3B deployment.
+    /// </summary>
+    public string ModelName { get; set; } = "qwen3.6-35b-a3b";
+
+    /// <summary>
+    /// Mount point inside the container for host-side system prompt files (read-only).
+    /// Mirrors <see cref="DockerClaudeAgentOptions.PromptMountPoint"/>.
+    /// </summary>
+    public string PromptMountPoint { get; set; } = "/mnt/aiboard/prompts";
+
+    /// <summary>
+    /// How many times the executor retries when the CLI output cannot be parsed
+    /// as the Agent Contract JSON. After the final failed attempt the executor
+    /// returns <c>{outcome: "ERROR"}</c> with the raw output in detail rather
+    /// than throwing.
+    /// </summary>
+    public int MaxRetriesOnMalformedOutput { get; set; } = 2;
+
+    /// <summary>
+    /// The CLI subcommand + flag sequence used to invoke OpenCode for a single
+    /// headless agent turn. Defaults to <c>["run"]</c>, which reads the prompt
+    /// from stdin in OpenCode's current CLI shape. If OpenCode's CLI changes
+    /// (or the operator wants to pin a sub-mode), override via config without
+    /// recompiling.
+    /// </summary>
+    /// <remarks>
+    /// The executor appends the task prompt via stdin; it does NOT substitute
+    /// values into this list. Keep it to flags that apply regardless of the
+    /// specific task.
+    /// </remarks>
+    public List<string> CliArguments { get; set; } = new() { "run" };
+
+    /// <summary>
+    /// Optional extra patterns for rate-limit detection. llama.cpp itself
+    /// rarely rate-limits (local server, single slot), but an upstream proxy
+    /// or shared deployment may surface rate-limit wording the default
+    /// OpenCode detector misses. Merged with
+    /// <see cref="CliRateLimitDetector.ClaudePatterns"/> (the local server
+    /// speaks the Anthropic wire format, so Anthropic-style messages are the
+    /// common case).
+    /// </summary>
+    public List<string> RateLimitPatterns { get; set; } = new();
+}

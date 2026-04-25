@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "local-llm": {
+      "npm": "@ai-sdk/anthropic",
+      "name": "Local LLM (llama.cpp)",
+      "options": {
+        "baseURL": "${OPENCODE_PROVIDER_BASE_URL}",
+        "apiKey": "${OPENCODE_AUTH_TOKEN}"
+      },
+      "models": {
+        "${OPENCODE_MODEL_NAME}": {
+          "name": "Local LLM primary model"
+        }
+      }
+    }
+  },
+  "model": "local-llm/${OPENCODE_MODEL_NAME}"
+}

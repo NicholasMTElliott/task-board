@@ -1,0 +1,5 @@
+# Unlike the Claude sandbox, this Dockerfile does COPY two files
+# (opencode.template.json and entrypoint.sh). Exclude everything else.
+*
+!opencode.template.json
+!entrypoint.sh

@@ -243,6 +243,7 @@ See [docs/CardTypesAndGeneration.md](docs/CardTypesAndGeneration.md) for a walkt
 | Orchestrator | C# / .NET 10 |
 | Agent executor (host) | Claude CLI subprocess (`ClaudeAgentExecutor`, `--output-format stream-json` + `--json-schema`) |
 | Agent executor (container) | `DockerClaudeAgentExecutor` — Claude CLI inside `docker run -i --rm`; provider key `docker-claude-cli`; select via `AGENT_EXECUTOR=docker-claude-cli` |
+| Agent executor (local LLM) | `DockerOpenCodeAgentExecutor` — OpenCode CLI inside `docker run -i --rm`, targeting a local llama.cpp server on the `llm-net` bridge network (e.g. Qwen3.6 via the `local-llm` project); provider key `docker-opencode`; select via `AGENT_EXECUTOR=docker-opencode`. See [docs/OpenCodeSandbox.md](docs/OpenCodeSandbox.md) |
 | Agent sandbox image | `docker/agent-sandbox/Dockerfile` — node:22-slim + Claude CLI + git + ripgrep; `aiboard-agent-sandbox:latest` |
 | Git isolation | Git worktrees (`GitWorkspaceManager`) |
 | Task files | `.aiboard/tasks/{id}.md` (ephemeral, gitignored) |
@@ -284,6 +285,16 @@ docker compose --profile build up agent-sandbox
 Build args: `-BaseImage`, `-AgentUid`, `-AgentGid`, `-ClaudeCliVersion`, `-Tag`, `-NoCache`.
 
 To enable the sandbox at runtime, set `AGENT_EXECUTOR=docker-claude-cli`. It is off by default.
+
+### Build the OpenCode sandbox image (optional, for local-LLM roles)
+
+A separate sandbox wraps the OpenCode CLI for use with a local llama.cpp server (e.g. Qwen3.6 served by the sibling `local-llm` compose project). Use it when you want to route low-stakes roles (gate checks, estimation, simple reviews) to a free local model. See [docs/OpenCodeSandbox.md](docs/OpenCodeSandbox.md) for the full setup, including role-suitability guidance.
+
+```powershell
+.\scripts\build-opencode-sandbox.ps1
+```
+
+Requires the `llm-net` Docker network (owned by the `local-llm` project) before any role routes to it. Enable at runtime with `AGENT_EXECUTOR=docker-opencode`.
 
 ### Run an agent on a card
 

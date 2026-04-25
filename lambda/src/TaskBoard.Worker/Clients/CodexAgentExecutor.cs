@@ -104,7 +104,7 @@ public sealed class CodexAgentExecutor(
             // Pattern-match stderr for known failure signatures so the operator sees
             // an actionable hint instead of a raw dump. Purely advisory — the actual
             // exception is still thrown below based on exit/stdout shape.
-            var hint = DetectStderrFailureHint(stderr);
+            var hint = CliFailureHintDetector.Detect(stderr, CliFailureHintDetector.CodexSignatures);
             if (hint is not null)
             {
                 logger.LogError(
@@ -696,61 +696,8 @@ public sealed class CodexAgentExecutor(
         return false;
     }
 
-    /// <summary>
-    /// Known failure signatures in Codex stderr. Each entry pairs a case-insensitive
-    /// substring with a short, actionable hint. Purely advisory — the actual
-    /// exception still carries the raw stderr; this just surfaces likely root causes
-    /// at the top of the log so the operator sees them first.
-    /// </summary>
-    private sealed record FailureHint(string Category, string Hint);
-
-    private static FailureHint? DetectStderrFailureHint(string stderr)
-    {
-        if (string.IsNullOrWhiteSpace(stderr)) return null;
-
-        // Order matters: check specific-then-generic. First match wins.
-        var signatures = new (string Pattern, string Category, string Hint)[]
-        {
-            ("OPENAI_API_KEY", "Auth",
-             "OPENAI_API_KEY is missing or empty. Set the env var or run 'codex login'."),
-            ("not authenticated", "Auth",
-             "Codex CLI reports it is not authenticated. Run 'codex login' and verify."),
-            ("invalid_api_key", "Auth",
-             "OPENAI_API_KEY is rejected by the provider. Rotate the key or re-run 'codex login'."),
-            ("401 Unauthorized", "Auth",
-             "Provider returned HTTP 401. Re-authenticate via 'codex login' or verify OPENAI_API_KEY."),
-            ("403 Forbidden", "Auth",
-             "Provider returned HTTP 403. The account may lack access to the requested model."),
-            ("model_not_found", "Model",
-             "The configured model is unknown to the provider. Check Role.Model against the current Codex model catalog."),
-            ("unknown model", "Model",
-             "Codex reports an unknown model name. Check Role.Model against the current Codex model catalog."),
-            ("unrecognized subcommand", "VersionDrift",
-             "Codex CLI rejected a subcommand. The installed Codex version may not support 'exec --json --output-schema'. Check 'codex --version' and compare to the tested baseline."),
-            ("unknown command", "VersionDrift",
-             "Codex CLI rejected a command. Likely a CLI version change; check 'codex --version'."),
-            ("error: unexpected argument", "VersionDrift",
-             "Codex CLI rejected a flag. Likely a CLI version change; check 'codex --version'."),
-            ("schema validation", "Schema",
-             "Codex rejected the output schema. If OutcomeSchemaOpenAI was updated, run Codex manually with the schema file to see the specific validation message."),
-            ("sandbox policy", "Sandbox",
-             "Codex sandbox policy blocked an operation. Review the role's providerParams (sandbox/fullAuto/yolo) against the action attempted."),
-            ("insufficient_quota", "Quota",
-             "OpenAI account quota exhausted. Add credits or wait for the billing window to roll over."),
-            ("Failed to connect", "Network",
-             "Codex CLI could not reach the provider. Check network/firewall; a local proxy may be intercepting."),
-            ("timed out", "Network",
-             "Provider request timed out. Could be transient load or a network issue."),
-        };
-
-        foreach (var (pattern, category, hint) in signatures)
-        {
-            if (stderr.Contains(pattern, StringComparison.OrdinalIgnoreCase))
-                return new FailureHint(category, hint);
-        }
-
-        return null;
-    }
+    // Stderr signature detection moved to <see cref="CliFailureHintDetector"/>
+    // for reuse across CLI executors. See <see cref="CliFailureHintDetector.CodexSignatures"/>.
 
     /// <summary>
     /// Backward-compat path: if stdout was a single JSON document (not NDJSON)
@@ -787,7 +734,7 @@ public sealed class CodexAgentExecutor(
     /// and any detected hint — everything an operator needs to reproduce locally.
     /// </summary>
     private static string BuildNoStructuredOutputDiagnostic(
-        string stdout, string stderr, FailureHint? hint)
+        string stdout, string stderr, CliFailureHintDetector.FailureHint? hint)
     {
         var sb = new StringBuilder();
         sb.AppendLine("=== Codex no-structured-output diagnostic ===");

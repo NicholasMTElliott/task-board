@@ -16,7 +16,7 @@ public static class StartupConfigValidator
     public readonly record struct Finding(Severity Severity, string Key, string Message);
 
     private static readonly string[] KnownBoardProviders = { "github", "trello", "live", "stub" };
-    private static readonly string[] KnownAgentExecutors = { "stub", "claude-cli", "docker-claude-cli", "codex" };
+    private static readonly string[] KnownAgentExecutors = { "stub", "claude-cli", "docker-claude-cli", "docker-opencode", "codex" };
 
     /// <summary>
     /// Runs all pre-flight checks against the merged configuration and returns

@@ -215,9 +215,13 @@ builder.Services.TryAddSingleton<IBoardShapeProbe, NullBoardShapeProbe>();
 // AGENT_EXECUTOR=docker-claude-cli → Docker executor registered under both
 //                                    "docker-claude-cli" and "claude-cli" keys
 //                                    (transparent substitution; fails if Docker unavailable)
+// AGENT_EXECUTOR=docker-opencode   → OpenCode-in-Docker executor registered
+//                                    under "docker-opencode" (distinct provider key;
+//                                    no aliasing, fails if Docker unavailable)
 // Any other value (or unset)       → production mode: real providers are auto-detected
 var agentExecutorMode = builder.Configuration["AgentExecutor"]?.ToLowerInvariant() ?? "stub";
 var dockerModeRequested = agentExecutorMode == "docker-claude-cli";
+var openCodeModeRequested = agentExecutorMode == "docker-opencode";
 
 // Always register StubAgentExecutor (used in stub mode and tests)
 builder.Services.AddSingleton<StubAgentExecutor>();
@@ -226,7 +230,7 @@ HashSet<string> detectedProviders;
 if (agentExecutorMode == "stub")
 {
     // Stub mode: all providers map to stub, all considered available
-    detectedProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli", "codex", "stub", "docker-claude-cli" };
+    detectedProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli", "codex", "stub", "docker-claude-cli", "docker-opencode" };
 }
 else
 {
@@ -286,6 +290,21 @@ else
         if (dockerModeRequested && detectedProviders.Contains("docker"))
             detectedProviders.Add("docker-claude-cli");
     }
+
+    // OpenCode-in-Docker executor (provider key: docker-opencode).
+    // Registered whenever Docker is available so workflow configs can route to it.
+    // If AGENT_EXECUTOR=docker-opencode is explicitly requested but Docker is
+    // unavailable, the fail-fast check below will fire.
+    if (detectedProviders.Contains("docker") || openCodeModeRequested)
+    {
+        builder.Services.Configure<DockerOpenCodeAgentOptions>(
+            builder.Configuration.GetSection(DockerOpenCodeAgentOptions.SectionName));
+        builder.Services.AddSingleton<DockerOpenCodeMountBuilder>();
+        builder.Services.AddSingleton<DockerOpenCodeAgentExecutor>();
+
+        if (detectedProviders.Contains("docker"))
+            detectedProviders.Add("docker-opencode");
+    }
 }
 
 builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
@@ -313,6 +332,11 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
         // so workflow configs don't need modification.
         if (dockerModeRequested)
             executors["claude-cli"] = dockerExecutor;
+    }
+
+    if (detectedProviders.Contains("docker") || detectedProviders.Contains("docker-opencode"))
+    {
+        executors["docker-opencode"] = sp.GetRequiredService<DockerOpenCodeAgentExecutor>();
     }
 
     return new AgentExecutorResolver(executors);
@@ -456,15 +480,16 @@ void LogMissingConfig(string requiredKeys)
 {
     var rawAgentExec = builder.Configuration["AgentExecutor"];
 
-    // docker-claude-cli is a recognized selection mode — no warning needed
+    // Recognized selection modes — no warning needed
     if (rawAgentExec is not null
         && !string.Equals(rawAgentExec, "stub", StringComparison.OrdinalIgnoreCase)
-        && !string.Equals(rawAgentExec, "docker-claude-cli", StringComparison.OrdinalIgnoreCase))
+        && !string.Equals(rawAgentExec, "docker-claude-cli", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(rawAgentExec, "docker-opencode", StringComparison.OrdinalIgnoreCase))
     {
         // Warn if AGENT_EXECUTOR is set to a real provider name (now deprecated for provider selection)
         logger.LogWarning(
             "AGENT_EXECUTOR is set to '{Value}' but this value is no longer used for provider selection — " +
-            "real providers are now auto-detected. Only 'stub' and 'docker-claude-cli' retain special meaning.",
+            "real providers are now auto-detected. Only 'stub', 'docker-claude-cli', and 'docker-opencode' retain special meaning.",
             rawAgentExec);
     }
 
@@ -474,6 +499,16 @@ void LogMissingConfig(string requiredKeys)
         logger.LogError(
             "AGENT_EXECUTOR=docker-claude-cli is configured but Docker is not available. " +
             "Ensure the Docker CLI is installed and the Docker daemon is running ('docker info' must succeed).");
+        return;
+    }
+
+    // Fail fast when docker-opencode is explicitly requested but Docker is unavailable
+    if (openCodeModeRequested && !detectedProviders.Contains("docker-opencode"))
+    {
+        logger.LogError(
+            "AGENT_EXECUTOR=docker-opencode is configured but Docker is not available. " +
+            "Ensure the Docker CLI is installed and the Docker daemon is running ('docker info' must succeed), " +
+            "and that the aiboard-opencode-sandbox image has been built (scripts/build-opencode-sandbox.ps1).");
         return;
     }
 
@@ -571,6 +606,17 @@ if (dockerModeRequested && detectedProviders.Contains("docker-claude-cli"))
     logger.LogInformation(
         "DockerClaudeAgentOptions: ImageName={Image}, NetworkMode={Network}, MemoryLimit={Memory}, CredentialPath={Creds}",
         dockerOpts.ImageName, dockerOpts.NetworkMode, dockerOpts.MemoryLimit ?? "(none)", dockerOpts.CredentialPath);
+}
+if (detectedProviders.Contains("docker-opencode"))
+{
+    var openCodeOpts = host.Services.GetRequiredService<IOptions<DockerOpenCodeAgentOptions>>().Value;
+    logger.LogInformation(
+        "DockerOpenCodeAgentOptions: ImageName={Image}, NetworkMode={Network}, ProviderBaseUrl={Url}, ModelName={Model}",
+        openCodeOpts.ImageName, openCodeOpts.NetworkMode,
+        openCodeOpts.ProviderBaseUrl, openCodeOpts.ModelName);
+    logger.LogInformation(
+        "OpenCode executor registered. Ensure the 'llm-net' Docker network exists " +
+        "(start the local-llm compose project) before routing roles to 'docker-opencode'.");
 }
 
 // ── 8. Resolve shared runtime parameters from merged configuration ───────────
