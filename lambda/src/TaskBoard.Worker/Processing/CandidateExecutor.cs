@@ -71,12 +71,17 @@ public sealed class CandidateExecutor(
             await CleanupCandidateWorktreesAsync(
                 request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
 
-            // Surface the first non-COMPLETE outcome as the step result so
-            // AgentRunner picks the matching transition. Detail aggregates
-            // each candidate's failure summary.
-            var first = executions[0];
+            // Pick the merged outcome by recoverability rather than candidate
+            // declaration order: NEEDS_INFO is recoverable by a human (card moves
+            // to Questions), ERROR is terminal. If even one candidate asked a
+            // question, the operator deserves to see that path; otherwise fall
+            // back to ERROR. Without this, a mix of {ERROR at index 0, NEEDS_INFO
+            // at index 1} would route to Error and the questions would be lost.
+            var mergedOutcome = executions.Any(e => e.AgentResult.Outcome == AgentOutcome.NEEDS_INFO)
+                ? AgentOutcome.NEEDS_INFO
+                : AgentOutcome.ERROR;
             var detail = BuildAllFailedDetail(executions);
-            return new AgentResult(first.AgentResult.Outcome, detail);
+            return new AgentResult(mergedOutcome, detail);
         }
 
         // ── Phase 2: run the evaluator ───────────────────────────────────────
@@ -85,74 +90,83 @@ public sealed class CandidateExecutor(
         var (evaluatorResult, evaluatorTempPromptPath) = await RunEvaluatorAsync(
             request, evaluatorCfg, executions, groupId, cancellationToken);
 
-        // ── Phase 3: parse evaluator output, persist per-candidate verdicts ──
-        var verdict = ParseEvaluatorVerdict(
-            evaluatorResult, executions.Count, evaluatorCfg.Scoring);
-
-        await PersistEvaluatorVerdictAsync(
-            request.RunId, groupId, executions, verdict, cancellationToken);
-
-        // ── Phase 4: promote the winner (if the evaluator picked one) ───────
-        if (evaluatorResult.Outcome == AgentOutcome.COMPLETE && verdict.WinnerIndex is int winnerIdx)
+        // Phases 3–5 are wrapped in try/finally so the evaluator's inline-prompt
+        // temp file is always cleaned up even if parsing, persistence, promotion,
+        // or comment posting throws. Without this guard, exceptions between
+        // phase 2 and the cleanup at the bottom would orphan files in /tmp.
+        try
         {
-            var winner = executions[winnerIdx];
-            logger.LogInformation(
-                "Promoting candidate {Index} (provider={Provider}) as winner for step '{StepName}'",
-                winnerIdx, winner.Provider, step.Name);
+            // ── Phase 3: parse evaluator output, persist per-candidate verdicts ──
+            var verdict = ParseEvaluatorVerdict(
+                evaluatorResult, executions.Count, evaluatorCfg.Scoring);
 
-            try
+            await PersistEvaluatorVerdictAsync(
+                request.RunId, groupId, executions, verdict, cancellationToken);
+
+            // ── Phase 4: promote the winner (if the evaluator picked one) ───────
+            if (evaluatorResult.Outcome == AgentOutcome.COMPLETE && verdict.WinnerIndex is int winnerIdx)
             {
-                await gitWorkspaceManager.ResetWorktreeToBranchAsync(
-                    request.WorktreePath, winner.BranchName, cancellationToken);
+                var winner = executions[winnerIdx];
+                logger.LogInformation(
+                    "Promoting candidate {Index} (provider={Provider}) as winner for step '{StepName}'",
+                    winnerIdx, winner.Provider, step.Name);
+
+                try
+                {
+                    await gitWorkspaceManager.ResetWorktreeToBranchAsync(
+                        request.WorktreePath, winner.BranchName, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    // Promotion failure is fatal — without the winner's commits the
+                    // canonical worktree would proceed with stale state. Surface as ERROR.
+                    logger.LogError(ex,
+                        "Failed to promote candidate {Index} (branch={Branch}) for step '{StepName}'",
+                        winnerIdx, winner.BranchName, step.Name);
+                    await CleanupCandidateWorktreesAsync(
+                        request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
+                    return new AgentResult(
+                        AgentOutcome.ERROR,
+                        $"Evaluator selected candidate {winnerIdx} but promotion failed: {ex.Message}");
+                }
+
+                // Cleanup losers; keep the winner's branch (it now backs the
+                // canonical worktree's HEAD).
+                await CleanupLoserWorktreesAsync(
+                    request.RepoPath, executions, winnerIdx, cancellationToken);
             }
-            catch (Exception ex)
+            else
             {
-                // Promotion failure is fatal — without the winner's commits the
-                // canonical worktree would proceed with stale state. Surface as ERROR.
-                logger.LogError(ex,
-                    "Failed to promote candidate {Index} (branch={Branch}) for step '{StepName}'",
-                    winnerIdx, winner.BranchName, step.Name);
+                // Evaluator returned NEEDS_INFO / ERROR or no winner. Tear down all
+                // candidate worktrees + branches; canonical worktree is unchanged.
+                logger.LogInformation(
+                    "Evaluator did not select a winner (outcome={Outcome}); cleaning up all {Count} candidate worktrees",
+                    evaluatorResult.Outcome, executions.Count);
                 await CleanupCandidateWorktreesAsync(
                     request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
-                return new AgentResult(
-                    AgentOutcome.ERROR,
-                    $"Evaluator selected candidate {winnerIdx} but promotion failed: {ex.Message}");
             }
 
-            // Cleanup losers; keep the winner's branch (it now backs the
-            // canonical worktree's HEAD).
-            await CleanupLoserWorktreesAsync(
-                request.RepoPath, executions, winnerIdx, cancellationToken);
-        }
-        else
-        {
-            // Evaluator returned NEEDS_INFO / ERROR or no winner. Tear down all
-            // candidate worktrees + branches; canonical worktree is unchanged.
-            logger.LogInformation(
-                "Evaluator did not select a winner (outcome={Outcome}); cleaning up all {Count} candidate worktrees",
-                evaluatorResult.Outcome, executions.Count);
-            await CleanupCandidateWorktreesAsync(
-                request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
-        }
+            // ── Phase 5: post per-candidate audit comments + the consolidated step comment
+            await PostCandidateCommentsAsync(
+                request, step.Name, executions, evaluatorResult, verdict, cancellationToken);
 
-        // ── Phase 5: post per-candidate audit comments + the consolidated step comment
-        await PostCandidateCommentsAsync(
-            request, step.Name, executions, evaluatorResult, verdict, cancellationToken);
-
-        // Clean up the evaluator's inline-prompt temp file (if one was created).
-        // Best-effort; orphaned files are harmless but accumulate in /tmp.
-        if (evaluatorTempPromptPath is not null)
+            return evaluatorResult;
+        }
+        finally
         {
-            try { File.Delete(evaluatorTempPromptPath); }
-            catch (Exception ex)
+            // Clean up the evaluator's inline-prompt temp file (if one was created).
+            // Best-effort; orphaned files are harmless but accumulate in /tmp.
+            if (evaluatorTempPromptPath is not null)
             {
-                logger.LogDebug(ex,
-                    "Failed to delete evaluator inline-prompt temp file {Path}",
-                    evaluatorTempPromptPath);
+                try { File.Delete(evaluatorTempPromptPath); }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex,
+                        "Failed to delete evaluator inline-prompt temp file {Path}",
+                        evaluatorTempPromptPath);
+                }
             }
         }
-
-        return evaluatorResult;
     }
 
     // ── Phase 1 helpers ──────────────────────────────────────────────────────

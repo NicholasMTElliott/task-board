@@ -24,6 +24,22 @@ TEMPLATE="/etc/aiboard/opencode.template.json"
 
 mkdir -p "${CONFIG_DIR}"
 
+# JSON-escape the values before envsubst splices them into the template.
+# Without this a token / URL / model name containing a backslash or double
+# quote would produce invalid JSON and opencode would fail to load. Order
+# matters: escape backslash first so we don't double-escape the backslashes
+# we add for the quote-escape pass. Control chars (\n, \t, …) are rare in
+# real config and not handled — surface as malformed JSON if anyone tries.
+json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    printf '%s' "${s}"
+}
+export OPENCODE_PROVIDER_BASE_URL="$(json_escape "${OPENCODE_PROVIDER_BASE_URL}")"
+export OPENCODE_AUTH_TOKEN="$(json_escape "${OPENCODE_AUTH_TOKEN}")"
+export OPENCODE_MODEL_NAME="$(json_escape "${OPENCODE_MODEL_NAME}")"
+
 # envsubst replaces $VAR / ${VAR} literals. We restrict substitution to our
 # three known vars so any other dollar signs in the template (there shouldn't
 # be any, but defence in depth) pass through untouched.

@@ -131,6 +131,35 @@ public class CandidateExecutorFlowTests : IDisposable
         Assert.Empty(_runStore.RecordedVerdicts);
     }
 
+    [Fact]
+    public async Task AllCandidatesFail_MixedOutcomes_PrefersNeedsInfoOverError()
+    {
+        // Mixed non-COMPLETE outcomes: candidate 0 errored, candidate 1 asked
+        // a question. The merged step outcome must surface NEEDS_INFO so the
+        // card routes to the Questions column rather than Error — otherwise
+        // the operator never sees the question candidate 1 actually raised.
+        // Candidate ordering must NOT determine the routing.
+        var candidateExecutor = BuildExecutor(
+            ("docker-claude-cli", AgentOutcome.ERROR,      "failed to compile"),
+            ("docker-opencode",   AgentOutcome.NEEDS_INFO, "Which API version do you want?"),
+            evaluatorOutcome: AgentOutcome.COMPLETE,  // never invoked
+            evaluatorDetail: "(should not appear)");
+
+        var request = NewRequest(
+            stepName: "implement",
+            providers: ["docker-claude-cli", "docker-opencode"]);
+
+        var result = await candidateExecutor.ExecuteCandidateGroupAsync(
+            request, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
+        Assert.Contains("All candidates failed", result.Detail);
+
+        // Both candidates persisted; no evaluator row (still all-failed path).
+        Assert.Equal(2, _runStore.SavedSteps.Count);
+        Assert.DoesNotContain(_runStore.SavedSteps, r => r.StepName.EndsWith(":evaluator"));
+    }
+
     // ── Evaluator returns NEEDS_INFO ────────────────────────────────────────
 
     [Fact]
