@@ -91,8 +91,6 @@ public sealed class DockerOpenCodeAgentExecutor(
             // forever.
             var attempt = 0;
             string lastStdout = "";
-            string lastStderr = "";
-            int lastExitCode = 0;
             var prompt = basePrompt;
 
             while (true)
@@ -130,8 +128,6 @@ public sealed class DockerOpenCodeAgentExecutor(
                 }
 
                 lastStdout = stdout;
-                lastStderr = stderr;
-                lastExitCode = exitCode;
 
                 // Stderr signature detection — surface likely root cause at the
                 // top of the log so the operator sees it first.
@@ -221,6 +217,23 @@ public sealed class DockerOpenCodeAgentExecutor(
                         attempt + 1, result.Outcome, result.Detail ?? "(none)",
                         result.Questions?.Count ?? 0);
                     return result;
+                }
+
+                // Output had no parseable outcome. Before retrying or giving up, check
+                // whether stderr indicates rate limiting — without this guard, an
+                // upstream rate-limit that returns exit 0 + non-empty prose would
+                // silently burn the retry budget and end up classified as a parse
+                // failure instead of a rate-limit event.
+                if (IsRateLimited(stderr))
+                {
+                    var snippet = Truncate(stderr, 500).Trim();
+                    logger.LogWarning(
+                        "Docker/OpenCode rate limited for card {CardId} on attempt {Attempt} " +
+                        "(exit 0, no parseable outcome). Stderr: {Stderr}",
+                        context.TargetCardId, attempt + 1, snippet);
+                    throw new RateLimitException(
+                        $"Docker/OpenCode rate limited (attempt {attempt + 1}, no parseable outcome). Stderr: {snippet}",
+                        RateLimitSource.AgentCli);
                 }
 
                 // Output did not contain an outcome-bearing JSON object.

@@ -150,6 +150,33 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_RateLimitOnRetryAttempt_ThrowsRateLimitException()
+    {
+        // Real-world failure mode the bare retry loop would miss: the upstream
+        // server starts rate-limiting mid-run. It returns exit 0 with prose ("I
+        // can't help right now") and "rate limit reached" on stderr. Without
+        // the explicit check on the parse-failure path, we'd retry-then-fail
+        // and silently classify a rate limit as a parse error, costing both
+        // tokens and an incorrect agent_run.failure_reason.
+        var (ws, promptFile) = NewWorkspace();
+        try
+        {
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n)
+                => Task.FromResult((0,
+                    "Sorry, I cannot answer right now. Please try again later.",
+                    "openai: rate limit reached for model"));
+
+            var executor = CreateExecutor(runner, maxRetries: 2);
+
+            var ex = await Assert.ThrowsAsync<RateLimitException>(
+                () => executor.ExecuteAsync(CreateContext(ws, promptFile), CancellationToken.None));
+
+            Assert.Equal(RateLimitSource.AgentCli, ex.Source);
+        }
+        finally { CleanupWorkspace(ws); }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_FirstAttemptMalformed_SecondAttemptValid_Succeeds()
     {
         var (ws, promptFile) = NewWorkspace();
