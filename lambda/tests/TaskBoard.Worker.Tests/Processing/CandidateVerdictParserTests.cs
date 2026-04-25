@@ -163,6 +163,80 @@ public class CandidateVerdictParserTests
     }
 
     [Fact]
+    public void Parse_CompleteOutcomeButNoWinnerIndex_ReturnsNullWinner()
+    {
+        // Evaluator forgot or refused to pick a winner but still emitted
+        // outcome=COMPLETE. Treat as "no winner promoted" — the canonical
+        // worktree must NOT be reset to a candidate's branch in this case.
+        var detail = "{\"outcome\":\"COMPLETE\",\"detail\":\"Both candidates are equivalent.\"}";
+
+        var verdict = CandidateExecutor.ParseEvaluatorVerdict(
+            ResultWithDetail(detail), candidateCount: 2, EvaluatorScoring.WinnerWithScores);
+
+        Assert.Null(verdict.WinnerIndex);
+    }
+
+    [Fact]
+    public void Parse_NegativeScore_DropsScoreKeepsReasoning()
+    {
+        // Evaluator emits a nonsense negative score. Don't persist garbage that
+        // would skew avg_quality_score in v_provider_role_metrics. The reasoning
+        // is still captured — its absence-of-score is itself a useful signal.
+        var detail = """
+            {"outcome":"COMPLETE","winner_index":0,"scores":[
+              {"index":0,"score":-3,"reasoning":"weird candidate"}
+            ]}
+            """;
+
+        var verdict = CandidateExecutor.ParseEvaluatorVerdict(
+            ResultWithDetail(detail), candidateCount: 1, EvaluatorScoring.WinnerWithScores);
+
+        Assert.Equal(0, verdict.WinnerIndex);
+        Assert.Single(verdict.Scores);
+        Assert.Null(verdict.Scores[0].Score);
+        Assert.Equal("weird candidate", verdict.Scores[0].Reasoning);
+    }
+
+    [Fact]
+    public void Parse_ScoreAbove10_DroppedAsOutOfRange()
+    {
+        // Same rationale as negative scores — evaluator broke the contract,
+        // refuse to amplify the noise into the metrics views.
+        var detail = """
+            {"outcome":"COMPLETE","winner_index":0,"scores":[{"index":0,"score":42}]}
+            """;
+
+        var verdict = CandidateExecutor.ParseEvaluatorVerdict(
+            ResultWithDetail(detail), candidateCount: 1, EvaluatorScoring.WinnerWithScores);
+
+        Assert.Single(verdict.Scores);
+        Assert.Null(verdict.Scores[0].Score);
+    }
+
+    [Fact]
+    public void Parse_DuplicateIndex_KeepsLastOccurrence()
+    {
+        // Evaluator drafts then revises a score for the same candidate. Keep
+        // the final answer ("last write wins") rather than persisting both —
+        // each candidate row in step_result corresponds to one candidate, so
+        // there's only one slot for a verdict per index anyway. The DB-level
+        // UNIQUE INDEX (V19) would otherwise fail loudly on this shape.
+        var detail = """
+            {"outcome":"COMPLETE","winner_index":0,"scores":[
+              {"index":0,"score":3,"reasoning":"first thought"},
+              {"index":0,"score":8,"reasoning":"on reflection, much better"}
+            ]}
+            """;
+
+        var verdict = CandidateExecutor.ParseEvaluatorVerdict(
+            ResultWithDetail(detail), candidateCount: 1, EvaluatorScoring.WinnerWithScores);
+
+        Assert.Single(verdict.Scores);
+        Assert.Equal(8m, verdict.Scores[0].Score);
+        Assert.Contains("on reflection", verdict.Scores[0].Reasoning);
+    }
+
+    [Fact]
     public void Parse_MultipleJsonObjects_TakesFirstWithWinnerIndex()
     {
         // Models sometimes draft a structure then revise it. The fenced block

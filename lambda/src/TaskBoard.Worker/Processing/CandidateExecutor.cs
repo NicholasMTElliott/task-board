@@ -80,7 +80,9 @@ public sealed class CandidateExecutor(
         }
 
         // ── Phase 2: run the evaluator ───────────────────────────────────────
-        var evaluatorResult = await RunEvaluatorAsync(
+        // RunEvaluatorAsync may write an inline-system-prompt to a temp file;
+        // it returns both the result and the path so we can clean up afterwards.
+        var (evaluatorResult, evaluatorTempPromptPath) = await RunEvaluatorAsync(
             request, evaluatorCfg, executions, groupId, cancellationToken);
 
         // ── Phase 3: parse evaluator output, persist per-candidate verdicts ──
@@ -136,6 +138,19 @@ public sealed class CandidateExecutor(
         // ── Phase 5: post per-candidate audit comments + the consolidated step comment
         await PostCandidateCommentsAsync(
             request, step.Name, executions, evaluatorResult, verdict, cancellationToken);
+
+        // Clean up the evaluator's inline-prompt temp file (if one was created).
+        // Best-effort; orphaned files are harmless but accumulate in /tmp.
+        if (evaluatorTempPromptPath is not null)
+        {
+            try { File.Delete(evaluatorTempPromptPath); }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex,
+                    "Failed to delete evaluator inline-prompt temp file {Path}",
+                    evaluatorTempPromptPath);
+            }
+        }
 
         return evaluatorResult;
     }
@@ -361,7 +376,7 @@ public sealed class CandidateExecutor(
 
     // ── Phase 2: evaluator invocation ────────────────────────────────────────
 
-    private async Task<AgentResult> RunEvaluatorAsync(
+    private async Task<(AgentResult Result, string? TempPromptPathToDelete)> RunEvaluatorAsync(
         CandidateGroupRequest request,
         EvaluatorConfig evaluatorCfg,
         IReadOnlyList<CandidateExecution> executions,
@@ -374,7 +389,7 @@ public sealed class CandidateExecutor(
         var evaluatorTaskPrompt = await BuildEvaluatorTaskPromptAsync(
             request, evaluatorCfg, executions, cancellationToken);
 
-        var evaluatorSystemPromptPath = await ResolveEvaluatorSystemPromptAsync(
+        var (evaluatorSystemPromptPath, tempPromptPath) = await ResolveEvaluatorSystemPromptAsync(
             request, evaluatorRole, evaluatorCfg, cancellationToken);
 
         var startedAt = DateTimeOffset.UtcNow;
@@ -442,7 +457,7 @@ public sealed class CandidateExecutor(
                 request.Step.Name);
         }
 
-        return evaluatorResult;
+        return (evaluatorResult, tempPromptPath);
     }
 
     private async Task<string> BuildEvaluatorTaskPromptAsync(
@@ -562,7 +577,13 @@ public sealed class CandidateExecutor(
             "and pick from the rest.";
     }
 
-    private async Task<string> ResolveEvaluatorSystemPromptAsync(
+    /// <summary>
+    /// Resolves the evaluator's system prompt to a file path for the executor.
+    /// Returns (path, tempPathToDelete) — tempPathToDelete is non-null only when
+    /// we materialised an inline prompt to disk; the caller deletes it after
+    /// the evaluator run completes so /tmp doesn't accumulate stale files.
+    /// </summary>
+    private async Task<(string Path, string? TempPathToDelete)> ResolveEvaluatorSystemPromptAsync(
         CandidateGroupRequest request,
         WorkflowRole evaluatorRole,
         EvaluatorConfig evaluatorCfg,
@@ -572,18 +593,19 @@ public sealed class CandidateExecutor(
         {
             var path = ResolveRelativePath(evaluatorRole.SystemPromptFile, request.PromptBaseDirectory);
             if (File.Exists(path))
-                return path;
+                return (path, null);
         }
 
-        // Inline system prompt: write to a temp file the executor can mount.
+        // Inline system prompt: write to a temp file the executor can mount,
+        // and surface the path so the caller can clean it up later.
         var inline = !string.IsNullOrWhiteSpace(evaluatorRole.SystemPrompt)
             ? evaluatorRole.SystemPrompt
             : DefaultEvaluatorSystemPrompt;
 
-        var tmp = Path.Combine(Path.GetTempPath(),
+        var tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
             $"aiboard-evaluator-{Guid.NewGuid():N}.md");
         await File.WriteAllTextAsync(tmp, inline, cancellationToken);
-        return tmp;
+        return (tmp, tmp);
     }
 
     private const string DefaultEvaluatorSystemPrompt =
@@ -649,6 +671,13 @@ public sealed class CandidateExecutor(
         return null;
     }
 
+    /// <summary>
+    /// Maximum allowed value for an evaluator quality score. Scores outside
+    /// the [0, MaxScore] range are clamped to null at parse time so they
+    /// don't pollute <c>v_provider_role_metrics.avg_quality_score</c>.
+    /// </summary>
+    private const decimal MaxScore = 10m;
+
     private static IReadOnlyList<CandidateScore> TryExtractScores(string? detail, int candidateCount)
     {
         if (string.IsNullOrEmpty(detail))
@@ -663,21 +692,38 @@ public sealed class CandidateExecutor(
                     || arr.ValueKind != JsonValueKind.Array)
                     continue;
 
-                var list = new List<CandidateScore>();
+                // Dedupe by index: if the evaluator emits two entries with the
+                // same index (revision after second thought, or simple error),
+                // keep the LAST occurrence so "the evaluator's final answer"
+                // wins. Map preserves insertion order for first-occurrence
+                // index semantics in the returned list.
+                var byIndex = new Dictionary<int, CandidateScore>();
                 foreach (var item in arr.EnumerateArray())
                 {
                     if (item.ValueKind != JsonValueKind.Object) continue;
                     var idx = item.TryGetProperty("index", out var iEl) && iEl.TryGetInt32(out var i)
                         ? i : -1;
-                    var score = item.TryGetProperty("score", out var sEl) && sEl.ValueKind == JsonValueKind.Number
-                        ? (decimal?)sEl.GetDecimal() : null;
+                    if (idx < 0 || idx >= candidateCount) continue;
+
+                    decimal? score = null;
+                    if (item.TryGetProperty("score", out var sEl)
+                        && sEl.ValueKind == JsonValueKind.Number
+                        && sEl.TryGetDecimal(out var rawScore))
+                    {
+                        // Drop scores outside [0, 10] rather than persisting
+                        // garbage that would skew avg_quality_score in metrics.
+                        // The reasoning field is kept either way — the absence
+                        // of a score is itself useful data.
+                        if (rawScore >= 0m && rawScore <= MaxScore)
+                            score = rawScore;
+                    }
+
                     var reasoning = item.TryGetProperty("reasoning", out var rEl)
                         ? rEl.GetString() : null;
 
-                    if (idx < 0 || idx >= candidateCount) continue;
-                    list.Add(new CandidateScore(idx, score, reasoning));
+                    byIndex[idx] = new CandidateScore(idx, score, reasoning);
                 }
-                if (list.Count > 0) return list;
+                if (byIndex.Count > 0) return byIndex.Values.OrderBy(s => s.Index).ToList();
             }
             catch (JsonException) { }
         }
