@@ -338,6 +338,17 @@ public sealed record EvaluatorConfig(
 /// "how close was it" data.
 /// </para>
 /// </summary>
+/// <remarks>
+/// The <see cref="JsonStringEnumConverter"/> attribute makes JSON values like
+/// <c>"WinnerWithScores"</c> / <c>"winnerWithScores"</c> / <c>"WINNERONLY"</c>
+/// deserialize to the enum (case-insensitive matching is the default for the
+/// converter). Without this, <c>System.Text.Json</c> would only accept the
+/// numeric ordinal — and a string value would crash with
+/// <c>JsonException: The JSON value could not be converted to EvaluatorScoring</c>.
+/// All workflow JSON examples in the docs use the string spelling, so this
+/// attribute is what makes those examples actually work end-to-end.
+/// </remarks>
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum EvaluatorScoring
 {
     WinnerOnly,
