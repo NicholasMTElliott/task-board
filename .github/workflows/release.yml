@@ -56,6 +56,11 @@ jobs:
         with:
           name: aiboard-${{ matrix.rid }}
           path: aiboard-${{ matrix.rid }}.${{ matrix.ext }}
+          # Aggressive retention — these are intermediate handoffs to the
+          # release job (which runs minutes later and uploads to the actual
+          # GitHub Release). Anything beyond a day is dead weight that ate
+          # the artifact-storage quota and silently broke v0.0.11/12/13.
+          retention-days: 1
 
   release:
     needs: publish
