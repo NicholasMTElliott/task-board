@@ -34,11 +34,14 @@ public sealed class DockerOpenCodeAgentOptions : DockerAgentOptionsBase
     }
 
     /// <summary>
-    /// Base URL of the OpenCode-facing Anthropic-compatible API. Default
-    /// is <c>http://llama-server:8080</c>, which is the service DNS name
-    /// inside the `llm-net` bridge network managed by the local-llm project.
+    /// Base URL of the OpenAI-compatible API exposed by the local llama.cpp
+    /// proxy. Default is <c>http://llama-server:8080/v1</c> — the service DNS
+    /// name inside the `llm-net` bridge network managed by the local-llm
+    /// project, with the <c>/v1</c> suffix the
+    /// <c>@ai-sdk/openai-compatible</c> adapter expects (it appends
+    /// <c>/chat/completions</c> to this prefix).
     /// </summary>
-    public string ProviderBaseUrl { get; set; } = "http://llama-server:8080";
+    public string ProviderBaseUrl { get; set; } = "http://llama-server:8080/v1";
 
     /// <summary>
     /// Auth token sent to the local server. llama.cpp validates nothing,
@@ -48,9 +51,13 @@ public sealed class DockerOpenCodeAgentOptions : DockerAgentOptionsBase
     public string AuthToken { get; set; } = "local";
 
     /// <summary>
-    /// Model alias to request. Must match the model name exposed by the
-    /// llama-server (see local-llm/docker-compose.yml). Default matches the
-    /// Qwen3.6-35B-A3B deployment.
+    /// Default model alias selected by the templated <c>opencode.json</c> when
+    /// no per-call override is supplied. Two virtual models are registered in
+    /// the sandbox image: <c>qwen3.6-35b-a3b</c> (no thinking, fast — production
+    /// default) and <c>qwen3.6-35b-a3b-think</c> (thinking, ~7× tokens — for
+    /// design / synthesis roles). The executor honours
+    /// <see cref="AgentExecutionContext.Model"/> when non-empty so individual
+    /// roles can pick either variant; this field is the fallback.
     /// </summary>
     public string ModelName { get; set; } = "qwen3.6-35b-a3b";
 

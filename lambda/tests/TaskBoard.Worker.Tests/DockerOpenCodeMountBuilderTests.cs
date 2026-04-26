@@ -47,7 +47,7 @@ public class DockerOpenCodeMountBuilderTests : IDisposable
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
             new DockerOpenCodeAgentOptions(),
-            CancellationToken.None);
+            cancellationToken: CancellationToken.None);
 
         Assert.True(ctx.Mounts.Count <= 3,
             $"Expected ≤3 mounts (workspace, base .git, .git override), got {ctx.Mounts.Count}");
@@ -66,7 +66,7 @@ public class DockerOpenCodeMountBuilderTests : IDisposable
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
             new DockerOpenCodeAgentOptions(),
-            CancellationToken.None);
+            cancellationToken: CancellationToken.None);
 
         var workspace = ctx.Mounts.FirstOrDefault(
             m => m.ContainerPath == DockerMountBuilderBase.WorkspaceMountPoint);
@@ -88,7 +88,7 @@ public class DockerOpenCodeMountBuilderTests : IDisposable
         };
 
         await using var ctx = await Builder.BuildAsync(
-            _tempDir, options, CancellationToken.None);
+            _tempDir, options, cancellationToken: CancellationToken.None);
 
         Assert.Equal("http://my-llama:9090",
             ctx.EnvironmentVariables["OPENCODE_PROVIDER_BASE_URL"]);
@@ -96,6 +96,39 @@ public class DockerOpenCodeMountBuilderTests : IDisposable
             ctx.EnvironmentVariables["OPENCODE_AUTH_TOKEN"]);
         Assert.Equal("test-model",
             ctx.EnvironmentVariables["OPENCODE_MODEL_NAME"]);
+    }
+
+    [Fact]
+    public async Task BuildAsync_ModelOverride_OverridesOptionsModelName()
+    {
+        // The per-call modelOverride lets a workflow role pick between the
+        // no-think and -think Qwen variants without editing the options
+        // default. Empty/whitespace must fall back to the options value.
+        var options = new DockerOpenCodeAgentOptions
+        {
+            ModelName = "qwen3.6-35b-a3b",
+        };
+
+        await using var withOverride = await Builder.BuildAsync(
+            _tempDir, options,
+            modelOverride: "qwen3.6-35b-a3b-think",
+            cancellationToken: CancellationToken.None);
+        Assert.Equal("qwen3.6-35b-a3b-think",
+            withOverride.EnvironmentVariables["OPENCODE_MODEL_NAME"]);
+
+        await using var withoutOverride = await Builder.BuildAsync(
+            _tempDir, options,
+            modelOverride: null,
+            cancellationToken: CancellationToken.None);
+        Assert.Equal("qwen3.6-35b-a3b",
+            withoutOverride.EnvironmentVariables["OPENCODE_MODEL_NAME"]);
+
+        await using var withWhitespace = await Builder.BuildAsync(
+            _tempDir, options,
+            modelOverride: "   ",
+            cancellationToken: CancellationToken.None);
+        Assert.Equal("qwen3.6-35b-a3b",
+            withWhitespace.EnvironmentVariables["OPENCODE_MODEL_NAME"]);
     }
 
     [Fact]
@@ -107,7 +140,7 @@ public class DockerOpenCodeMountBuilderTests : IDisposable
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
             new DockerOpenCodeAgentOptions(),
-            CancellationToken.None);
+            cancellationToken: CancellationToken.None);
 
         Assert.Equal("0", ctx.EnvironmentVariables["GIT_OPTIONAL_LOCKS"]);
     }
@@ -121,9 +154,12 @@ public class DockerOpenCodeMountBuilderTests : IDisposable
         await using var ctx = await Builder.BuildAsync(
             _tempDir,
             new DockerOpenCodeAgentOptions(),
-            CancellationToken.None);
+            cancellationToken: CancellationToken.None);
 
-        Assert.Equal("http://llama-server:8080",
+        // Default URL carries the /v1 suffix that the @ai-sdk/openai-compatible
+        // adapter expects. The default model is the no-think Qwen alias —
+        // production default per local-llm/Qwen-3.6.md.
+        Assert.Equal("http://llama-server:8080/v1",
             ctx.EnvironmentVariables["OPENCODE_PROVIDER_BASE_URL"]);
         Assert.Equal("local",
             ctx.EnvironmentVariables["OPENCODE_AUTH_TOKEN"]);

@@ -47,11 +47,18 @@ public sealed class DockerOpenCodeAgentExecutor(
     {
         var containerName = BuildContainerName(context.TargetCardId);
 
+        // The role's Model wins over the configured default — that's how a
+        // workflow assigns specific roles to the no-think vs. -think Qwen alias.
+        // Empty/whitespace falls back to the options default.
+        var effectiveModel = !string.IsNullOrWhiteSpace(context.Model)
+            ? context.Model
+            : _options.ModelName;
+
         logger.LogInformation(
             "Launching Docker/OpenCode agent for card {CardId} in {Workspace}, " +
             "model={Model}, image={Image}, container={Container}, providerUrl={Url}",
             context.TargetCardId, context.WorkspacePath,
-            _options.ModelName, _options.ImageName, containerName, _options.ProviderBaseUrl);
+            effectiveModel, _options.ImageName, containerName, _options.ProviderBaseUrl);
 
         DockerMountContext? mountContext = null;
         if (mountBuilder is not null)
@@ -59,7 +66,7 @@ public sealed class DockerOpenCodeAgentExecutor(
             try
             {
                 mountContext = await mountBuilder.BuildAsync(
-                    context.WorkspacePath, _options, cancellationToken);
+                    context.WorkspacePath, _options, effectiveModel, cancellationToken);
             }
             catch (Exception ex)
             {

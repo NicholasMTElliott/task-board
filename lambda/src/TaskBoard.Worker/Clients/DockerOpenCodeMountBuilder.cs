@@ -26,9 +26,17 @@ public sealed class DockerOpenCodeMountBuilder(ILogger<DockerOpenCodeMountBuilde
     /// environment variables needed to run the OpenCode CLI against the
     /// configured llama-server.
     /// </summary>
+    /// <param name="modelOverride">
+    /// Per-call model alias (typically <see cref="AgentExecutionContext.Model"/>)
+    /// that overrides <see cref="DockerOpenCodeAgentOptions.ModelName"/> when
+    /// non-empty. The sandbox image has both Qwen3.6 variants registered, so
+    /// passing either <c>qwen3.6-35b-a3b</c> or <c>qwen3.6-35b-a3b-think</c>
+    /// here selects which one OpenCode uses for this run.
+    /// </param>
     public async Task<DockerMountContext> BuildAsync(
         string worktreePath,
         DockerOpenCodeAgentOptions options,
+        string? modelOverride = null,
         CancellationToken cancellationToken = default)
     {
         var mounts = new List<DockerMount>();
@@ -38,6 +46,10 @@ public sealed class DockerOpenCodeMountBuilder(ILogger<DockerOpenCodeMountBuilde
 
         await AddWorkspaceAndGitMountsAsync(
             worktreePath, mounts, tempFiles, pathMap, logger, cancellationToken);
+
+        var effectiveModel = !string.IsNullOrWhiteSpace(modelOverride)
+            ? modelOverride
+            : options.ModelName;
 
         var envVars = new Dictionary<string, string>
         {
@@ -49,7 +61,7 @@ public sealed class DockerOpenCodeMountBuilder(ILogger<DockerOpenCodeMountBuilde
             // opencode.json.
             ["OPENCODE_PROVIDER_BASE_URL"] = options.ProviderBaseUrl,
             ["OPENCODE_AUTH_TOKEN"] = options.AuthToken,
-            ["OPENCODE_MODEL_NAME"] = options.ModelName,
+            ["OPENCODE_MODEL_NAME"] = effectiveModel,
         };
 
         return new DockerMountContext(mounts, envVars, pathMap, tempFiles, tempDirs);
