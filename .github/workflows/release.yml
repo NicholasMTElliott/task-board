@@ -18,7 +18,12 @@ jobs:
   publish:
     needs: build-and-test
     runs-on: ubuntu-latest
+    permissions:
+      # Required so action-gh-release can create / append to the release.
+      contents: write
     strategy:
+      # Each matrix job uploads its own asset directly to the release; failure
+      # of one platform shouldn't cancel the others.
       fail-fast: false
       matrix:
         include:
@@ -52,29 +57,12 @@ jobs:
           else
             cd dist/${{ matrix.rid }} && tar czf ../../aiboard-${{ matrix.rid }}.tar.gz .
           fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: aiboard-${{ matrix.rid }}
-          path: aiboard-${{ matrix.rid }}.${{ matrix.ext }}
-          # Aggressive retention — these are intermediate handoffs to the
-          # release job (which runs minutes later and uploads to the actual
-          # GitHub Release). Anything beyond a day is dead weight that ate
-          # the artifact-storage quota and silently broke v0.0.11/12/13.
-          retention-days: 1
-
-  release:
-    needs: publish
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
+      # Upload directly to the release — no intermediate artifact handoff.
+      # action-gh-release is idempotent: the first matrix job to finish creates
+      # the release; subsequent jobs append their files to the same tag. This
+      # eliminates the artifact-storage path entirely (which was eating the
+      # account's quota and silently breaking v0.0.11/12/13 — see commit history).
       - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/aiboard-*.zip
-            artifacts/aiboard-*.tar.gz
+          files: aiboard-${{ matrix.rid }}.${{ matrix.ext }}
           generate_release_notes: true
