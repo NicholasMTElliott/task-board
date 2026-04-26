@@ -4,6 +4,8 @@ The OpenCode sandbox runs agent invocations inside an isolated Docker container 
 
 It is **off by default** and entirely independent of the Docker/Claude sandbox. Follow this guide to enable it, verify it, and understand when it's safe to use.
 
+> **There are two Qwen-target executors.** This one (`docker-opencode`) uses the OpenCode CLI and prompt-engineers the JSON schema with a client-side retry loop. The other (`docker-claude-qwen`, see [ClaudeQwenSandbox.md](ClaudeQwenSandbox.md)) uses the Claude CLI and gets server-side schema enforcement via the proxy's tool-call mechanism. They exist side by side specifically so the candidate-evaluation feature can A/B them — choose based on your trust budget for prompt-engineered structure vs. wire-enforced structure, or run both and let the metrics decide.
+
 ---
 
 ## 1. Prerequisites

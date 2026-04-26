@@ -218,10 +218,16 @@ builder.Services.TryAddSingleton<IBoardShapeProbe, NullBoardShapeProbe>();
 // AGENT_EXECUTOR=docker-opencode   → OpenCode-in-Docker executor registered
 //                                    under "docker-opencode" (distinct provider key;
 //                                    no aliasing, fails if Docker unavailable)
+// AGENT_EXECUTOR=docker-claude-qwen→ Claude-CLI-in-Docker pointed at the local
+//                                    llama.cpp proxy (Qwen3.6) registered under
+//                                    "docker-claude-qwen". Distinct from docker-opencode
+//                                    so both Qwen-target executors can be A/B'd via
+//                                    candidate evaluation. Fails if Docker unavailable.
 // Any other value (or unset)       → production mode: real providers are auto-detected
 var agentExecutorMode = builder.Configuration["AgentExecutor"]?.ToLowerInvariant() ?? "stub";
 var dockerModeRequested = agentExecutorMode == "docker-claude-cli";
 var openCodeModeRequested = agentExecutorMode == "docker-opencode";
+var claudeQwenModeRequested = agentExecutorMode == "docker-claude-qwen";
 
 // Always register StubAgentExecutor (used in stub mode and tests)
 builder.Services.AddSingleton<StubAgentExecutor>();
@@ -230,7 +236,7 @@ HashSet<string> detectedProviders;
 if (agentExecutorMode == "stub")
 {
     // Stub mode: all providers map to stub, all considered available
-    detectedProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli", "codex", "stub", "docker-claude-cli", "docker-opencode" };
+    detectedProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli", "codex", "stub", "docker-claude-cli", "docker-opencode", "docker-claude-qwen" };
 }
 else
 {
@@ -305,6 +311,22 @@ else
         if (detectedProviders.Contains("docker"))
             detectedProviders.Add("docker-opencode");
     }
+
+    // Claude-CLI-on-Qwen executor (provider key: docker-claude-qwen).
+    // Same Claude CLI binary as docker-claude-cli but with the endpoint
+    // redirected to the local llama-server proxy via env vars + a synthetic
+    // ~/.claude. Lives alongside docker-opencode so both Qwen-target executors
+    // can be candidate-evaluated against each other.
+    if (detectedProviders.Contains("docker") || claudeQwenModeRequested)
+    {
+        builder.Services.Configure<DockerClaudeQwenAgentOptions>(
+            builder.Configuration.GetSection(DockerClaudeQwenAgentOptions.SectionName));
+        builder.Services.AddSingleton<DockerClaudeQwenMountBuilder>();
+        builder.Services.AddSingleton<DockerClaudeQwenAgentExecutor>();
+
+        if (detectedProviders.Contains("docker"))
+            detectedProviders.Add("docker-claude-qwen");
+    }
 }
 
 builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
@@ -337,6 +359,11 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
     if (detectedProviders.Contains("docker") || detectedProviders.Contains("docker-opencode"))
     {
         executors["docker-opencode"] = sp.GetRequiredService<DockerOpenCodeAgentExecutor>();
+    }
+
+    if (detectedProviders.Contains("docker") || detectedProviders.Contains("docker-claude-qwen"))
+    {
+        executors["docker-claude-qwen"] = sp.GetRequiredService<DockerClaudeQwenAgentExecutor>();
     }
 
     return new AgentExecutorResolver(executors);
@@ -485,12 +512,13 @@ void LogMissingConfig(string requiredKeys)
     if (rawAgentExec is not null
         && !string.Equals(rawAgentExec, "stub", StringComparison.OrdinalIgnoreCase)
         && !string.Equals(rawAgentExec, "docker-claude-cli", StringComparison.OrdinalIgnoreCase)
-        && !string.Equals(rawAgentExec, "docker-opencode", StringComparison.OrdinalIgnoreCase))
+        && !string.Equals(rawAgentExec, "docker-opencode", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(rawAgentExec, "docker-claude-qwen", StringComparison.OrdinalIgnoreCase))
     {
         // Warn if AGENT_EXECUTOR is set to a real provider name (now deprecated for provider selection)
         logger.LogWarning(
             "AGENT_EXECUTOR is set to '{Value}' but this value is no longer used for provider selection — " +
-            "real providers are now auto-detected. Only 'stub', 'docker-claude-cli', and 'docker-opencode' retain special meaning.",
+            "real providers are now auto-detected. Only 'stub', 'docker-claude-cli', 'docker-opencode', and 'docker-claude-qwen' retain special meaning.",
             rawAgentExec);
     }
 
@@ -510,6 +538,16 @@ void LogMissingConfig(string requiredKeys)
             "AGENT_EXECUTOR=docker-opencode is configured but Docker is not available. " +
             "Ensure the Docker CLI is installed and the Docker daemon is running ('docker info' must succeed), " +
             "and that the aiboard-opencode-sandbox image has been built (scripts/build-opencode-sandbox.ps1).");
+        return;
+    }
+
+    // Fail fast when docker-claude-qwen is explicitly requested but Docker is unavailable
+    if (claudeQwenModeRequested && !detectedProviders.Contains("docker-claude-qwen"))
+    {
+        logger.LogError(
+            "AGENT_EXECUTOR=docker-claude-qwen is configured but Docker is not available. " +
+            "Ensure the Docker CLI is installed and the Docker daemon is running ('docker info' must succeed), " +
+            "and that the aiboard-agent-sandbox image (Claude CLI) has been built (scripts/build-sandbox.ps1).");
         return;
     }
 
@@ -618,6 +656,19 @@ if (detectedProviders.Contains("docker-opencode"))
     logger.LogInformation(
         "OpenCode executor registered. Ensure the 'llm-net' Docker network exists " +
         "(start the local-llm compose project) before routing roles to 'docker-opencode'.");
+}
+if (detectedProviders.Contains("docker-claude-qwen"))
+{
+    var cqOpts = host.Services.GetRequiredService<IOptions<DockerClaudeQwenAgentOptions>>().Value;
+    logger.LogInformation(
+        "DockerClaudeQwenAgentOptions: ImageName={Image}, NetworkMode={Network}, ProviderBaseUrl={Url}, ModelName={Model}, AttributionHeader={Attr}, NonessentialTraffic={Ness}",
+        cqOpts.ImageName, cqOpts.NetworkMode,
+        cqOpts.ProviderBaseUrl, cqOpts.ModelName,
+        cqOpts.DisableAttributionHeader ? "off" : "on",
+        cqOpts.DisableNonessentialTraffic ? "off" : "on");
+    logger.LogInformation(
+        "Claude→Qwen executor registered. Ensure the 'llm-net' Docker network exists " +
+        "(start the local-llm compose project) before routing roles to 'docker-claude-qwen'.");
 }
 
 // ── 8. Resolve shared runtime parameters from merged configuration ───────────

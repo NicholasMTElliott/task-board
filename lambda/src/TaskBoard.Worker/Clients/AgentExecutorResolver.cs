@@ -27,5 +27,6 @@ public sealed class AgentExecutorResolver(
             ["stub"] = executor,
             ["docker-claude-cli"] = executor,
             ["docker-opencode"] = executor,
+            ["docker-claude-qwen"] = executor,
         });
 }

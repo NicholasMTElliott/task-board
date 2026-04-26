@@ -13,8 +13,17 @@
 -- v_candidate_outcomes is the per-row companion: one row per candidate
 -- execution, joining the candidate's step_result with the evaluator's
 -- decision. Useful for ad-hoc queries and head-to-head reports.
+--
+-- NOTE: v_step_duration is dropped explicitly before recreate. Postgres'
+-- CREATE OR REPLACE VIEW refuses to reorder columns or rename them, and the
+-- V16 v_step_duration column order differs from this V18 shape (V18 inserts
+-- the new candidate-group columns mid-list). Without the explicit drop the
+-- migration aborts with: "cannot change name of view column ... to ...". The
+-- two new views below are first-time creates so they don't need the same
+-- treatment, but using OR REPLACE is safe.
+DROP VIEW IF EXISTS v_step_duration;
 
-CREATE OR REPLACE VIEW v_step_duration AS
+CREATE VIEW v_step_duration AS
 SELECT
     tenant_id,
     id,

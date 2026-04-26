@@ -89,6 +89,49 @@ public static class CliFailureHintDetector
     };
 
     /// <summary>
+    /// Claude-CLI-targeting-Qwen signatures. Same backend (local llama.cpp on
+    /// the llm-net network) as OpenCode, but the failure modes surface
+    /// differently because the client is Claude CLI talking the Anthropic
+    /// Messages wire format. References to environment variables and config
+    /// paths are Anthropic-style (<c>ANTHROPIC_BASE_URL</c>,
+    /// <c>~/.claude/settings.json</c>) rather than OpenCode-style.
+    /// </summary>
+    public static readonly IReadOnlyList<(string Pattern, string Category, string Hint)>
+        ClaudeQwenSignatures = new (string, string, string)[]
+    {
+        ("network llm-net not found", "Network",
+            "Docker network 'llm-net' does not exist. Start the local-llm compose project first: `cd ../local-llm && docker compose up -d`."),
+        ("could not resolve host", "Network",
+            "Sandbox could not resolve the llama-server hostname. Verify the sandbox is attached to llm-net and that the local-llm stack is up."),
+        ("connection refused", "Network",
+            "llama-server refused the connection. Check `docker ps` for the llama-server container and that it is listening on the configured port."),
+        ("no route to host", "Network",
+            "No route to llama-server. Likely a network-mode misconfiguration (llm-net not attached) or llama-server is not running."),
+        ("model_not_found", "Model",
+            "llama-server proxy reports an unknown model. Verify ANTHROPIC_MODEL matches an alias exposed by local-llm (e.g. qwen3.6-35b-a3b or qwen3.6-35b-a3b-think)."),
+        ("model not found", "Model",
+            "llama-server proxy does not have the requested model loaded. Verify the role's Model field matches a registered alias."),
+        ("context length", "Model",
+            "Prompt exceeded llama-server's configured --ctx-size. Either trim the prompt or increase --ctx-size in local-llm."),
+        ("invalid_api_key", "Auth",
+            "Proxy rejected the auth token. llama.cpp accepts any non-empty token — check that ANTHROPIC_AUTH_TOKEN is reaching the container (look for 'local' in the logged docker-run env)."),
+        ("not authenticated", "Auth",
+            "Claude CLI reports it is not authenticated. The dummy ANTHROPIC_AUTH_TOKEN env var may not be reaching the container."),
+        ("ANTHROPIC_API_KEY", "Auth",
+            "Claude CLI is asking for ANTHROPIC_API_KEY. The Qwen-target sandbox sets ANTHROPIC_AUTH_TOKEN instead — check the env vars in the docker-run command."),
+        ("401 Unauthorized", "Auth",
+            "Proxy returned HTTP 401. llama.cpp shouldn't reject any token — look upstream of the sandbox for an interfering proxy."),
+        ("404", "Config",
+            "llama-server returned 404. Likely a path mismatch — verify ANTHROPIC_BASE_URL is set to the proxy's bare host:port (no /v1 suffix; the Anthropic Messages adapter appends /v1/messages itself)."),
+        ("schema validation", "Schema",
+            "Server rejected the structured-output schema. The proxy may be filtering the tool/response_format payload — check llama-server logs for a parse error."),
+        ("hasCompletedOnboarding", "Config",
+            "Claude CLI is hitting the onboarding flow. The mounted ~/.claude/settings.json must contain hasCompletedOnboarding=true."),
+        ("timed out", "Network",
+            "Request to llama-server timed out. Either the model is cold-loading a large context (normal on first request) or llama-server is stuck."),
+    };
+
+    /// <summary>
     /// Returns the first signature in <paramref name="signatures"/> whose pattern appears
     /// (case-insensitive substring) in <paramref name="stderr"/>, or null if none match.
     /// </summary>

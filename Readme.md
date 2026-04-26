@@ -243,7 +243,8 @@ See [docs/CardTypesAndGeneration.md](docs/CardTypesAndGeneration.md) for a walkt
 | Orchestrator | C# / .NET 10 |
 | Agent executor (host) | Claude CLI subprocess (`ClaudeAgentExecutor`, `--output-format stream-json` + `--json-schema`) |
 | Agent executor (container) | `DockerClaudeAgentExecutor` — Claude CLI inside `docker run -i --rm`; provider key `docker-claude-cli`; select via `AGENT_EXECUTOR=docker-claude-cli` |
-| Agent executor (local LLM) | `DockerOpenCodeAgentExecutor` — OpenCode CLI inside `docker run -i --rm`, targeting a local llama.cpp server on the `llm-net` bridge network (e.g. Qwen3.6 via the `local-llm` project); provider key `docker-opencode`; select via `AGENT_EXECUTOR=docker-opencode`. See [docs/OpenCodeSandbox.md](docs/OpenCodeSandbox.md) |
+| Agent executor (local LLM, OpenCode) | `DockerOpenCodeAgentExecutor` — OpenCode CLI inside `docker run -i --rm`, targeting a local llama.cpp server on the `llm-net` bridge network (e.g. Qwen3.6 via the `local-llm` project); provider key `docker-opencode`; select via `AGENT_EXECUTOR=docker-opencode`. Schema: prompt-engineered + client-side parser + retry. See [docs/OpenCodeSandbox.md](docs/OpenCodeSandbox.md) |
+| Agent executor (local LLM, Claude CLI) | `DockerClaudeQwenAgentExecutor` — Claude CLI inside `docker run -i --rm`, redirected to the same local llama.cpp server via `ANTHROPIC_BASE_URL`; provider key `docker-claude-qwen`; select via `AGENT_EXECUTOR=docker-claude-qwen`. Schema: server-side enforcement via `--json-schema` → tool-call mechanism. Sits alongside `docker-opencode` for A/B comparison through candidate evaluation. See [docs/ClaudeQwenSandbox.md](docs/ClaudeQwenSandbox.md) |
 | Multi-agent candidate evaluation | `CandidateExecutor` — opt-in per step. Runs N agents in parallel against the same task, an evaluator picks a winner, the winner's branch is promoted, and per-(role, provider) win-rate + quality-score metrics accumulate. See [docs/CandidateEvaluation.md](docs/CandidateEvaluation.md) |
 | Agent sandbox image | `docker/agent-sandbox/Dockerfile` — node:22-slim + Claude CLI + git + ripgrep; `aiboard-agent-sandbox:latest` |
 | Git isolation | Git worktrees (`GitWorkspaceManager`) |
@@ -296,6 +297,16 @@ A separate sandbox wraps the OpenCode CLI for use with a local llama.cpp server 
 ```
 
 Requires the `llm-net` Docker network (owned by the `local-llm` project) before any role routes to it. Enable at runtime with `AGENT_EXECUTOR=docker-opencode`.
+
+### Use the Claude CLI against the local Qwen server (optional, for schema-enforced local runs)
+
+The third executor, `docker-claude-qwen`, runs the regular Claude CLI in the same `aiboard-agent-sandbox` image but redirected to the local llama.cpp proxy via `ANTHROPIC_BASE_URL`. Headline benefit: server-side `--json-schema` enforcement — the proxy translates the schema to a tool-call constraint that llama.cpp enforces during generation. Useful when output reliability matters (e.g. the candidate-evaluation evaluator). See [docs/ClaudeQwenSandbox.md](docs/ClaudeQwenSandbox.md).
+
+```powershell
+$env:AGENT_EXECUTOR = "docker-claude-qwen"
+```
+
+No separate image build needed — reuses the Claude sandbox built above. Pair with `docker-opencode` in a candidate group to A/B them on real workloads.
 
 ### Run an agent on a card
 
