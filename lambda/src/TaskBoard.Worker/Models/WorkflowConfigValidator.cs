@@ -238,31 +238,22 @@ public static class WorkflowConfigValidator
 
                     if (hasCandidates)
                     {
-                        if (step.Candidates!.Count > 4)
-                            errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' declares {step.Candidates.Count} candidates; the cap is 4 to keep evaluator prompts manageable.");
+                        // No cap on Count and no rejection of duplicate providers — both were
+                        // self-imposed conservatism. Cap-of-4 was nominally to keep evaluator
+                        // prompts manageable, but eval prompt size is the user's call (they
+                        // see if it degrades). Duplicate-provider rejection broke same-provider
+                        // model A/B testing (e.g. claude-cli + opus vs claude-cli + sonnet) and
+                        // also blocked variance-measurement runs (same agent twice). The user
+                        // can ensure the right shape; the validator should not.
 
-                        // Promotion of the winner relies on git commits. Discard-mode states
-                        // would need a different mechanism (file copy from winner worktree),
-                        // which v1 does not support — fail loudly so the operator sees this
-                        // upfront rather than getting opaque runtime errors.
-                        if (string.Equals(state.GitBehavior, "discard", StringComparison.OrdinalIgnoreCase))
-                        {
-                            errors.Add(
-                                $"State '{stateId}' ({state.Name}) step '{step.Name}' has candidates but state's gitBehavior is 'discard'. " +
-                                "Candidate-group steps require 'commit_only' or 'commit_and_push' so the winner's commits can be promoted to the canonical worktree.");
-                        }
+                        // Discard-mode states are now supported via file-based winner promotion
+                        // (CandidateExecutor copies the winner's .aiboard/{tasks,updates}/
+                        // contents to the canonical worktree instead of git-resetting).
 
-                        var seenProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        foreach (var cand in step.Candidates)
+                        foreach (var cand in step.Candidates!)
                         {
                             if (string.IsNullOrWhiteSpace(cand.Provider))
-                            {
                                 errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' has a candidate with an empty provider.");
-                                continue;
-                            }
-
-                            if (!seenProviders.Add(cand.Provider))
-                                errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' has duplicate candidate provider '{cand.Provider}'. Each provider may appear at most once per group.");
                         }
                     }
 

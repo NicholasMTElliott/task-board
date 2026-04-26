@@ -193,6 +193,87 @@ public class CandidateExecutorFlowTests : IDisposable
             $"Expected no surviving candidate branches; got: '{branches}'");
     }
 
+    // ── Discard-mode: file-based winner promotion ────────────────────────────
+
+    [Fact]
+    public async Task DiscardMode_WinnerArtifactsCopied_NoGitCommitsOnCanonical()
+    {
+        // Two design candidates each write a different design into
+        // .aiboard/tasks/1.md plus a child-card request to .aiboard/updates/.
+        // Evaluator picks candidate 1. Assertions:
+        //   1. Canonical worktree's .aiboard/tasks/1.md matches candidate 1's content
+        //   2. Canonical worktree's .aiboard/updates/ has candidate 1's update files
+        //   3. No new commits on the canonical branch (discard preserves git state)
+        //   4. All candidate branches torn down
+
+        var headBefore = RunGitSyncWithOutput(_canonicalWorktree, "rev-parse", "HEAD").Trim();
+
+        var cand0Writes = new Dictionary<string, string>
+        {
+            ["tasks/1.md"] = "# Card 1\n\n## Technical Design\n\nApproach A: monolith.\n",
+            ["updates/new-task-foo.md"] = "---\ntitle: Task Foo\n---\nFrom A.\n",
+        };
+        var cand1Writes = new Dictionary<string, string>
+        {
+            ["tasks/1.md"] = "# Card 1\n\n## Technical Design\n\nApproach B: microservices.\n",
+            ["updates/new-task-bar.md"] = "---\ntitle: Task Bar\n---\nFrom B.\n",
+            ["updates/new-task-baz.md"] = "---\ntitle: Task Baz\n---\nAlso from B.\n",
+        };
+
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = new ScriptedExecutor(AgentOutcome.COMPLETE, "Approach A — monolith.", cand0Writes),
+            ["docker-opencode"]   = new ScriptedExecutor(AgentOutcome.COMPLETE, "Approach B — microservices.", cand1Writes),
+            ["claude-cli"]        = new ScriptedExecutor(AgentOutcome.COMPLETE,
+                """
+                Microservices wins on long-term flexibility.
+                ```json
+                {"outcome":"COMPLETE","winner_index":1,"scores":[
+                  {"index":0,"score":6,"reasoning":"works but couples concerns"},
+                  {"index":1,"score":8.5,"reasoning":"better separation"}
+                ]}
+                ```
+                """),
+        };
+        var resolver = new MapResolver(byProvider);
+
+        var executor = new CandidateExecutor(_git, resolver, _runStore, _boardClient,
+            NullLogger<CandidateExecutor>.Instance);
+
+        var request = NewRequest(
+            stepName: "create_design",
+            providers: ["docker-claude-cli", "docker-opencode"],
+            gitBehavior: "discard");
+
+        var result = await executor.ExecuteCandidateGroupAsync(request, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+
+        // (1) Canonical task body is candidate 1's
+        var canonicalTask = File.ReadAllText(Path.Combine(_canonicalWorktree, ".aiboard", "tasks", "1.md"));
+        Assert.Contains("Approach B: microservices", canonicalTask);
+        Assert.DoesNotContain("Approach A: monolith", canonicalTask);
+
+        // (2) Canonical updates directory has candidate 1's two files, NOT candidate 0's
+        var updatesDir = Path.Combine(_canonicalWorktree, ".aiboard", "updates");
+        var updateFiles = Directory.EnumerateFiles(updatesDir, "*.md")
+            .Select(Path.GetFileName).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+        Assert.Equal(new[] { "new-task-bar.md", "new-task-baz.md" }, updateFiles);
+
+        // (3) No new commits on canonical (HEAD unchanged)
+        var headAfter = RunGitSyncWithOutput(_canonicalWorktree, "rev-parse", "HEAD").Trim();
+        Assert.Equal(headBefore, headAfter);
+
+        // (4) All candidate branches gone (discard cleanup deletes winner branch too)
+        var branches = RunGitSyncWithOutput(_repoRoot, "branch", "--list", "aiboard-cand/*");
+        Assert.True(string.IsNullOrWhiteSpace(branches),
+            $"Expected no surviving candidate branches; got: '{branches}'");
+
+        // Verdict persisted with selected=true on index 1
+        var winnerVerdict = _runStore.RecordedVerdicts.Single(v => v.CandidateIndex == 1);
+        Assert.True(winnerVerdict.Selected);
+    }
+
     // ── Builders ─────────────────────────────────────────────────────────────
 
     private CandidateExecutor BuildExecutor(
@@ -218,7 +299,10 @@ public class CandidateExecutorFlowTests : IDisposable
             NullLogger<CandidateExecutor>.Instance);
     }
 
-    private CandidateGroupRequest NewRequest(string stepName, string[] providers)
+    private CandidateGroupRequest NewRequest(
+        string stepName,
+        string[] providers,
+        string gitBehavior = "commit_and_push")
     {
         var systemPromptFile = Path.Combine(_repoRoot, "system.md");
         File.WriteAllText(systemPromptFile, "# evaluator system prompt");
@@ -252,7 +336,7 @@ public class CandidateExecutorFlowTests : IDisposable
             SystemPromptFilePath: systemPromptFile,
             WorktreePath: _canonicalWorktree,
             RepoPath: _repoRoot,
-            GitBehavior: "commit_and_push",
+            GitBehavior: gitBehavior,
             CommentsFilePath: null,
             PromptBaseDirectory: null);
     }
@@ -266,8 +350,14 @@ public class CandidateExecutorFlowTests : IDisposable
     // ── Stubs ────────────────────────────────────────────────────────────────
 
     /// <summary>Executor that returns a fixed outcome + detail. Writes a per-call
-    /// marker file into the worktree so the test can confirm it ran in the right place.</summary>
-    private sealed class ScriptedExecutor(AgentOutcome outcome, string detail) : IAgentExecutor
+    /// marker file into the worktree so the test can confirm it ran in the right place.
+    /// Optional <paramref name="aiboardWrites"/> lets a discard-mode test populate
+    /// <c>.aiboard/tasks/</c> + <c>.aiboard/updates/</c> so file-based winner
+    /// promotion has something to copy.</summary>
+    private sealed class ScriptedExecutor(
+        AgentOutcome outcome,
+        string detail,
+        IReadOnlyDictionary<string, string>? aiboardWrites = null) : IAgentExecutor
     {
         public Task<AgentResult> ExecuteAsync(
             AgentExecutionContext context, CancellationToken cancellationToken)
@@ -275,6 +365,19 @@ public class CandidateExecutorFlowTests : IDisposable
             // Touch a file so commit_and_push has something to commit.
             var marker = Path.Combine(context.WorkspacePath, "candidate-output.txt");
             File.WriteAllText(marker, $"{detail}\n");
+
+            // Discard-mode candidates write their "design" into .aiboard/{tasks,updates}.
+            // The relative paths in aiboardWrites are interpreted under .aiboard/.
+            if (aiboardWrites is not null)
+            {
+                foreach (var (relative, content) in aiboardWrites)
+                {
+                    var target = Path.Combine(context.WorkspacePath, ".aiboard", relative);
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                    File.WriteAllText(target, content);
+                }
+            }
+
             return Task.FromResult(new AgentResult(outcome, detail));
         }
     }

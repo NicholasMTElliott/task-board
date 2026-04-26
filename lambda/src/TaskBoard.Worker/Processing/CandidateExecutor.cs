@@ -107,33 +107,57 @@ public sealed class CandidateExecutor(
             if (evaluatorResult.Outcome == AgentOutcome.COMPLETE && verdict.WinnerIndex is int winnerIdx)
             {
                 var winner = executions[winnerIdx];
+                var promotionMode = IsDiscardMode(request.GitBehavior) ? "files" : "git";
                 logger.LogInformation(
-                    "Promoting candidate {Index} (provider={Provider}) as winner for step '{StepName}'",
-                    winnerIdx, winner.Provider, step.Name);
+                    "Promoting candidate {Index} (provider={Provider}) as winner for step '{StepName}' via {Mode} promotion",
+                    winnerIdx, winner.Provider, step.Name, promotionMode);
 
                 try
                 {
-                    await gitWorkspaceManager.ResetWorktreeToBranchAsync(
-                        request.WorktreePath, winner.BranchName, cancellationToken);
+                    if (IsDiscardMode(request.GitBehavior))
+                    {
+                        // Discard mode: candidates didn't commit (no point — the state
+                        // doesn't keep git changes anyway). Adopt the winner's
+                        // .aiboard/{tasks,updates}/ contents into the canonical worktree
+                        // so AgentRunner's post-step processors (TaskFileManager,
+                        // UpdateFileProcessor) read the winner's outputs as normal.
+                        PromoteDiscardWinnerArtifacts(winner.WorktreePath, request.WorktreePath);
+                    }
+                    else
+                    {
+                        await gitWorkspaceManager.ResetWorktreeToBranchAsync(
+                            request.WorktreePath, winner.BranchName, cancellationToken);
+                    }
                 }
                 catch (Exception ex)
                 {
-                    // Promotion failure is fatal — without the winner's commits the
+                    // Promotion failure is fatal — without the winner's outputs the
                     // canonical worktree would proceed with stale state. Surface as ERROR.
                     logger.LogError(ex,
-                        "Failed to promote candidate {Index} (branch={Branch}) for step '{StepName}'",
-                        winnerIdx, winner.BranchName, step.Name);
+                        "Failed to promote candidate {Index} ({Mode} promotion, branch={Branch}) for step '{StepName}'",
+                        winnerIdx, promotionMode, winner.BranchName, step.Name);
                     await CleanupCandidateWorktreesAsync(
                         request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
                     return new AgentResult(
                         AgentOutcome.ERROR,
-                        $"Evaluator selected candidate {winnerIdx} but promotion failed: {ex.Message}");
+                        $"Evaluator selected candidate {winnerIdx} but {promotionMode} promotion failed: {ex.Message}");
                 }
 
-                // Cleanup losers; keep the winner's branch (it now backs the
-                // canonical worktree's HEAD).
-                await CleanupLoserWorktreesAsync(
-                    request.RepoPath, executions, winnerIdx, cancellationToken);
+                if (IsDiscardMode(request.GitBehavior))
+                {
+                    // Discard mode: no commits to preserve, so all candidate branches
+                    // (winner included) can be torn down. The canonical worktree is
+                    // unchanged at the git layer — only its .aiboard/ contents updated.
+                    await CleanupCandidateWorktreesAsync(
+                        request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
+                }
+                else
+                {
+                    // Commit modes: keep the winner's branch (it now backs the
+                    // canonical worktree's HEAD).
+                    await CleanupLoserWorktreesAsync(
+                        request.RepoPath, executions, winnerIdx, cancellationToken);
+                }
             }
             else
             {
@@ -361,6 +385,55 @@ public sealed class CandidateExecutor(
         }
     }
 
+    /// <summary>True for the <c>discard</c> git behaviour (case-insensitive).</summary>
+    internal static bool IsDiscardMode(string? gitBehavior) =>
+        string.Equals(gitBehavior, "discard", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// File-based winner promotion for <c>discard</c>-mode states: copies the
+    /// winner's <c>.aiboard/tasks/</c> and <c>.aiboard/updates/</c> contents
+    /// onto the canonical worktree so AgentRunner's post-step processors read
+    /// the winner's outputs the same way they would for a single-agent step.
+    /// </summary>
+    /// <remarks>
+    /// Why these two subdirs only:
+    /// <list type="bullet">
+    ///   <item><c>tasks/</c> holds the card body the agent may have edited
+    ///         (e.g. design steps write the design into the task body via
+    ///         markdown sections).</item>
+    ///   <item><c>updates/</c> holds <c>new-*.md</c> child-card requests the
+    ///         agent wrote (consumed by <c>UpdateFileProcessor</c>).</item>
+    /// </list>
+    /// <c>comments/</c> and <c>images/</c> are inputs (refreshed from the board
+    /// before each run) — overwriting them would just clobber the canonical
+    /// copies with stale candidate copies. <c>commit.md</c> is irrelevant in
+    /// discard mode (no commit happens).
+    /// </remarks>
+    internal static void PromoteDiscardWinnerArtifacts(
+        string winnerWorktree, string canonicalWorktree)
+    {
+        foreach (var subdir in new[] { "tasks", "updates" })
+        {
+            var src = Path.Combine(winnerWorktree, ".aiboard", subdir);
+            if (!Directory.Exists(src)) continue;
+
+            var dst = Path.Combine(canonicalWorktree, ".aiboard", subdir);
+            // Mirror semantics: clear the canonical copy first so a winner that
+            // *removed* a file (e.g. dropped a child card) is reflected. Without
+            // this, a stale file from a previous run could survive a winner that
+            // didn't write it.
+            if (Directory.Exists(dst))
+            {
+                foreach (var existing in Directory.EnumerateFiles(dst))
+                {
+                    try { File.Delete(existing); }
+                    catch { /* best-effort */ }
+                }
+            }
+            CopyDirectoryRecursive(src, dst);
+        }
+    }
+
     private static void CopyDirectoryRecursive(string source, string dest)
     {
         Directory.CreateDirectory(dest);
@@ -371,6 +444,65 @@ public sealed class CandidateExecutor(
         }
         foreach (var dir in Directory.EnumerateDirectories(source))
             CopyDirectoryRecursive(dir, Path.Combine(dest, Path.GetFileName(dir)));
+    }
+
+    /// <summary>
+    /// Appends a discard-mode candidate's actual outputs (task body + any
+    /// updates files) to the evaluator prompt. Used in place of the git-diff
+    /// block when the state is discard-mode and there are no commits to diff.
+    /// </summary>
+    private static void AppendDiscardCandidateOutputs(
+        StringBuilder sb, string candidateWorktree, string cardId)
+    {
+        const int TaskBodyCap = 8_000;       // headroom for design docs without blowing the prompt
+        const int UpdateFileCap = 2_000;     // each new-*.md is small, but cap to be safe
+        const int MaxUpdateFiles = 20;
+
+        var taskFile = Path.Combine(candidateWorktree, ".aiboard", "tasks", $"{cardId}.md");
+        if (File.Exists(taskFile))
+        {
+            sb.AppendLine("**Card body (`.aiboard/tasks/{cardId}.md`):**");
+            sb.AppendLine();
+            sb.AppendLine("```markdown");
+            try { sb.AppendLine(Truncate(File.ReadAllText(taskFile), TaskBodyCap)); }
+            catch (Exception ex) { sb.AppendLine($"(unreadable: {ex.Message})"); }
+            sb.AppendLine("```");
+            sb.AppendLine();
+        }
+        else
+        {
+            sb.AppendLine("_(candidate did not write a card body)_");
+            sb.AppendLine();
+        }
+
+        var updatesDir = Path.Combine(candidateWorktree, ".aiboard", "updates");
+        if (Directory.Exists(updatesDir))
+        {
+            var files = Directory.EnumerateFiles(updatesDir, "*.md")
+                .OrderBy(f => f, StringComparer.Ordinal)
+                .Take(MaxUpdateFiles)
+                .ToList();
+
+            if (files.Count > 0)
+            {
+                sb.AppendLine($"**Updates files ({files.Count}):**");
+                sb.AppendLine();
+                foreach (var f in files)
+                {
+                    sb.AppendLine($"- `{Path.GetFileName(f)}`:");
+                    sb.AppendLine("  ```markdown");
+                    try
+                    {
+                        var content = File.ReadAllText(f);
+                        foreach (var line in Truncate(content, UpdateFileCap).Split('\n'))
+                            sb.AppendLine("  " + line.TrimEnd('\r'));
+                    }
+                    catch (Exception ex) { sb.AppendLine($"  (unreadable: {ex.Message})"); }
+                    sb.AppendLine("  ```");
+                }
+                sb.AppendLine();
+            }
+        }
     }
 
     private static string BuildAllFailedDetail(IReadOnlyList<CandidateExecution> executions)
@@ -514,24 +646,36 @@ public sealed class CandidateExecutor(
                 sb.AppendLine();
             }
 
-            // Diff against the canonical branch — the actual code change.
-            string diff;
-            try
+            // For commit-mode states the candidate's actual output is its git diff
+            // against the canonical branch. For discard-mode states (design,
+            // tasking, etc.) nothing is committed — the output is whatever the
+            // agent wrote into .aiboard/tasks/{cardId}.md (the card body) and
+            // .aiboard/updates/*.md (child-card requests). Show whichever is
+            // appropriate so the evaluator has real material to compare on.
+            if (IsDiscardMode(request.GitBehavior))
             {
-                diff = await gitWorkspaceManager.GetDiffSummaryAsync(
-                    e.WorktreePath, maxChars: 10_000, cancellationToken);
+                AppendDiscardCandidateOutputs(sb, e.WorktreePath, request.CardId);
             }
-            catch (Exception ex)
+            else
             {
-                diff = $"(diff unavailable: {ex.Message})";
-            }
+                string diff;
+                try
+                {
+                    diff = await gitWorkspaceManager.GetDiffSummaryAsync(
+                        e.WorktreePath, maxChars: 10_000, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    diff = $"(diff unavailable: {ex.Message})";
+                }
 
-            sb.AppendLine("**Diff:**");
-            sb.AppendLine();
-            sb.AppendLine("```diff");
-            sb.AppendLine(diff);
-            sb.AppendLine("```");
-            sb.AppendLine();
+                sb.AppendLine("**Diff:**");
+                sb.AppendLine();
+                sb.AppendLine("```diff");
+                sb.AppendLine(diff);
+                sb.AppendLine("```");
+                sb.AppendLine();
+            }
         }
 
         sb.AppendLine("---");

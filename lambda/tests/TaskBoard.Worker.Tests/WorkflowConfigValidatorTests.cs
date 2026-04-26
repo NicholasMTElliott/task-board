@@ -1949,63 +1949,70 @@ public class WorkflowConfigValidatorAllowedChildrenTests
     }
 
     [Fact]
-    public void Candidates_DuplicateProviders_ReportsError()
+    public void Candidates_DuplicateProviders_AllowedForSameProviderModelABTesting()
     {
+        // Same-provider, different-model A/B testing is a legitimate use case
+        // (e.g. Opus vs Sonnet on Claude). Variance-measurement runs (same exact
+        // agent twice) are also legitimate. The validator no longer rejects
+        // duplicate providers — uniqueness is the user's call.
         var step = new WorkflowStep(
             Name: "implement",
             Role: "implementer",
             TaskPromptFile: "prompts/states/impl.md",
             Candidates:
             [
-                new CandidateOverride("docker-claude-cli"),
-                new CandidateOverride("docker-claude-cli"),
+                new CandidateOverride("docker-claude-cli", Model: "claude-opus-4-6"),
+                new CandidateOverride("docker-claude-cli", Model: "claude-sonnet-4-6"),
             ],
             Evaluator: new EvaluatorConfig("evaluator", TaskPrompt: "evaluate"));
 
         var errors = WorkflowConfigValidator.Validate(MakeCandidateConfig(step));
 
-        Assert.Contains(errors, e =>
-            e.Contains("duplicate candidate provider", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(errors, e =>
+            e.Contains("duplicate", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public void Candidates_TooMany_ReportsError()
+    public void Candidates_ManyAllowed_NoArtificialCap()
     {
+        // The previous cap-of-4 was self-imposed conservatism. Eval prompt size
+        // and wall time are user-managed concerns, not validator concerns.
         var step = new WorkflowStep(
             Name: "implement",
             Role: "implementer",
             TaskPromptFile: "prompts/states/impl.md",
             Candidates:
             [
-                new CandidateOverride("p1"),
-                new CandidateOverride("p2"),
-                new CandidateOverride("p3"),
-                new CandidateOverride("p4"),
-                new CandidateOverride("p5"),
+                new CandidateOverride("p1"), new CandidateOverride("p2"),
+                new CandidateOverride("p3"), new CandidateOverride("p4"),
+                new CandidateOverride("p5"), new CandidateOverride("p6"),
+                new CandidateOverride("p7"), new CandidateOverride("p8"),
             ],
             Evaluator: new EvaluatorConfig("evaluator", TaskPrompt: "evaluate"));
 
         var errors = WorkflowConfigValidator.Validate(MakeCandidateConfig(step));
 
-        Assert.Contains(errors, e =>
-            e.Contains("cap is 4", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(errors, e =>
+            e.Contains("cap", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public void Candidates_OnDiscardState_ReportsError()
+    public void Candidates_OnDiscardState_AllowedViaFileBasedPromotion()
     {
+        // Discard-mode states (design, tasking) are now supported — CandidateExecutor
+        // promotes the winner by copying .aiboard/{tasks,updates}/ contents to the
+        // canonical worktree instead of git-resetting.
         var step = new WorkflowStep(
-            Name: "implement",
-            Role: "implementer",
-            TaskPromptFile: "prompts/states/impl.md",
+            Name: "create_design",
+            Role: "senior_engineer",
+            TaskPromptFile: "prompts/states/design.md",
             Candidates: [new CandidateOverride("docker-claude-cli"), new CandidateOverride("docker-opencode")],
             Evaluator: new EvaluatorConfig("evaluator", TaskPrompt: "evaluate"));
 
         var errors = WorkflowConfigValidator.Validate(MakeCandidateConfig(step, gitBehavior: "discard"));
 
-        Assert.Contains(errors, e =>
-            e.Contains("gitBehavior is 'discard'", StringComparison.OrdinalIgnoreCase)
-            && e.Contains("commit_only", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(errors, e =>
+            e.Contains("gitBehavior is 'discard'", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

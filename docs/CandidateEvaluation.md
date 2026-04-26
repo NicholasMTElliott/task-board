@@ -80,11 +80,15 @@ Add `candidates` and `evaluator` to any agent_run step. Example for the implemen
 |---|---|
 | Candidates require evaluator | `candidates` is non-empty but `evaluator` is null. |
 | Evaluator requires candidates | `evaluator` is set but `candidates` is empty. |
-| Cap of 4 candidates per step | More than 4 entries in `candidates`. |
-| Unique providers per group | The same provider key appears twice. |
-| Commit-based git only | The state's `gitBehavior` is `discard` (winner promotion needs git commits). |
+| Provider non-empty | A candidate has an empty/whitespace `provider`. |
 | Evaluator role exists | `evaluator.role` is not in `roles`. |
 | Evaluator has a prompt | Both `taskPrompt` and `taskPromptFile` are unset. |
+
+**Things the validator no longer rejects** (previously did, removed because they were over-conservative):
+
+- Candidate count is unconstrained. Eval-prompt size and wall-time are user-managed concerns.
+- Duplicate providers are allowed — the common reason is same-provider model A/B testing (`docker-claude-cli + opus` vs `docker-claude-cli + sonnet`). Variance-measurement runs (the same agent twice) are also legitimate.
+- `gitBehavior: discard` works (design / tasking states). Winner promotion uses file copy of `.aiboard/{tasks,updates}/` from the winner worktree to the canonical worktree instead of `git reset --hard` (see "Winner promotion modes" below).
 
 ---
 
@@ -141,12 +145,21 @@ The **Grafana** dashboard (auto-provisioned in the local-dev stack) gets two new
 
 ---
 
+## Winner promotion modes
+
+The promotion mechanism switches based on the state's `gitBehavior`:
+
+| `gitBehavior` | Promotion | Comparison material in evaluator prompt |
+|---|---|---|
+| `commit_only` / `commit_and_push` | `git reset --hard {winner-branch}` on the canonical worktree. Winner branch survives; loser branches deleted. | Per-candidate `git diff` against the canonical branch. |
+| `discard` | Copy winner's `.aiboard/tasks/` and `.aiboard/updates/` contents into the canonical worktree (clearing canonical's copies first so file-removal is reflected). All candidate branches torn down. Canonical's git state untouched. | Per-candidate `.aiboard/tasks/{cardId}.md` (the card body) + each `.aiboard/updates/*.md` content (since `git diff` is empty for discard candidates — `.aiboard/` is gitignored). |
+
+After promotion, AgentRunner's existing post-step processors run unchanged: `TaskFileManager` reads the promoted task file and updates the card body, `UpdateFileProcessor` reads the promoted updates files and creates child cards.
+
 ## Limitations (v1)
 
-- **Commit-based git only.** `gitBehavior: discard` states (design + test in the default workflow) cannot use candidates yet — the winner-promotion path relies on `git reset --hard {winner-branch}`. Expanding to discard would require copying winner artifacts (task file, updates dir) directly between worktrees; deferred.
 - **Sessions disabled per candidate.** Each candidate runs as its own short-lived process; the optional Docker container session is bypassed because each candidate has a different worktree mount. This is a per-candidate cold start, not a per-run one.
-- **`.aiboard/updates/` from the winner is not propagated** when the winner generated child tickets via the `updates/` mechanism in a candidate worktree. Implementation steps usually don't write to `updates/`, so this rarely bites; if you do hit it, generate children in a separate non-candidate step.
-- **Cap of 4 candidates per group.** Prevents evaluator prompts from exploding past sensible context limits. Easy to raise later if needed.
+- **Gate checks can't have candidates yet.** `gateCheck` is a state-level field, not a `steps[]` entry. To compare gate checkers (e.g. Qwen vs Haiku for the `gate_checker` role), run separate cards with each provider routed and compare in the metrics. A future change could either (a) extend `GateCheckConfig` to support `candidates` + `evaluator` directly, or (b) inline the gate as a regular step.
 - **Cost tracking deferred.** Use `session_exec_ms` × hourly rate per provider as a proxy for now; explicit USD totals would require pulling token counts out of each CLI's output.
 
 ---
@@ -177,6 +190,6 @@ V18 adds two new metrics views:
 
 - **Roll out gradually.** Start with a single low-stakes step (e.g. `gate_check`) and confirm the evaluator's verdicts feel right before extending to higher-stakes roles.
 - **Watch the cost meter.** Three candidates × one Opus evaluator per step is real money. The metrics console output and the Grafana dashboard both show `AvgDur` so you can ballpark the cost overhead.
-- **Don't pit a model against itself.** The validator forbids duplicate provider keys per group; if you want N samples from one provider, that's a different feature.
+- **Same-provider model A/B is fine.** Two `docker-claude-cli` candidates with different `model` (e.g. Opus vs Sonnet) work and produce useful comparison data. Identical (provider, model) twice also works as a variance-measurement run.
 - **Use a strong evaluator.** A weak evaluator picks weak winners. Default config routes the `evaluator` role to Opus; if you swap it, expect noisier verdicts.
 - **Failed candidates can't win.** If every candidate's outcome is non-`COMPLETE`, the runtime short-circuits to ERROR without running the evaluator. Don't spend the evaluator tokens trying to pick a least-bad failure.

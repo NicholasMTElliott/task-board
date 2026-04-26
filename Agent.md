@@ -569,16 +569,22 @@ Opt-in per step. Lets you run N agents in parallel against the same task, have a
 
 **Constraints (validator-enforced):**
 - `candidates` requires `evaluator` and vice versa.
-- Max 4 candidates per group.
-- No duplicate provider per group.
-- State's `gitBehavior` must be `commit_only` or `commit_and_push` (winner promotion needs commits).
+- Each candidate must specify a `provider`.
 - Evaluator's role must exist; evaluator must have `taskPrompt` or `taskPromptFile`.
+
+**No artificial caps**: candidate count, duplicate-provider, and `gitBehavior=discard` were all rejected by the validator in earlier versions. They aren't anymore — eval-prompt size and wall-time are user-managed concerns; same-provider model A/B (Opus vs Sonnet on Claude) is a legitimate use case; design / tasking states (`gitBehavior: discard`) are now supported via file-based winner promotion (see below).
 
 **What happens at runtime:**
 1. N candidate worktrees spawn off canonical HEAD: `aiboard-cand/{cardId}-{groupShort}-{index}-{provider}`.
 2. Each provider runs against its worktree. Per-candidate `step_result` rows persist with `candidate_group_id`, `candidate_index`, `provider`.
-3. Evaluator role runs against the canonical worktree with all N candidate diffs in its prompt; returns `{outcome: COMPLETE, winner_index: N, scores: [{index, score, reasoning}, ...]}`. Saved as a `step_result` with name suffix `:evaluator` (no `candidate_group_id` so metrics views don't double-count).
-4. Winner's branch is promoted via `git reset --hard`; loser worktrees + branches are cleaned up. Per-candidate rows are updated with `selected`, `quality_score`, `evaluator_reasoning`.
+3. Evaluator role runs against the canonical worktree with comparison material per candidate. **The material differs by `gitBehavior`:**
+   - **commit modes**: each candidate's `git diff` against the canonical branch (the actual code change).
+   - **discard mode**: each candidate's `.aiboard/tasks/{cardId}.md` contents (the design / card body) plus any `.aiboard/updates/*.md` files (child-card requests). Diffs are useless for discard candidates because nothing is committed and `.aiboard/` is gitignored.
+   Returns `{outcome: COMPLETE, winner_index: N, scores: [{index, score, reasoning}, ...]}`. Saved as a `step_result` with name suffix `:evaluator` (no `candidate_group_id` so metrics views don't double-count).
+4. **Winner promotion** depends on `gitBehavior`:
+   - **commit modes** (`commit_only` / `commit_and_push`): `git reset --hard` the canonical worktree to the winner's branch HEAD. Winner's branch survives; loser worktrees + branches are cleaned up.
+   - **discard mode**: copy the winner's `.aiboard/tasks/` and `.aiboard/updates/` contents into the canonical worktree (clearing the canonical files first so a winner that *removed* a file is reflected). All candidate branches torn down; canonical's git state is unchanged. AgentRunner's normal post-step processors (TaskFileManager updates the card body, UpdateFileProcessor creates child cards) then read the winner's outputs from canonical as if a single agent had run.
+   Per-candidate rows are updated with `selected`, `quality_score`, `evaluator_reasoning`.
 5. **All-failed merge logic**: if every candidate returns non-COMPLETE, the merged outcome prefers `NEEDS_INFO` over `ERROR` (recoverable wins over terminal). Card routes to Questions instead of Error.
 
 **Score sanitisation**: scores outside `[0, 10]` are dropped to null (kept `reasoning`); duplicate `index` entries are deduped last-write-wins. The V19 partial UNIQUE index on `(tenant_id, candidate_group_id, candidate_index)` ensures a runtime bug that double-saves a candidate row fails loudly at the DB.
@@ -593,6 +599,11 @@ implementer     | docker-opencode    | 30         | 3    | 10.0             | 6.
 ```
 
 See `docs/CandidateEvaluation.md` for the full mechanics.
+
+**Not yet supported (deliberate gaps):**
+
+- **Gate-check candidates.** `gateCheck` is a state-level field, not an entry in `steps[]`, so it can't carry `candidates[]` / `evaluator`. To compare gate checkers (e.g. Qwen vs Haiku for `gate_checker` role), run separate cards with each provider routed to the gate role and compare metrics manually, OR temporarily inline the gate as a regular `steps[]` entry that supports candidates. This is a real limitation — file an issue if blocking.
+- **Cross-step session reuse for candidates.** Each candidate spawns its own short-lived process; no `IAgentExecutorSession` reuse across candidate runs (each has a different worktree mount, so sessions wouldn't help anyway).
 
 ---
 
