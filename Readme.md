@@ -252,6 +252,12 @@ See [docs/CardTypesAndGeneration.md](docs/CardTypesAndGeneration.md) for a walkt
 
 ---
 
+## For LLM coding agents
+
+If you're an AI coding agent setting this system up for the first time, read **[Agent.md](Agent.md)** before anything else. It's a single-file guide written specifically for LLM consumption that covers the architecture, the JSON schemas for `appsettings.json` and `workflow.*.json`, every available agent executor and model with pros/cons + when-to-use guidance, the role catalog, multi-agent candidate evaluation, and a step-by-step setup flow for a new project. The file ships in the release distribution alongside `aiboard.exe`.
+
+---
+
 ## Quick Start
 
 ### Prerequisites
