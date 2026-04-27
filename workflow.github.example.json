@@ -20,7 +20,7 @@
       "steps": [
         {
           "name": "review_related_tickets",
-          "role": "senior_engineer",
+          "role": "board_analyst",
           "taskPromptFile": "prompts/states/steps/review_related_tickets.md"
         },
         {
@@ -520,6 +520,11 @@
     "estimator": {
       "model": "claude-haiku-4-5-20251001",
       "systemPromptFile": "prompts/estimator.md",
+      "sections": []
+    },
+    "board_analyst": {
+      "model": "claude-haiku-4-5-20251001",
+      "systemPromptFile": "prompts/board_analyst.md",
       "sections": []
     },
     "specialist_reviewer": {

@@ -570,10 +570,13 @@ If you copy `workflow.github.example.json` and adjust, you start with these role
 | `qa` | `claude-opus-4-6` | `claude-cli` | Test plan + validation | `Test Plan`, `Test Results` |
 | `gate_checker` | `claude-haiku-4-5-20251001` | `claude-cli` | Lightweight pass/fail validation after each agent_run state | (none) |
 | `estimator` | `claude-haiku-4-5-20251001` | `claude-cli` | Calibration-based ticket sizing | (none) |
+| `board_analyst` | `claude-haiku-4-5-20251001` | `claude-cli` | **Narrow** cross-reference analysis: scan other tickets on the board, identify dependencies/overlap/conflicts. Strict scope — does NOT read source, run tests, or build. Used for the `review_related_tickets` step that precedes `create_design`. | (none — writes a `## Related Ticket Analysis` section into the task file) |
 | `specialist_reviewer` | `claude-sonnet-4-6` | `claude-cli` | On-demand specialist reviews requested by gate checks | (none) |
 | `senior_specialist_reviewer` | `claude-opus-4-6` | `claude-cli` | High-stakes specialist reviews (legal, compliance, privacy) | (none) |
 | `merge_resolver` | `claude-sonnet-4-6` | `claude-cli` | Merge conflict resolution | (none) |
 | `evaluator` | `claude-opus-4-6` | `claude-cli` | Picks winner in a multi-agent candidate group | (none) |
+
+> **`board_analyst` vs `senior_engineer` for `review_related_tickets`**: prior to v0.0.19 this step used `senior_engineer`, whose "design + testing" system-prompt context primed agents (especially Codex with `--full-auto`) to interrogate the codebase, run tests, and exercise the application during what should be a board-only scan. Real KvA runs took 8–12 minutes and one timed out. The dedicated `board_analyst` role pairs a haiku model with a system prompt that explicitly forbids code reading and subprocess execution; the same step now runs in well under a minute. **If you're using the candidate-evaluation feature for this step, also pin `"providerParams": { "sandbox": "read-only" }` on Codex candidates** — the role-level system prompt is advisory; the sandbox flag is enforced by the CLI.
 
 **Adapt for cost / local routing**: swap `provider` values per the §7 table. Common patterns:
 
