@@ -902,6 +902,64 @@ public class AgentRunnerTests : IDisposable
             });
     }
 
+    [Fact]
+    public async Task ExecuteAsync_MultiStep_DistinctRoles_StepCommentAttributesActualRole()
+    {
+        // Regression guard: prior to the per-step prefix fix, every step comment used the
+        // first step's role in its header (`**{firstRole} in {column}:**`). This test pins
+        // that each step's comment body now reflects the role that actually ran for that step.
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["list-multi"] = new("Multi-Step Design", null, "agent_run",
+                    null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-review"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
+                    },
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("review_related", "board_analyst", TaskPrompt: "Scan board"),
+                        new WorkflowStep("create_design", "senior_engineer", TaskPrompt: "Write design"),
+                    ]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["board_analyst"] = new("haiku", "You are a Board Analyst.", new List<string>()),
+                ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
+                    new List<string> { "Technical Design" }),
+            }).Normalised();
+
+        var runner = CreateRunnerWithConfig(config);
+        SetupBoardCards("list-multi");
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+
+        var commentCalls = _trelloClient.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == "UpsertAgentCommentAsync")
+            .Select(c => new
+            {
+                Body = (string)c.GetArguments()[1]!,
+                Marker = (string)c.GetArguments()[2]!,
+            })
+            .ToList();
+
+        var stepOneComment = commentCalls.Single(c => c.Marker.Contains("agent-step:review_related"));
+        var stepTwoComment = commentCalls.Single(c => c.Marker.Contains("agent-step:create_design"));
+
+        Assert.Contains("**board_analyst in", stepOneComment.Body);
+        Assert.DoesNotContain("**senior_engineer in", stepOneComment.Body);
+
+        Assert.Contains("**senior_engineer in", stepTwoComment.Body);
+        Assert.DoesNotContain("**board_analyst in", stepTwoComment.Body);
+    }
+
     // ── Update file integration tests ────────────────────────────────────────
 
     [Fact]

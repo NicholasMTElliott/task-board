@@ -576,8 +576,11 @@ public sealed partial class AgentRunner(
                 await SafeDbCallAsync(() => runStore.UpdateRunProgressAsync(runId, stepIndex + 1, cancellationToken));
 
                 // 6e. Upsert step-specific comment (augmented with update file summary if applicable)
+                // Build a per-step prefix so the comment header attributes the actual role that ran,
+                // rather than always reporting the first step's role for a multi-step state.
+                var stepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role);
                 var stepMarker = $"<!-- agent-step:{step.Name} -->";
-                var stepComment = $"{commentPrefix}\n\n**Step: {step.Name}**\n\n{FormatComment(lastResult, includeConversationLog: runStore is NullRunStore)}";
+                var stepComment = $"{stepPrefix}\n\n**Step: {step.Name}**\n\n{FormatComment(lastResult, includeConversationLog: runStore is NullRunStore)}";
                 if (updateResult.HasUpdates)
                     stepComment += FormatUpdateSummary(updateResult);
                 await boardClient.UpsertAgentCommentAsync(cardId, stepComment, stepMarker, cancellationToken);
@@ -655,7 +658,7 @@ public sealed partial class AgentRunner(
             {
                 var optionalResult = await ExecuteOptionalStepsAsync(
                     session, gateCheckResult.RequestedSteps, state, worktreePath, targetCard, cardId,
-                    runId, commentPrefix, commentsFilePath, cancellationToken);
+                    runId, commentsFilePath, cancellationToken);
 
                 if (optionalResult is not null)
                 {
@@ -1253,7 +1256,6 @@ public sealed partial class AgentRunner(
         BoardCard targetCard,
         string cardId,
         string runId,
-        string commentPrefix,
         string? commentsFilePath,
         CancellationToken cancellationToken)
     {
@@ -1354,9 +1356,11 @@ public sealed partial class AgentRunner(
             await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken,
                 trimForBoard: runStore is not NullRunStore);
 
-            // Post step-specific comment with optional: prefix to avoid marker collision
+            // Post step-specific comment with optional: prefix to avoid marker collision.
+            // Build a per-step prefix so the header reflects the actual specialist-reviewer role.
+            var optionalStepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role);
             var stepMarker = $"<!-- agent-step:optional:{step.Name} -->";
-            var stepComment = $"{commentPrefix}\n\n**Optional Step: {step.Name}**\n\n{FormatComment(result, includeConversationLog: runStore is NullRunStore)}";
+            var stepComment = $"{optionalStepPrefix}\n\n**Optional Step: {step.Name}**\n\n{FormatComment(result, includeConversationLog: runStore is NullRunStore)}";
             await boardClient.UpsertAgentCommentAsync(cardId, stepComment, stepMarker, cancellationToken);
 
             // Refresh comments file for the next step
@@ -2040,7 +2044,7 @@ public sealed partial class AgentRunner(
         return ResolvePromptPlaceholders(template, card, extraContext);
     }
 
-    private static string BuildCommentPrefix(WorkflowState state, WorkflowConfig config, AgentIdentity identity)
+    private static string BuildCommentPrefix(WorkflowState state, WorkflowConfig config, AgentIdentity identity, string? roleOverride = null)
     {
         var activeStateName = state.Transitions.TryGetValue(TransitionKeys.InProgress, out var inProgressTarget)
             && inProgressTarget.Column is string inProgressCol
@@ -2048,10 +2052,11 @@ public sealed partial class AgentRunner(
             ? inProgressState.Name
             : state.Name;
 
-        // For multi-step states, use the first step's role or fall back to state-level role
-        var roleName = state.Steps is { Count: > 0 }
-            ? state.Steps[0].Role
-            : state.Role ?? "agent";
+        // For multi-step states, prefer the explicit per-step role; otherwise fall back to
+        // the first step's role, then the legacy state-level role.
+        var roleName = roleOverride
+            ?? (state.Steps is { Count: > 0 } ? state.Steps[0].Role : state.Role)
+            ?? "agent";
         return $"**{roleName} in {activeStateName} ({identity.DisplayName}):**";
     }
 
