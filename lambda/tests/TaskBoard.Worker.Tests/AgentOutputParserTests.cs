@@ -178,4 +178,99 @@ public class AgentOutputParserTests
         var text = "```json\n{\"outcome\":\"ERROR\"}\n```";
         Assert.Equal(AgentOutcome.ERROR, AgentOutputParser.ParseResult(text).Outcome);
     }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // ParseResult — evaluator-specific fields (winner_index, scores)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ParseResult_StructuredOutputWithWinnerIndex_PopulatesWinnerIndex()
+    {
+        // v0.0.18: when the model fills winner_index in the schema response,
+        // capture it on AgentResult so ParseEvaluatorVerdict doesn't have to
+        // re-parse the detail markdown for it. Closes the v0.0.16/17 gap where
+        // schema-conformant responses lost their winner to a markdown-only
+        // ParseEvaluatorVerdict path.
+        var json = """{"structured_output":{"outcome":"COMPLETE","detail":"Done","winner_index":2}}""";
+        var result = AgentOutputParser.ParseResult(json);
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+        Assert.Equal(2, result.WinnerIndex);
+    }
+
+    [Fact]
+    public void ParseResult_StructuredOutputWithNullWinnerIndex_LeavesWinnerIndexNull()
+    {
+        // The OpenAI evaluator schema variant types winner_index as
+        // ["integer", "null"] — both must round-trip cleanly.
+        var json = """{"structured_output":{"outcome":"NEEDS_INFO","detail":"q","winner_index":null}}""";
+        var result = AgentOutputParser.ParseResult(json);
+        Assert.Null(result.WinnerIndex);
+    }
+
+    [Fact]
+    public void ParseResult_StructuredOutputWithoutWinnerIndex_LeavesWinnerIndexNull()
+    {
+        var json = """{"structured_output":{"outcome":"COMPLETE","detail":"Done"}}""";
+        var result = AgentOutputParser.ParseResult(json);
+        Assert.Null(result.WinnerIndex);
+    }
+
+    [Fact]
+    public void ParseResult_StructuredOutputWithScores_PopulatesScores()
+    {
+        var json = """
+            {"structured_output":{"outcome":"COMPLETE","winner_index":1,"scores":[
+                {"index":0,"score":6.5,"reasoning":"good but generic"},
+                {"index":1,"score":8,"reasoning":"clear winner"}
+            ]}}
+            """;
+        var result = AgentOutputParser.ParseResult(json);
+        Assert.NotNull(result.Scores);
+        Assert.Equal(2, result.Scores!.Count);
+        Assert.Equal(0, result.Scores[0].Index);
+        Assert.Equal(6.5m, result.Scores[0].Score);
+        Assert.Equal("good but generic", result.Scores[0].Reasoning);
+        Assert.Equal(1, result.Scores[1].Index);
+        Assert.Equal(8m, result.Scores[1].Score);
+    }
+
+    [Fact]
+    public void ParseResult_ScoresOutsideRange_DroppedToNullKeepReasoning()
+    {
+        // Sanitisation: scores outside [0, 10] are dropped to null so they
+        // don't pollute v_provider_role_metrics.avg_quality_score; reasoning
+        // is preserved either way (the absence of a score is itself useful data).
+        var json = """
+            {"structured_output":{"outcome":"COMPLETE","scores":[
+                {"index":0,"score":15,"reasoning":"out of range high"},
+                {"index":1,"score":-2,"reasoning":"out of range low"}
+            ]}}
+            """;
+        var result = AgentOutputParser.ParseResult(json);
+        Assert.NotNull(result.Scores);
+        Assert.Equal(2, result.Scores!.Count);
+        Assert.Null(result.Scores[0].Score);
+        Assert.Equal("out of range high", result.Scores[0].Reasoning);
+        Assert.Null(result.Scores[1].Score);
+    }
+
+    [Fact]
+    public void ParseResult_DuplicateScoreIndices_LastWriteWins()
+    {
+        // If the evaluator emits two entries with the same index (revision
+        // after second thought), keep the last occurrence so the final answer
+        // wins. Mirrors the existing ParseEvaluatorVerdict behaviour for the
+        // detail-extraction path.
+        var json = """
+            {"structured_output":{"outcome":"COMPLETE","scores":[
+                {"index":0,"score":3,"reasoning":"first take"},
+                {"index":0,"score":7,"reasoning":"on reflection"}
+            ]}}
+            """;
+        var result = AgentOutputParser.ParseResult(json);
+        Assert.NotNull(result.Scores);
+        Assert.Single(result.Scores!);
+        Assert.Equal(7m, result.Scores![0].Score);
+        Assert.Equal("on reflection", result.Scores[0].Reasoning);
+    }
 }

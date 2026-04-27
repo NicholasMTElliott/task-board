@@ -93,18 +93,47 @@ The schema is enforced server-side when the executor supports it: Claude CLI's `
 
 ## 4. Configuration files and their precedence
 
-Three sources merge to produce the runtime configuration. **Later overrides earlier on key collision.**
+> **⚠️ READ THIS FIRST IF YOU ARE AN AGENT CONFIGURING aiboard FOR YOUR PROJECT**
+>
+> Configuration is layered, and **the directory of the project you are working on
+> takes precedence over the directory where `aiboard.exe` is installed**. If you are
+> setting up aiboard for the project at the current working directory:
+>
+> - **DO** create `./.aiboard/appsettings.json` and `./.aiboard/workflow.json` (or
+>   `workflow.github.json`) **inside the project's repo root**. These files travel
+>   with the project, get committed (or gitignored) per the project's policy, and
+>   are loaded automatically when `aiboard` runs from anywhere inside the repo.
+> - **DO NOT** edit the `appsettings.json` next to `aiboard.exe` itself. Per-project
+>   `.aiboard/` files override that global file silently — your edits to the global
+>   file will appear to do nothing because the project's local `.aiboard/` copy
+>   wins. This is a common confusion that costs hours of debugging when the global
+>   file *was* recently updated and the agent assumes its own edits took effect.
+>
+> Same rule for `workflow.json`: the project-local one wins. If the project ships
+> a `.aiboard/workflow.json` it must be edited in place, not at the global install.
 
-1. **`appsettings.json`** (next to `aiboard.exe`) — committed defaults shipped with the release.
-2. **`.aiboard/appsettings.json`** (in the agent workspace) — per-workspace override (rarely used outside multi-tenant setups).
-3. **`--config <path>`** CLI argument — explicit override file.
-4. **`appsettings.user.json`** (next to `aiboard.exe`, **gitignored**) — operator's machine-local secrets and project pointers. **This is the file most operators actually edit.**
-5. **Environment variables** — Standard .NET configuration provider (e.g. `GitHubProjects__Owner=acme` overrides `GitHubProjects.Owner`).
+Sources merge to produce the runtime configuration. **Later overrides earlier on key collision.**
+
+1. **`appsettings.json`** (next to `aiboard.exe`) — committed defaults shipped with the release. **Operators rarely edit this**; it's the floor.
+2. **`./.aiboard/appsettings.json`** (in the agent workspace's repo root) — **per-project config; the file an agent should edit when setting up aiboard for a new project.** Override-on-collision: any key here wins over the global `appsettings.json`. Travels with the project (committed or gitignored as the project's `.gitignore` dictates).
+3. **`--config <path>`** CLI argument — explicit override file (one-off; rarely used in normal flows).
+4. **`appsettings.user.json`** (next to `aiboard.exe`, **gitignored**) — the operator's machine-local secrets that span every project. Useful for keys that don't belong in any individual project's `.aiboard/` (e.g., a personal Anthropic API key, a Trello token).
+5. **Environment variables** — standard .NET configuration provider (e.g. `GitHubProjects__Owner=acme` overrides `GitHubProjects.Owner`).
 6. **CLI flags** — highest precedence (`--card-id`, `--board-id`, `--mode`, `--workspace`, `--state`, `--since`).
 
-If the worker can't find a required value (e.g. GitHubProjects.Owner when `BoardProvider=github`), it lists every config source that was probed in the failure message — no silent defaults.
+**Decision rule for where to put a setting:**
 
-`workflow.*.json` paths are resolved relative to the directory containing the active `appsettings*.json` first, then the working directory. Set `WorkflowConfigPath` (typically `./workflow.github.json`) in `appsettings.user.json`.
+| Setting type | Where it belongs |
+|---|---|
+| Project's GitHub repo / project number / Trello board ID | `./.aiboard/appsettings.json` (project-local — different per project) |
+| Project's workflow shape (states, roles, transitions) | `./.aiboard/workflow.json` (project-local) |
+| Personal LLM API keys / tokens (any provider) | `appsettings.user.json` (next to `aiboard.exe`, gitignored, machine-local) |
+| Default executor or model preferences across all your projects | `appsettings.user.json` |
+| Release defaults that ship to every operator | `appsettings.json` (next to `aiboard.exe` — only the maintainer edits this) |
+
+If the worker can't find a required value (e.g. `GitHubProjects.Owner` when `BoardProvider=github`), it lists every config source that was probed in the failure message — no silent defaults.
+
+`workflow.*.json` paths are resolved relative to the directory containing the active `appsettings*.json` first, then the working directory. The recommended pattern is to put both `appsettings.json` and `workflow.json` (or `workflow.github.json`) under `./.aiboard/` in the project repo, and set `WorkflowConfigPath: "./workflow.github.json"` (relative path, resolved against `.aiboard/`).
 
 ---
 
@@ -646,14 +675,15 @@ This is the canonical bootstrap flow. Follow it once when wiring AI Board to a n
 
 ### 11.2 Place the binaries + config
 
-Unpack the release zip into a directory (call it `aiboard/`). Confirm the layout:
+Unpack the release zip into a directory (call it `aiboard/`). This is the **install directory** — it stays put once unpacked. Confirm the layout:
 
 ```
-aiboard/
+aiboard/                            # install directory (one per machine)
 ├── aiboard.exe                     # the worker binary (or aiboard on Linux/macOS)
-├── appsettings.json                # shipped defaults — don't edit
+├── appsettings.json                # shipped defaults — DO NOT EDIT
+├── appsettings.user.json           # (you create this if you have machine-wide secrets — gitignored)
 ├── appsettings.user.example.json   # template
-├── workflow.github.example.json    # template — copy + edit per project
+├── workflow.github.example.json    # template — DO NOT EDIT; copy into your project's .aiboard/
 ├── prompts/                        # all role + state + gate prompts
 ├── docs/                           # human docs
 ├── db/migrations/                  # Flyway SQL — needed if running Postgres
@@ -662,11 +692,26 @@ aiboard/
 └── Agent.md                        # (this file)
 ```
 
-### 11.3 Create `appsettings.user.json`
+Per-project config lives in **the project repo's root**, NOT in this install directory:
 
-Copy `appsettings.user.example.json` and fill in:
+```
+your-project/                       # any number of projects can use the same install
+├── .git/
+├── .aiboard/                       # CREATE THIS for per-project config
+│   ├── appsettings.json            # board ID, workflow path, repo (project-specific)
+│   └── workflow.github.json        # workflow shape (states, roles, transitions)
+├── src/
+└── ...
+```
+
+The project-local `.aiboard/` files override the install-directory `appsettings.json` silently. If `aiboard` is run from anywhere inside `your-project/`, the project's `.aiboard/` is loaded automatically.
+
+### 11.3 Create the project's `.aiboard/` directory
+
+In **the project repo's root** (NOT next to `aiboard.exe`), create a `.aiboard/` directory and put `appsettings.json` inside it:
 
 ```json
+// {project-repo-root}/.aiboard/appsettings.json
 {
   "BoardProvider": "github",
   "WorkflowConfigPath": "./workflow.github.json",
@@ -683,9 +728,20 @@ Copy `appsettings.user.example.json` and fill in:
 
 Leave `AgentExecutor` unset to enable per-role provider selection (recommended). If you only have Claude CLI on the host and no Docker, set `"AgentExecutor": "claude-cli"`.
 
-### 11.4 Create `workflow.github.json`
+> **Why `.aiboard/` and not the global `appsettings.json`?** The project's `.aiboard/appsettings.json` overrides the shipped `appsettings.json` next to `aiboard.exe`. Putting per-project values (board ID, workflow path, repo) in the project keeps them committed alongside the project code and prevents one project's config from contaminating another's. Editing the global file silently fails to take effect once a project ships its own `.aiboard/`. See §4 for the full precedence rules.
 
-Copy `workflow.github.example.json` to `workflow.github.json`. The example wires the full SDLC pipeline (Backlog → Ready for Design → Designing → Designed → Ready for Implementation → ... → Done). At minimum:
+If you have **personal credentials that span every project** (e.g., a personal Anthropic API key, a Trello token), put those in `appsettings.user.json` next to `aiboard.exe` instead — gitignored, machine-local, never committed:
+
+```json
+// {aiboard-install-dir}/appsettings.user.json
+{
+  "ClaudeCli": { "ExecutablePath": "claude" }
+}
+```
+
+### 11.4 Create the project's `.aiboard/workflow.github.json`
+
+Copy `workflow.github.example.json` from the aiboard install directory into the project's `.aiboard/workflow.github.json` (NOT alongside the example file at the install). The example wires the full SDLC pipeline (Backlog → Ready for Design → Designing → Designed → Ready for Implementation → ... → Done). At minimum:
 
 1. Verify the **state keys match your board column names** (case-sensitive). `WorkflowConfig.ResolveState` throws on mismatch.
 2. Decide which roles route to which providers (§7 + §9).

@@ -34,7 +34,20 @@ internal static class AgentOutputParser
                 {
                     estimate = estEl.GetDouble();
                 }
-                return new AgentResult(outcome, detail, questions, null, requestedSteps, estimate);
+
+                // Evaluator-specific fields. Present when the structured output
+                // followed AgentSchemas.EvaluatorOutcomeSchema; null for every
+                // other agent role. Promoting these from structured_output here
+                // (rather than re-extracting from detail markdown later) is the
+                // fix for the v0.0.16/17 evaluator regression — when the Claude
+                // model DOES fill winner_index in the schema response, we now
+                // capture it instead of throwing it away and re-parsing prose.
+                var winnerIndex = ParseWinnerIndex(structured);
+                var scores = ParseEvaluatorScores(structured);
+
+                return new AgentResult(
+                    outcome, detail, questions, null, requestedSteps, estimate,
+                    winnerIndex, scores);
             }
 
             // Try result field
@@ -90,6 +103,65 @@ internal static class AgentOutputParser
         }
 
         return questions.Count > 0 ? questions : null;
+    }
+
+    /// <summary>
+    /// Reads <c>winner_index</c> from the structured-output JSON. Tolerates the
+    /// OpenAI variant's <c>["integer", "null"]</c> typing (returns null when the
+    /// field is explicitly null, missing, or not a number).
+    /// </summary>
+    internal static int? ParseWinnerIndex(JsonElement structured)
+    {
+        if (!structured.TryGetProperty("winner_index", out var el))
+            return null;
+        if (el.ValueKind != JsonValueKind.Number)
+            return null;
+        return el.TryGetInt32(out var idx) ? idx : null;
+    }
+
+    /// <summary>
+    /// Reads the <c>scores</c> array from the structured-output JSON, applying
+    /// the same sanitisation rules <see cref="Processing.CandidateExecutor"/>
+    /// uses internally: scores outside [0, 10] are dropped to null (reasoning
+    /// preserved); duplicate indices are deduplicated last-write-wins; entries
+    /// without an integer <c>index</c> are skipped.
+    /// </summary>
+    internal static IReadOnlyList<EvaluatorScore>? ParseEvaluatorScores(JsonElement structured)
+    {
+        if (!structured.TryGetProperty("scores", out var arr)
+            || arr.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var byIndex = new Dictionary<int, EvaluatorScore>();
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object) continue;
+            if (!item.TryGetProperty("index", out var iEl)
+                || !iEl.TryGetInt32(out var idx) || idx < 0)
+                continue;
+
+            decimal? score = null;
+            if (item.TryGetProperty("score", out var sEl)
+                && sEl.ValueKind == JsonValueKind.Number
+                && sEl.TryGetDecimal(out var raw)
+                && raw >= 0m && raw <= 10m)
+            {
+                score = raw;
+            }
+
+            string? reasoning = null;
+            if (item.TryGetProperty("reasoning", out var rEl)
+                && rEl.ValueKind == JsonValueKind.String)
+            {
+                reasoning = rEl.GetString();
+            }
+
+            byIndex[idx] = new EvaluatorScore(idx, score, reasoning);
+        }
+
+        return byIndex.Count > 0
+            ? byIndex.Values.OrderBy(s => s.Index).ToList()
+            : null;
     }
 
     internal static IReadOnlyList<string>? ParseRequestedSteps(JsonElement structured)

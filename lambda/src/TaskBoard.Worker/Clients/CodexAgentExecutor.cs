@@ -126,6 +126,30 @@ public sealed class CodexAgentExecutor(
                         RateLimitSource.AgentCli);
                 }
 
+                // Stdout-over-exit precedence: if the CLI exited non-zero but
+                // stdout still contains a parseable structured outcome, the
+                // agent's logical work succeeded — only the CLI process health
+                // signal failed (e.g., transient network blip in a side request,
+                // a sandbox warning, the rollout-tracking 'thread not found'
+                // chatter Codex 0.125.0 emits, etc.). Prefer the parsed outcome
+                // and surface the exit-code anomaly as a Warning so version
+                // drift remains visible without killing legitimate runs.
+                // Infrastructure exit codes (125/126/127/137 — see
+                // ClaudeAgentExecutor.IsInfrastructureExitCode) bypass this
+                // because they indicate the process never produced trustworthy
+                // output (CLI not found, permission denied, OOM kill, etc.).
+                if (!ClaudeAgentExecutor.IsInfrastructureExitCode(exitCode)
+                    && !string.IsNullOrWhiteSpace(stdout)
+                    && TryRecoverStructuredOutput(stdout) is { } recovered)
+                {
+                    logger.LogWarning(
+                        "Codex CLI exited with code {ExitCode} but stdout contains a parseable " +
+                        "structured outcome (outcome={Outcome}). Treating the parsed result as " +
+                        "authoritative and proceeding. Stderr (first 1000 chars): {Stderr}",
+                        exitCode, recovered.Outcome, Truncate(stderr, 1000));
+                    return recovered with { ConversationLog = recovered.ConversationLog ?? "" };
+                }
+
                 logger.LogError(
                     "Codex agent exited with code {ExitCode}. Stderr: {Stderr}. Stdout: {Stdout}",
                     exitCode, Truncate(stderr, 10_000), Truncate(stdout, 2_000));
@@ -759,6 +783,36 @@ public sealed class CodexAgentExecutor(
 
     // Stderr signature detection moved to <see cref="CliFailureHintDetector"/>
     // for reuse across CLI executors. See <see cref="CliFailureHintDetector.CodexSignatures"/>.
+
+    /// <summary>
+    /// Best-effort recovery of a structured outcome from a non-zero-exit Codex
+    /// run. Mirrors the success-path parsing (NDJSON stream → fallback to
+    /// agent_message text → fallback to single-document JSON) without throwing.
+    /// Returns null if no path produced a parseable outcome — the caller then
+    /// proceeds with the regular non-zero-exit error throw.
+    /// </summary>
+    private AgentResult? TryRecoverStructuredOutput(string stdout)
+    {
+        try
+        {
+            var (resultJson, conversationLog) = ParseStreamOutput(stdout);
+            if (resultJson is not null)
+            {
+                var result = ParseResult(resultJson);
+                return result with { ConversationLog = conversationLog };
+            }
+
+            if (TryParseSingleDocumentStructured(stdout, out var singleDocResult))
+                return singleDocResult;
+        }
+        catch
+        {
+            // Defensive: never let the recovery path itself throw — fall back
+            // to the regular error path so the operator sees the original
+            // exit-code-and-stderr diagnostic.
+        }
+        return null;
+    }
 
     /// <summary>
     /// Codex CLI 0.125.0+ shape: the agent's structured-outcome JSON lives in the

@@ -832,9 +832,29 @@ public sealed class CandidateExecutor(
 
     /// <summary>
     /// Extracts the candidate-specific fields (<c>winner_index</c>, <c>scores</c>)
-    /// from the evaluator's structured response. Returns a verdict with sensible
-    /// defaults when fields are missing so the caller doesn't have to special-case
-    /// non-COMPLETE outcomes.
+    /// from the evaluator's structured response. Three layers of extraction in
+    /// priority order:
+    ///
+    /// <list type="number">
+    ///   <item><b>Structured-output fields</b> (<see cref="AgentResult.WinnerIndex"/>,
+    ///         <see cref="AgentResult.Scores"/>) — populated by
+    ///         <see cref="AgentOutputParser"/> when the model filled the
+    ///         schema-required fields. This is the primary path; fastest,
+    ///         most accurate, no markdown parsing needed.</item>
+    ///   <item><b>Detail-embedded JSON</b> — search the detail markdown for a
+    ///         fenced or top-level <c>{...}</c> block carrying
+    ///         <c>winner_index</c> / <c>scores</c>. Backstop for when the model
+    ///         skipped the schema field but included a redundant JSON in prose.</item>
+    ///   <item><b>Prose patterns in detail</b> — match "Candidate N wins",
+    ///         "Winner: Candidate N", or scoreboard table rows marked
+    ///         "**Winner.**" / "Winner.". Last-resort fallback for the v0.0.16/17
+    ///         field-report shape: clear verdict in markdown, no structured
+    ///         field, no JSON block. The cost is one regex pass; the benefit
+    ///         is recovering verdicts we'd otherwise lose to ERROR routing.</item>
+    /// </list>
+    ///
+    /// Returns a verdict with sensible defaults when no layer found a winner so
+    /// the caller doesn't have to special-case non-COMPLETE outcomes.
     /// </summary>
     internal static EvaluatorVerdict ParseEvaluatorVerdict(
         AgentResult evaluatorResult, int candidateCount, EvaluatorScoring scoring)
@@ -842,23 +862,129 @@ public sealed class CandidateExecutor(
         if (evaluatorResult.Outcome != AgentOutcome.COMPLETE)
             return new EvaluatorVerdict(WinnerIndex: null, Scores: Array.Empty<CandidateScore>());
 
-        // Detail is the markdown summary. The structured fields we need
-        // (winner_index, scores) ride alongside it inside structured_output but
-        // AgentOutputParser only extracts the standard envelope. Re-parse Detail
-        // for our extended fields. As a backstop, also try to extract from the
-        // detail string itself if it contains a JSON block.
-        var winner = TryExtractWinnerIndex(evaluatorResult.Detail);
-        var scores = scoring == EvaluatorScoring.WinnerWithScores
-            ? TryExtractScores(evaluatorResult.Detail, candidateCount)
-            : Array.Empty<CandidateScore>();
+        // Layer 1: structured fields. When the model fills them, use them
+        // directly — the schema-validated source is authoritative.
+        var winner = evaluatorResult.WinnerIndex;
 
-        // If the evaluator said COMPLETE but no winner_index parsed, the
-        // evaluator output is malformed. Don't pick a winner — the caller
-        // treats this as "no winner promoted".
+        // Layer 2: detail-embedded JSON. Backstop when the model skipped the
+        // schema field but included a redundant JSON copy in prose.
+        if (winner is null)
+            winner = TryExtractWinnerIndex(evaluatorResult.Detail);
+
+        // Layer 3: prose patterns. Last-resort recovery for verdicts written
+        // entirely in markdown ("Candidate 1 wins", scoreboard with
+        // "**Winner.**"). Without this, every Claude-evaluator run that
+        // skipped the structured field AND wrote no JSON block routes to ERROR
+        // even though the verdict is unambiguous in plain text.
+        if (winner is null)
+            winner = TryExtractWinnerFromProse(evaluatorResult.Detail, candidateCount);
+
+        // Bounds-check whichever layer produced the winner. Out-of-range = no
+        // winner (treated as "malformed; do not promote").
         if (winner is int idx && (idx < 0 || idx >= candidateCount))
             winner = null;
 
+        // Scores: prefer structured, fall back to detail-embedded JSON. No
+        // prose fallback for scores — they're calibration data, and a
+        // markdown-table parser would be brittle.
+        IReadOnlyList<CandidateScore> scores;
+        if (scoring != EvaluatorScoring.WinnerWithScores)
+        {
+            scores = Array.Empty<CandidateScore>();
+        }
+        else if (evaluatorResult.Scores is { Count: > 0 } structuredScores)
+        {
+            // Translate the parser's EvaluatorScore (a flat record) into the
+            // CandidateScore type the rest of CandidateExecutor uses.
+            scores = structuredScores
+                .Where(s => s.Index >= 0 && s.Index < candidateCount)
+                .Select(s => new CandidateScore(s.Index, s.Score, s.Reasoning))
+                .OrderBy(s => s.Index)
+                .ToList();
+        }
+        else
+        {
+            scores = TryExtractScores(evaluatorResult.Detail, candidateCount);
+        }
+
         return new EvaluatorVerdict(winner, scores);
+    }
+
+    /// <summary>
+    /// Last-resort verdict extraction from plain markdown prose. Matches the
+    /// patterns evaluators commonly emit when they wrote a clear verdict but
+    /// skipped the structured <c>winner_index</c> field:
+    ///
+    /// <list type="bullet">
+    ///   <item><c>Verdict: Candidate N wins</c> / <c>**Verdict: Candidate N wins**</c></item>
+    ///   <item><c>Winner: Candidate N</c></item>
+    ///   <item><c>Candidate N wins</c></item>
+    ///   <item>Scoreboard table row containing <c>**Winner.**</c> or <c>Winner.</c>
+    ///         in the notes column, with the candidate index in the first column.</item>
+    /// </list>
+    ///
+    /// Returns null when no pattern matches. Bounds-checked by the caller.
+    /// </summary>
+    internal static int? TryExtractWinnerFromProse(string? detail, int candidateCount)
+    {
+        if (string.IsNullOrEmpty(detail)) return null;
+
+        // Pattern 1: "Candidate N wins" / "Verdict: Candidate N wins" /
+        // "Winner: Candidate N". Case-insensitive; allows the index to be
+        // followed by space, punctuation, or end-of-line.
+        var directMatch = System.Text.RegularExpressions.Regex.Match(
+            detail,
+            @"(?:Verdict\s*:?\s*)?(?:Winner\s*:?\s*)?Candidate\s+(\d+)\s*(?:wins\b|is\s+the\s+winner\b)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (directMatch.Success
+            && int.TryParse(directMatch.Groups[1].Value, out var directIdx)
+            && directIdx >= 0 && directIdx < candidateCount)
+        {
+            return directIdx;
+        }
+
+        // Pattern 2: "Winner: Candidate N" without "wins" / "is the winner".
+        var winnerColonMatch = System.Text.RegularExpressions.Regex.Match(
+            detail,
+            @"\bWinner\s*:\s*Candidate\s+(\d+)\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (winnerColonMatch.Success
+            && int.TryParse(winnerColonMatch.Groups[1].Value, out var winnerIdx)
+            && winnerIdx >= 0 && winnerIdx < candidateCount)
+        {
+            return winnerIdx;
+        }
+
+        // Pattern 3: scoreboard table row marked "**Winner.**" or "Winner.".
+        // Matches lines like "| 1 | claude-sonnet-4-6 | **7** | **Winner.** ..."
+        // The first cell after "|" is the candidate index. Match by line so we
+        // only get rows containing the Winner marker.
+        foreach (var line in detail.Split('\n'))
+        {
+            if (!line.Contains("Winner", StringComparison.OrdinalIgnoreCase)) continue;
+
+            // First non-empty cell of a markdown table row should be the index.
+            // Match: optional pipe, optional whitespace, capture digits.
+            var rowMatch = System.Text.RegularExpressions.Regex.Match(
+                line, @"^\s*\|?\s*(\d+)\s*\|");
+            if (!rowMatch.Success) continue;
+            if (!int.TryParse(rowMatch.Groups[1].Value, out var rowIdx)) continue;
+            if (rowIdx < 0 || rowIdx >= candidateCount) continue;
+
+            // Confirm "Winner" appears in a context that means "this row is the
+            // winner" — surface forms like "**Winner.**", "Winner.",
+            // "**Winner:**", "Winner:". Reject "Winner candidate is X" framings
+            // by requiring punctuation after Winner.
+            if (System.Text.RegularExpressions.Regex.IsMatch(
+                line,
+                @"\bWinner\s*[.:]",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            {
+                return rowIdx;
+            }
+        }
+
+        return null;
     }
 
     private static int? TryExtractWinnerIndex(string? detail)

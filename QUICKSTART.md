@@ -21,10 +21,13 @@ The default connection string in `appsettings.json` points to this local instanc
 To check migration status: `docker compose run --rm migrate info`
 To reset the database: `docker compose down -v && docker compose up -d`
 
-## Setup (one-time, single project)
+## Setup
 
-1. Copy `appsettings.user.example.json` to `appsettings.user.json` (same folder as `aiboard.exe`)
-2. Edit `appsettings.user.json` with your values:
+aiboard config layers from two places: the **install directory** (next to `aiboard.exe` — for personal secrets that span every project) and the **project's own `.aiboard/` folder** (for per-project board IDs and workflow shape, committed alongside the project's code). Project-local files **override** the install-directory ones.
+
+### Per-project setup (do this in every project that uses aiboard)
+
+In the project repo's root, create `.aiboard/appsettings.json`:
 
 ```json
 {
@@ -39,8 +42,21 @@ To reset the database: `docker compose down -v && docker compose up -d`
 }
 ```
 
-3. Copy `workflow.github.example.json` to `workflow.github.json` and customise if needed
-   (the default workflow works out of the box for standard design -> implement -> test pipelines)
+Then copy `workflow.github.example.json` (from the aiboard install directory) into `.aiboard/workflow.github.json` and customise as needed. The default workflow works out of the box for standard design → implement → test pipelines.
+
+These files travel with the project. When `aiboard` runs from anywhere inside the repo, it picks them up automatically.
+
+### Install-directory setup (one-time, machine-local)
+
+If you have personal credentials that apply to every project (Anthropic API key, Trello token, default executor preferences), put them in `appsettings.user.json` next to `aiboard.exe` — gitignored, never committed:
+
+```json
+{
+  "ClaudeCli": { "ExecutablePath": "claude" }
+}
+```
+
+> **Don't edit `appsettings.json` next to `aiboard.exe`.** Per-project `.aiboard/` files override it silently. Edits there will appear to do nothing once a project ships its own `.aiboard/appsettings.json`. The shipped `appsettings.json` is the floor — leave it as-is.
 
 ## Run a single card
 
@@ -88,7 +104,7 @@ Every setting can be provided via any of the following (highest priority wins):
 
 1. **Command-line args** — `--board-provider github`, `--github-repo owner/repo`, etc.
 2. **Environment variables** — `BoardProvider=github`, `GitHubProjects__Repo=owner/repo`, etc.
-3. **Config files** — `appsettings.user.json` > `--config` file > `appsettings.json`
+3. **Config files**, highest precedence first — env vars > `--config <path>` file > `appsettings.user.json` (next to exe, gitignored) > `./.aiboard/appsettings.json` (project-local — **edit this for per-project board/workflow config**) > `appsettings.json` (next to exe, shipped defaults — don't edit)
 
 ### Key options
 
@@ -266,9 +282,9 @@ Both forward slashes and backslashes work on all platforms.
 | File | Purpose |
 |------|---------|
 | `aiboard.exe` / `aiboard` | The executable |
-| `appsettings.json` | Default configuration (do not edit — override via `appsettings.user.json` or `--config`) |
-| `appsettings.user.example.json` | Template — copy to `appsettings.user.json` and fill in your values |
-| `workflow.github.example.json` | Template — copy to `workflow.github.json` and customise |
+| `appsettings.json` | Shipped defaults — **do not edit**. Override per-project via `./.aiboard/appsettings.json` in your project repo (preferred), or per-machine via `appsettings.user.json` next to `aiboard.exe`. |
+| `appsettings.user.example.json` | Template for `appsettings.user.json` — machine-local secrets that span every project (e.g., personal API keys). |
+| `workflow.github.example.json` | Template for the project-local workflow file — copy into the project's `./.aiboard/workflow.github.json` and customise. |
 | `workflow.v1.json` | Legacy Trello workflow (ignore unless using Trello) |
 | `docker-compose.yml` | Local PostgreSQL + Flyway migrations |
 | `db/migrations/` | SQL migration files applied by Flyway |

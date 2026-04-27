@@ -220,18 +220,21 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
     }
 
     [Fact]
-    public async Task EvaluatorReturnsCompleteWithoutWinnerIndex_OverridesToError()
+    public async Task EvaluatorReturnsCompleteWithoutWinnerAnywhere_OverridesToError()
     {
-        // Schema-violation defense: if the LLM bypasses the schema and returns
-        // outcome=COMPLETE without winner_index (or with null), the orchestrator
-        // must NOT silently fall through to "no winner; clean up". Surface as
-        // ERROR so the run fails loudly and the operator sees the contract
-        // violation. Mirrors KvA's v0.0.15 silent-loss-of-verdict bug.
+        // Schema-violation defense: if the LLM bypasses the schema AND wrote no
+        // winner-naming prose (no "Candidate N wins", no scoreboard table marked
+        // Winner), the orchestrator must NOT silently fall through to "no winner;
+        // clean up". Surface as ERROR so the run fails loudly. The v0.0.18 prose
+        // fallback (TryExtractWinnerFromProse) catches the common case where
+        // the verdict is in markdown; this test uses prose that genuinely names
+        // no winner so the override still fires.
         var capturingEvaluator = new CapturingExecutor(AgentOutcome.COMPLETE,
             """
-            Winner: Candidate 1 (in prose only — no winner_index field).
+            Both candidates produced acceptable work. The differences are minor.
+            I cannot pick decisively without more context.
             ```json
-            {"outcome":"COMPLETE","detail":"Winner is candidate 1 but I forgot the index"}
+            {"outcome":"COMPLETE","detail":"Both look fine, no clear preference"}
             ```
             """);
 
@@ -257,6 +260,47 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         // either candidate (no winner picked).
         var canonicalTask = File.ReadAllText(Path.Combine(_canonicalWorktree, ".aiboard", "tasks", "1.md"));
         Assert.Equal("# Card 1\n\noriginal task body\n", canonicalTask.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
+    public async Task EvaluatorReturnsCompleteWithProseWinner_RecoversFromMarkdown()
+    {
+        // v0.0.18 prose fallback. The model wrote a clear verdict in markdown
+        // ("**Verdict: Candidate 1 wins**" + scoreboard with "**Winner.**") but
+        // skipped the structured winner_index field — the exact shape KvA card
+        // #3's v0.0.17 retry produced. Without the prose fallback this would
+        // override to ERROR and lose the verdict; with it, candidate 1 is
+        // recovered and promoted.
+        var verdictMarkdown =
+            "## Verdict: Candidate 1 wins\n\n" +
+            "Candidate 1 had the better implementation map.\n\n" +
+            "| # | Provider | Score | Notes |\n" +
+            "|---|----------|-------|-------|\n" +
+            "| 0 | claude-opus | 6 | Good but generic |\n" +
+            "| 1 | claude-sonnet | **7** | **Winner.** Best implementation map |\n";
+
+        var capturingEvaluator = new CapturingExecutor(AgentOutcome.COMPLETE, verdictMarkdown);
+
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = new ScriptedWriter(AgentOutcome.COMPLETE, "A",
+                new Dictionary<string, string> { ["tasks/1.md"] = "A body" }),
+            ["docker-opencode"]   = new ScriptedWriter(AgentOutcome.COMPLETE, "B",
+                new Dictionary<string, string> { ["tasks/1.md"] = "B body" }),
+            ["claude-cli"]        = capturingEvaluator,
+        };
+
+        var executor = BuildExecutor(byProvider);
+        var request = NewRequest("create_design",
+            ["docker-claude-cli", "docker-opencode"], gitBehavior: "discard");
+
+        var result = await executor.ExecuteCandidateGroupAsync(request, CancellationToken.None);
+
+        // Prose recovery: outcome stays COMPLETE; candidate 1's body is promoted.
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+        var canonicalTask = File.ReadAllText(
+            Path.Combine(_canonicalWorktree, ".aiboard", "tasks", "1.md"));
+        Assert.Equal("B body", canonicalTask.Replace("\r\n", "\n"));
     }
 
     [Fact]

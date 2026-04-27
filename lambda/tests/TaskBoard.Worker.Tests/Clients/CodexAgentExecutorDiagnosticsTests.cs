@@ -124,6 +124,95 @@ public class CodexAgentExecutorDiagnosticsTests
         finally { CleanupWorkspace(workspace); }
     }
 
+    // ── Stdout-over-exit precedence (v0.0.18 false-fail fix) ─────────────────
+
+    [Fact]
+    public async Task ExecuteAsync_NonZeroExitWithParseableStdout_ReturnsParsedResult()
+    {
+        // KvA card #3 v0.0.17 retry: a Codex candidate produced clean structured
+        // output (outcome=COMPLETE, all tests passed) but the CLI exited
+        // non-zero because of a transient network blip in a side request. The
+        // old executor threw the run away despite the good stdout. v0.0.18:
+        // when stdout has a parseable structured outcome, prefer that over the
+        // exit code anomaly. Stderr stays in the warning log so version drift
+        // remains visible.
+        var (workspace, promptFile) = NewWorkspace();
+        try
+        {
+            var stdout = string.Join('\n',
+                """{"type":"thread.started","thread_id":"t-1"}""",
+                """{"type":"item.completed","item":{"type":"agent_message","text":"{\"outcome\":\"COMPLETE\",\"detail\":\"All tests passed.\"}"}}"""
+            );
+            var stderr = "WARN: Provider request timed out on telemetry channel; main response succeeded.";
+
+            ProcessRunnerDelegate runner =
+                (exe, args, wd, t, ct, stdin, remove, name)
+                    => Task.FromResult((1, stdout, stderr));
+
+            var executor = new CodexAgentExecutor(
+                Options.Create(new CodexCliLlmOptions()),
+                NullLogger<CodexAgentExecutor>.Instance,
+                runner);
+
+            var result = await executor.ExecuteAsync(
+                CreateContext(workspace, promptFile), CancellationToken.None);
+
+            Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+            Assert.Equal("All tests passed.", result.Detail);
+        }
+        finally { CleanupWorkspace(workspace); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InfrastructureExitCodeWithParseableStdout_StillThrows()
+    {
+        // Carve-out: infrastructure exit codes (125/126/127/137 — Docker daemon
+        // errors, command-not-found, permission denied, OOM kill) bypass the
+        // stdout-over-exit recovery because they indicate the process never
+        // produced trustworthy output. Even if stdout looks parseable, throw.
+        var (workspace, promptFile) = NewWorkspace();
+        try
+        {
+            var stdout = """{"type":"item.completed","item":{"type":"agent_message","text":"{\"outcome\":\"COMPLETE\",\"detail\":\"ok\"}"}}""";
+            ProcessRunnerDelegate runner =
+                (exe, args, wd, t, ct, stdin, remove, name)
+                    => Task.FromResult((127, stdout, "command not found"));
+
+            var executor = new CodexAgentExecutor(
+                Options.Create(new CodexCliLlmOptions()),
+                NullLogger<CodexAgentExecutor>.Instance,
+                runner);
+
+            await Assert.ThrowsAsync<CliInfrastructureException>(
+                () => executor.ExecuteAsync(CreateContext(workspace, promptFile), CancellationToken.None));
+        }
+        finally { CleanupWorkspace(workspace); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NonZeroExitWithUnparseableStdout_ThrowsAsBefore()
+    {
+        // When stdout doesn't contain a recoverable structured outcome, the
+        // recovery path must NOT swallow the failure — fall through to the
+        // existing exit-code error throw with full diagnostics.
+        var (workspace, promptFile) = NewWorkspace();
+        try
+        {
+            ProcessRunnerDelegate runner =
+                (exe, args, wd, t, ct, stdin, remove, name)
+                    => Task.FromResult((1, "garbled output not a valid event stream", "fatal error"));
+
+            var executor = new CodexAgentExecutor(
+                Options.Create(new CodexCliLlmOptions()),
+                NullLogger<CodexAgentExecutor>.Instance,
+                runner);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => executor.ExecuteAsync(CreateContext(workspace, promptFile), CancellationToken.None));
+        }
+        finally { CleanupWorkspace(workspace); }
+    }
+
     // ── Codex CLI 0.125.0+ agent_message fallback ────────────────────────────
 
     [Fact]
