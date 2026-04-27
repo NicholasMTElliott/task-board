@@ -437,6 +437,14 @@ public sealed class CodexAgentExecutor(
         var lineNumber = 0;
         var unknownTypeCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var errorEventSamples = new List<string>();
+        // Codex CLI 0.125.0+ emits the agent's structured-output JSON as the
+        // text of the final item.completed whose item.type == "agent_message",
+        // not as a top-level structured_output event. Track the most recent
+        // one so we can fall back to it after the loop if no legacy
+        // structured_output event was seen.
+        string? lastAgentMessageText = null;
+        int lastAgentMessageLine = 0;
+        int agentMessageCount = 0;
 
         foreach (var line in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
@@ -500,6 +508,29 @@ public sealed class CodexAgentExecutor(
                     structuredOutputCount++;
                 }
 
+                // Codex CLI 0.125.0+ shape: the agent's outcome JSON lives in
+                // item.completed { item: { type: "agent_message", text: "<json>" } }.
+                // Capture the LAST one so we can fall back after the loop if no
+                // legacy structured_output event was seen. Multiple agent_messages
+                // are common (intermediate reasoning); only the final one is
+                // the canonical answer per the report from the field.
+                if (string.Equals(type, "item.completed", StringComparison.OrdinalIgnoreCase)
+                    && root.TryGetProperty("item", out var agentMsgItem)
+                    && agentMsgItem.ValueKind == JsonValueKind.Object
+                    && agentMsgItem.TryGetProperty("type", out var agentMsgType)
+                    && string.Equals(agentMsgType.GetString(), "agent_message", StringComparison.OrdinalIgnoreCase)
+                    && agentMsgItem.TryGetProperty("text", out var agentMsgText)
+                    && agentMsgText.ValueKind == JsonValueKind.String)
+                {
+                    var text = agentMsgText.GetString();
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        lastAgentMessageText = text;
+                        lastAgentMessageLine = lineNumber;
+                        agentMessageCount++;
+                    }
+                }
+
                 // Extract text content for conversation log from known terminal event types
                 // Codex may use: turn.completed, item.completed, response.completed
                 // or wrap assistant text in "content" / "output" / "message" fields
@@ -510,6 +541,34 @@ public sealed class CodexAgentExecutor(
                 malformedLineCount++;
                 logger.LogDebug("NDJSON line {LineNumber}: malformed JSON, skipping. Raw: {Raw}",
                     lineNumber, Truncate(trimmed, 200));
+            }
+        }
+
+        // Codex CLI 0.125.0+ fallback: if no top-level structured_output event
+        // was seen but we captured at least one agent_message, treat the LAST
+        // agent_message's text as the structured outcome. Wrap it in a
+        // synthetic { "structured_output": <parsed> } envelope so the existing
+        // ParseResult / AgentOutputParser path consumes it unchanged.
+        if (resultWithStructuredOutput is null && lastAgentMessageText is not null)
+        {
+            var stripped = AgentOutputParser.StripMarkdownFences(lastAgentMessageText.Trim());
+            if (TryWrapAgentMessageAsStructured(stripped, out var wrapped))
+            {
+                logger.LogInformation(
+                    "No top-level structured_output event found; using agent_message fallback " +
+                    "(Codex CLI 0.125.0+ shape) from item.completed at line {Line} ({Count} agent_messages total).",
+                    lastAgentMessageLine, agentMessageCount);
+                resultWithStructuredOutput = wrapped;
+                resultWithStructuredOutputLine = lastAgentMessageLine;
+                structuredOutputCount = 1;
+                resultMessageCount++;
+            }
+            else
+            {
+                logger.LogWarning(
+                    "agent_message at line {Line} did not parse as a structured-outcome JSON " +
+                    "(text length {Length} chars). Falling through to no-structured-output diagnostic.",
+                    lastAgentMessageLine, lastAgentMessageText.Length);
             }
         }
 
@@ -560,9 +619,10 @@ public sealed class CodexAgentExecutor(
         logger.LogInformation(
             "NDJSON parsing complete: {TotalLines} lines ({NonEmpty} non-empty, {Malformed} malformed), " +
             "resultEvents={ResultCount}, structuredOutputEvents={StructuredCount}, " +
-            "unknownTypes={UnknownTypeCount}, conversationLogChars={LogChars}",
+            "agentMessages={AgentMessageCount}, unknownTypes={UnknownTypeCount}, " +
+            "conversationLogChars={LogChars}",
             lineNumber, nonEmptyLineCount, malformedLineCount,
-            resultMessageCount, structuredOutputCount,
+            resultMessageCount, structuredOutputCount, agentMessageCount,
             unknownTypeCounts.Count, conversationLog.Length);
 
         var log = conversationLog.Length > MaxConversationLogChars
@@ -699,6 +759,38 @@ public sealed class CodexAgentExecutor(
 
     // Stderr signature detection moved to <see cref="CliFailureHintDetector"/>
     // for reuse across CLI executors. See <see cref="CliFailureHintDetector.CodexSignatures"/>.
+
+    /// <summary>
+    /// Codex CLI 0.125.0+ shape: the agent's structured-outcome JSON lives in the
+    /// text of the final <c>item.completed</c> whose <c>item.type == "agent_message"</c>,
+    /// not as a top-level <c>structured_output</c> event. Wrap that text into a
+    /// synthetic <c>{ "structured_output": &lt;parsed&gt; }</c> envelope so the
+    /// existing <see cref="AgentOutputParser.ParseResult"/> path consumes it
+    /// unchanged. Returns false (and the caller falls through to the existing
+    /// no-structured-output diagnostic) when the text doesn't parse as a JSON
+    /// object with a recognised <c>outcome</c> enum value.
+    /// </summary>
+    private static bool TryWrapAgentMessageAsStructured(string text, out string wrapped)
+    {
+        wrapped = string.Empty;
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            if (!root.TryGetProperty("outcome", out var outcomeEl)) return false;
+            if (outcomeEl.ValueKind != JsonValueKind.String) return false;
+            var outcome = outcomeEl.GetString();
+            if (outcome is not ("COMPLETE" or "NEEDS_INFO" or "ERROR" or "SUCCESS" or "QUESTIONS"))
+                return false;
+            wrapped = "{\"structured_output\":" + text + "}";
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>
     /// Backward-compat path: if stdout was a single JSON document (not NDJSON)

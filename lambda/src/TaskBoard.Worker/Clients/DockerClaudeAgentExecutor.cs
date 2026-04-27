@@ -337,6 +337,12 @@ public sealed class DockerClaudeAgentExecutor(
         {
             "run",
             "--rm",    // Remove container automatically on exit
+            "--init",  // Use tini as PID 1 — forwards signals to children and reaps
+                       // zombies. Without this, agent-spawned processes (e.g. test
+                       // runners, GUI subprocesses) can outlive the CLI exit and
+                       // hold open file handles on bind-mounted worktree files,
+                       // blocking host-side cleanup. Reported on Windows Docker
+                       // Desktop with Codex+Godot in v0.0.16.
             "-i",      // Attach stdin (required for prompt passthrough)
             "--name", containerName,
         };

@@ -179,6 +179,21 @@ public class DockerClaudeAgentExecutorTests
     }
 
     [Fact]
+    public void BuildDockerArgumentList_ContainsInitFlag()
+    {
+        // v0.0.17: --init makes tini PID 1 inside the container so signals are
+        // forwarded to children and zombies are reaped. Without it, agent-spawned
+        // processes (e.g. test runners, GUI subprocesses like Godot) can outlive
+        // the CLI exit and hold open file handles on bind-mounted worktree
+        // files, blocking host-side cleanup. Reported in the v0.0.16 KvA field run.
+        var executor = CreateExecutor();
+        var dockerArgs = executor.BuildDockerArgumentList(
+            "c1", "/host/prompts", ["--print"]);
+
+        Assert.Contains("--init", dockerArgs);
+    }
+
+    [Fact]
     public void BuildDockerArgumentList_ContainsImageName()
     {
         var executor = CreateExecutor(imageName: "aiboard-sandbox:latest");

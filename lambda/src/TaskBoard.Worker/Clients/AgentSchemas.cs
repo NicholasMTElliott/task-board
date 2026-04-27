@@ -94,13 +94,16 @@ internal static class AgentSchemas
         """;
 
     /// <summary>
-    /// Evaluator-specific schema (Claude / generic JSON Schema 2020-12).
-    /// Extends <see cref="OutcomeSchema"/> with <c>winner_index</c> + <c>scores</c>
-    /// and uses <c>if</c>/<c>then</c> to make <c>winner_index</c> required when
-    /// <c>outcome == "COMPLETE"</c>. The whole point: prevent the failure mode
-    /// where the LLM picks a winner in prose but omits the structured field, so
-    /// the orchestrator silently cleans up all candidate worktrees with no winner
-    /// promoted (KvA card #3 v0.0.15 reproduction).
+    /// Evaluator-specific schema (Claude / generic JSON Schema).
+    /// Extends <see cref="OutcomeSchema"/> with <c>winner_index</c> + <c>scores</c>.
+    /// <c>winner_index</c> is always required and typed <c>["integer", "null"]</c>
+    /// — a strictly stronger constraint than the prior <c>if</c>/<c>then</c>
+    /// formulation, which Claude CLI's <c>--json-schema</c> treated as a soft
+    /// hint rather than enforcing at the wire level (KvA v0.0.16 field report).
+    /// "Always required" is reliably honoured across providers; "required when X"
+    /// is not. Parser-side defense in
+    /// <see cref="TaskBoard.Worker.Processing.CandidateExecutor"/> rejects
+    /// <c>outcome=COMPLETE</c> with a null <c>winner_index</c>.
     /// </summary>
     internal const string EvaluatorOutcomeSchema = """
         {
@@ -114,8 +117,7 @@ internal static class AgentSchemas
               "type": "string"
             },
             "winner_index": {
-              "type": "integer",
-              "minimum": 0
+              "type": ["integer", "null"]
             },
             "scores": {
               "type": "array",
@@ -148,14 +150,7 @@ internal static class AgentSchemas
               "items": { "type": "string" }
             }
           },
-          "required": ["outcome"],
-          "if": {
-            "properties": { "outcome": { "const": "COMPLETE" } },
-            "required": ["outcome"]
-          },
-          "then": {
-            "required": ["outcome", "winner_index"]
-          }
+          "required": ["outcome", "winner_index"]
         }
         """;
 

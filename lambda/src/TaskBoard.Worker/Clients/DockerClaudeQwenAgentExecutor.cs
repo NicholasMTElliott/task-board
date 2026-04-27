@@ -343,6 +343,9 @@ public sealed class DockerClaudeQwenAgentExecutor(
         {
             "run",
             "--rm",
+            "--init",  // tini as PID 1 — signal forwarding + zombie reaping so
+                       // agent-spawned children don't outlive the CLI and hold
+                       // bind-mount file handles open. See DockerClaudeAgentExecutor.
             "-i",
             "--name", containerName,
         };

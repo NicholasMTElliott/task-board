@@ -124,6 +124,182 @@ public class CodexAgentExecutorDiagnosticsTests
         finally { CleanupWorkspace(workspace); }
     }
 
+    // ── Codex CLI 0.125.0+ agent_message fallback ────────────────────────────
+
+    [Fact]
+    public async Task ExecuteAsync_AgentMessageFallback_ParsesLastAgentMessageText()
+    {
+        // Codex CLI 0.125.0+ stopped emitting top-level structured_output events;
+        // the schema-conformant outcome JSON now lives in the text of the final
+        // item.completed whose item.type == "agent_message". Verify the parser
+        // wraps that text into a synthetic structured_output envelope and
+        // recovers the outcome correctly.
+        var (workspace, promptFile) = NewWorkspace();
+        try
+        {
+            // Reproduces the v0.0.16 KvA field-report shape: a typical Codex run
+            // emits thread.started, several reasoning item.completed events, and
+            // a final item.completed agent_message carrying the JSON.
+            var outcomeJson = """{"outcome":"COMPLETE","detail":"All checks passed."}""";
+            var stdout = string.Join('\n',
+                """{"type":"thread.started","thread_id":"t-1"}""",
+                """{"type":"item.completed","item":{"type":"reasoning","text":"Inspecting workspace"}}""",
+                """{"type":"item.completed","item":{"type":"agent_message","text":""" +
+                System.Text.Json.JsonSerializer.Serialize(outcomeJson) + "}}",
+                """{"type":"turn.completed","usage":{"input_tokens":42}}"""
+            );
+
+            ProcessRunnerDelegate runner =
+                (exe, args, wd, t, ct, stdin, remove, name)
+                    => Task.FromResult((0, stdout, ""));
+
+            var executor = new CodexAgentExecutor(
+                Options.Create(new CodexCliLlmOptions()),
+                NullLogger<CodexAgentExecutor>.Instance,
+                runner);
+
+            var result = await executor.ExecuteAsync(
+                CreateContext(workspace, promptFile), CancellationToken.None);
+
+            Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+            Assert.Equal("All checks passed.", result.Detail);
+        }
+        finally { CleanupWorkspace(workspace); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_AgentMessageFallback_LastWinsOverEarlier()
+    {
+        // Multiple agent_message events are common (intermediate reasoning vs.
+        // final answer). Only the LAST one is the canonical outcome — pick it.
+        var (workspace, promptFile) = NewWorkspace();
+        try
+        {
+            var earlyJson = """{"outcome":"NEEDS_INFO","detail":"Wait, what?"}""";
+            var finalJson = """{"outcome":"COMPLETE","detail":"Got it."}""";
+            var stdout = string.Join('\n',
+                """{"type":"thread.started","thread_id":"t-1"}""",
+                """{"type":"item.completed","item":{"type":"agent_message","text":""" +
+                System.Text.Json.JsonSerializer.Serialize(earlyJson) + "}}",
+                """{"type":"item.completed","item":{"type":"agent_message","text":""" +
+                System.Text.Json.JsonSerializer.Serialize(finalJson) + "}}"
+            );
+
+            ProcessRunnerDelegate runner =
+                (exe, args, wd, t, ct, stdin, remove, name)
+                    => Task.FromResult((0, stdout, ""));
+
+            var executor = new CodexAgentExecutor(
+                Options.Create(new CodexCliLlmOptions()),
+                NullLogger<CodexAgentExecutor>.Instance,
+                runner);
+
+            var result = await executor.ExecuteAsync(
+                CreateContext(workspace, promptFile), CancellationToken.None);
+
+            Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+            Assert.Equal("Got it.", result.Detail);
+        }
+        finally { CleanupWorkspace(workspace); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_LegacyStructuredOutputEvent_StillTakesPrecedence()
+    {
+        // Backward compat: if BOTH a legacy structured_output event AND a new-shape
+        // agent_message exist, the legacy event wins. (Defensive ordering for
+        // hybrid CLI builds; in practice 0.125.0 emits only the latter.)
+        var (workspace, promptFile) = NewWorkspace();
+        try
+        {
+            var stdout = string.Join('\n',
+                """{"type":"thread.started","thread_id":"t-1"}""",
+                """{"type":"result","structured_output":{"outcome":"COMPLETE","detail":"legacy wins"}}""",
+                """{"type":"item.completed","item":{"type":"agent_message","text":"{\"outcome\":\"ERROR\",\"detail\":\"new path\"}"}}"""
+            );
+
+            ProcessRunnerDelegate runner =
+                (exe, args, wd, t, ct, stdin, remove, name)
+                    => Task.FromResult((0, stdout, ""));
+
+            var executor = new CodexAgentExecutor(
+                Options.Create(new CodexCliLlmOptions()),
+                NullLogger<CodexAgentExecutor>.Instance,
+                runner);
+
+            var result = await executor.ExecuteAsync(
+                CreateContext(workspace, promptFile), CancellationToken.None);
+
+            Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+            Assert.Equal("legacy wins", result.Detail);
+        }
+        finally { CleanupWorkspace(workspace); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_AgentMessageWithMalformedJson_ThrowsLoudly()
+    {
+        // If the agent_message text isn't a JSON object with a recognised
+        // outcome, the fallback should NOT silently accept it — fall through
+        // to the existing no-structured-output diagnostic.
+        var (workspace, promptFile) = NewWorkspace();
+        try
+        {
+            var stdout = string.Join('\n',
+                """{"type":"thread.started","thread_id":"t-1"}""",
+                """{"type":"item.completed","item":{"type":"agent_message","text":"This is just markdown prose, no JSON."}}"""
+            );
+
+            ProcessRunnerDelegate runner =
+                (exe, args, wd, t, ct, stdin, remove, name)
+                    => Task.FromResult((0, stdout, ""));
+
+            var executor = new CodexAgentExecutor(
+                Options.Create(new CodexCliLlmOptions()),
+                NullLogger<CodexAgentExecutor>.Instance,
+                runner);
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => executor.ExecuteAsync(CreateContext(workspace, promptFile), CancellationToken.None));
+
+            Assert.Contains("no structured_output", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { CleanupWorkspace(workspace); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_AgentMessageWithFencedJson_ParsesCorrectly()
+    {
+        // Some Codex variants wrap the outcome JSON in ```json``` fences inside
+        // agent_message.text. The parser strips the fences before parsing.
+        var (workspace, promptFile) = NewWorkspace();
+        try
+        {
+            var fencedText = "```json\n{\"outcome\":\"COMPLETE\",\"detail\":\"ok\"}\n```";
+            var stdout = string.Join('\n',
+                """{"type":"thread.started","thread_id":"t-1"}""",
+                """{"type":"item.completed","item":{"type":"agent_message","text":""" +
+                System.Text.Json.JsonSerializer.Serialize(fencedText) + "}}"
+            );
+
+            ProcessRunnerDelegate runner =
+                (exe, args, wd, t, ct, stdin, remove, name)
+                    => Task.FromResult((0, stdout, ""));
+
+            var executor = new CodexAgentExecutor(
+                Options.Create(new CodexCliLlmOptions()),
+                NullLogger<CodexAgentExecutor>.Instance,
+                runner);
+
+            var result = await executor.ExecuteAsync(
+                CreateContext(workspace, promptFile), CancellationToken.None);
+
+            Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+            Assert.Equal("ok", result.Detail);
+        }
+        finally { CleanupWorkspace(workspace); }
+    }
+
     // ── Stderr hint detection surfaces in the thrown exception ────────────────
 
     [Theory]

@@ -85,23 +85,40 @@ public class AgentSchemasTests
     }
 
     [Fact]
-    public void EvaluatorOutcomeSchema_RequiresWinnerIndexWhenOutcomeIsComplete()
+    public void EvaluatorOutcomeSchema_RequiresWinnerIndexAlwaysAsNullableInteger()
     {
-        // The whole point of this schema: when outcome=COMPLETE, the LLM cannot
-        // omit winner_index. JSON Schema 2020-12 if/then is the mechanism.
+        // v0.0.17: Replaced the prior if/then "required when outcome=COMPLETE"
+        // formulation, which Claude CLI's --json-schema treated as a soft hint
+        // rather than enforcing at the wire level. "Always required" with a
+        // ["integer", "null"] type is reliably enforced; parser-side defense
+        // in CandidateExecutor rejects outcome=COMPLETE with a null winner_index.
         using var doc = JsonDocument.Parse(AgentSchemas.EvaluatorOutcomeSchema);
 
-        var ifClause = doc.RootElement.GetProperty("if");
-        var ifConst = ifClause
-            .GetProperty("properties")
-            .GetProperty("outcome")
-            .GetProperty("const")
-            .GetString();
-        Assert.Equal("COMPLETE", ifConst);
-
-        var thenRequired = doc.RootElement.GetProperty("then").GetProperty("required");
-        var required = thenRequired.EnumerateArray().Select(e => e.GetString()).ToList();
+        var required = doc.RootElement.GetProperty("required")
+            .EnumerateArray().Select(e => e.GetString()).ToList();
         Assert.Contains("winner_index", required);
+
+        var winnerType = doc.RootElement
+            .GetProperty("properties")
+            .GetProperty("winner_index")
+            .GetProperty("type")
+            .EnumerateArray()
+            .Select(e => e.GetString())
+            .ToList();
+        Assert.Equal(new[] { "integer", "null" }, winnerType);
+    }
+
+    [Fact]
+    public void EvaluatorOutcomeSchema_DoesNotUseIfThenConstruct()
+    {
+        // The if/then keywords were dropped because Claude CLI's --json-schema
+        // does not enforce them at the wire level. Regression guard: if anyone
+        // re-introduces them, the schema fix from issue #2 is silently lost.
+        using var doc = JsonDocument.Parse(AgentSchemas.EvaluatorOutcomeSchema);
+        Assert.False(doc.RootElement.TryGetProperty("if", out _),
+            "EvaluatorOutcomeSchema must not use 'if' — Claude CLI does not enforce conditional schemas.");
+        Assert.False(doc.RootElement.TryGetProperty("then", out _),
+            "EvaluatorOutcomeSchema must not use 'then' — Claude CLI does not enforce conditional schemas.");
     }
 
     // ── Evaluator schema (OpenAI) ────────────────────────────────────────────
