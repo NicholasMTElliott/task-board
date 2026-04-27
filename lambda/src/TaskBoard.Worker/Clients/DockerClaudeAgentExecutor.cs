@@ -444,11 +444,17 @@ public sealed class DockerClaudeAgentExecutor(
 
         var args = new List<string>
         {
-            "--model", context.Model,
             "--verbose",
             "--output-format", "stream-json",
             "--max-budget-usd", budget.ToString("F2"),
         };
+
+        // Pass --model only when set. Cross-provider candidates may leave Model
+        // null so the role's default doesn't leak into a different provider.
+        if (!string.IsNullOrWhiteSpace(context.Model))
+        {
+            args.AddRange(["--model", context.Model]);
+        }
 
         if (context.ProviderParams?.TryGetValue("permissionMode", out var pm) != true
             || !string.Equals(pm, "none", StringComparison.OrdinalIgnoreCase))
@@ -456,9 +462,10 @@ public sealed class DockerClaudeAgentExecutor(
             args.AddRange(["--permission-mode", "bypassPermissions", "--allowedTools", "*"]);
         }
 
+        var schema = context.SchemaOverride ?? AgentSchemas.OutcomeSchema;
         args.AddRange([
             "--no-session-persistence",
-            "--json-schema", AgentOutputParser.MinifyJson(AgentSchemas.OutcomeSchema),
+            "--json-schema", AgentOutputParser.MinifyJson(schema),
             "--append-system-prompt-file", containerSystemPromptPath,
         ]);
 

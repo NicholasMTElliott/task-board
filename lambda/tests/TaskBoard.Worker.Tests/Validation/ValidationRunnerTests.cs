@@ -15,6 +15,11 @@ public class ValidationRunnerTests
         }
     }
 
+    // The Docker image probe is orthogonal to these tests — they exercise the
+    // board-shape and prompt-file passes only. Use a no-op probe so missing
+    // images don't pollute the findings under test.
+    private static readonly IDockerImageProbe NoDockerProbe = new NullDockerImageProbe();
+
     private static WorkflowConfig ValidConfig() => new(
         States: new Dictionary<string, WorkflowState>
         {
@@ -36,7 +41,7 @@ public class ValidationRunnerTests
     {
         var shape = new BoardShape(["Ready", "Done"], [], []);
         var runner = new ValidationRunner(
-            ValidConfig(), new FakeProbe(shape), "github", "1", NullLogger<ValidationRunner>.Instance);
+            ValidConfig(), new FakeProbe(shape), NoDockerProbe, "github", "1", NullLogger<ValidationRunner>.Instance);
 
         var exit = await runner.RunAsync(CancellationToken.None);
 
@@ -51,7 +56,7 @@ public class ValidationRunnerTests
 
         var runner = new ValidationRunner(
             cfg, new FakeProbe(new BoardShape(["Ready", "Done"], [], [])),
-            "github", "1", NullLogger<ValidationRunner>.Instance);
+            NoDockerProbe, "github", "1", NullLogger<ValidationRunner>.Instance);
 
         var exit = await runner.RunAsync(CancellationToken.None);
 
@@ -64,7 +69,7 @@ public class ValidationRunnerTests
         // Board is missing the "Done" column
         var runner = new ValidationRunner(
             ValidConfig(), new FakeProbe(new BoardShape(["Ready"], [], [])),
-            "github", "1", NullLogger<ValidationRunner>.Instance);
+            NoDockerProbe, "github", "1", NullLogger<ValidationRunner>.Instance);
 
         var exit = await runner.RunAsync(CancellationToken.None);
 
@@ -77,7 +82,7 @@ public class ValidationRunnerTests
         // stub provider: probe can't introspect, should not fail the run
         var runner = new ValidationRunner(
             ValidConfig(), new FakeProbe(shape: null),
-            "stub", "1", NullLogger<ValidationRunner>.Instance);
+            NoDockerProbe, "stub", "1", NullLogger<ValidationRunner>.Instance);
 
         var exit = await runner.RunAsync(CancellationToken.None);
 
@@ -92,7 +97,7 @@ public class ValidationRunnerTests
 
         var runner = new ValidationRunner(
             cfg, new FakeProbe(null, new InvalidOperationException("auth")),
-            "github", "1", NullLogger<ValidationRunner>.Instance);
+            NoDockerProbe, "github", "1", NullLogger<ValidationRunner>.Instance);
 
         var exit = await runner.RunAsync(CancellationToken.None);
 
@@ -125,10 +130,66 @@ public class ValidationRunnerTests
 
         var runner = new ValidationRunner(
             cfg, new FakeProbe(new BoardShape(["Ready", "Done"], [], [])),
-            "github", "1", NullLogger<ValidationRunner>.Instance);
+            NoDockerProbe, "github", "1", NullLogger<ValidationRunner>.Instance);
 
         var exit = await runner.RunAsync(CancellationToken.None);
 
         Assert.Equal(1, exit);
+    }
+
+    // ── Docker image probe pass ───────────────────────────────────────────────
+
+    private sealed class FakeDockerProbe(IReadOnlyList<DockerImageCheck> results) : IDockerImageProbe
+    {
+        public Task<IReadOnlyList<DockerImageCheck>> CheckAsync(
+            IReadOnlySet<string> providerKeys, CancellationToken ct) =>
+            Task.FromResult(results);
+    }
+
+    [Fact]
+    public async Task DockerProbeReportsMissingImage_EmitsWarning_NotError()
+    {
+        // A workflow that registers docker-opencode in candidates but the
+        // image isn't built locally — KvA's v0.0.15 reproduction. Validation
+        // should warn (not error) so the operator sees the problem before
+        // running a card.
+        var cfg = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Ready"] = new("Ready", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("Done"),
+                    },
+                    PipelineOrder: 1,
+                    Steps:
+                    [
+                        new WorkflowStep(
+                            Name: "implement", Role: "ba", TaskPrompt: "do",
+                            Candidates: [new CandidateOverride("docker-opencode")],
+                            Evaluator: new EvaluatorConfig("ba", TaskPrompt: "judge")),
+                    ]),
+                ["Done"] = new("Done", null, "terminal", null, new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["ba"] = new("m", "s", ["S"]),
+            });
+
+        var dockerProbe = new FakeDockerProbe([
+            new DockerImageCheck(
+                "docker-opencode", "aiboard-opencode-sandbox:latest",
+                ExistsLocally: false,
+                ProbeError: "No such image"),
+        ]);
+
+        var runner = new ValidationRunner(
+            cfg, new FakeProbe(new BoardShape(["Ready", "Done"], [], [])),
+            dockerProbe, "github", "1", NullLogger<ValidationRunner>.Instance);
+
+        var exit = await runner.RunAsync(CancellationToken.None);
+
+        // Missing image is a warning, not an error → exit 0.
+        Assert.Equal(0, exit);
     }
 }

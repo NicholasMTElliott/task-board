@@ -93,6 +93,25 @@ configSources.Add("  env    environment variables  [checked]");
 builder.Configuration.AddCommandLine(args, CliDefinitions.SwitchMappings);
 configSources.Add($"  cli    command-line arguments  [{(args.Length == 0 ? "none provided" : $"{args.Length} arg(s)")}]");
 
+// Reject unknown CLI flags loudly. AddCommandLine silently ignores anything
+// that doesn't match SwitchMappings, which means a typo like `--validate`
+// falls through to whatever Mode is set in appsettings.user.json. KvA hit
+// exactly this on v0.0.15 (typed --validate, ran in polling mode). Bail
+// before doing anything else so the operator sees the typo and can fix it.
+{
+    var report = CliDefinitions.ValidateKnownFlags(args);
+    if (report.UnknownFlags.Count > 0)
+    {
+        Console.Error.WriteLine(
+            $"Unknown CLI flag(s): {string.Join(", ", report.UnknownFlags)}.");
+        foreach (var (typo, suggestion) in report.TypoHints)
+            Console.Error.WriteLine($"  Did you mean '{suggestion}' instead of '{typo}'?");
+        Console.Error.WriteLine("Run 'aiboard --help' for the full list of recognised flags.");
+        Environment.ExitCode = 1;
+        return;
+    }
+}
+
 // ── 3. Resolve prompt base directory ─────────────────────────────────────────
 var promptBaseDir = promptRootArg is not null
     ? CliDefinitions.ResolvePath(promptRootArg)
@@ -209,6 +228,12 @@ switch (boardProvider)
 
 // Default probe for providers without a dedicated implementation (stub, trello)
 builder.Services.TryAddSingleton<IBoardShapeProbe, NullBoardShapeProbe>();
+
+// Docker image probe — used by ValidationRunner to warn about missing sandbox
+// images. Always registers the real probe; if Docker isn't available it
+// surfaces a per-image ProbeError that ValidationRunner converts to an Info
+// finding (the whole probe pass is wrapped in try/catch as well).
+builder.Services.AddSingleton<IDockerImageProbe, DockerImageProbe>();
 
 // ── 6. Agent executor selection ──────────────────────────────────────────────
 // AGENT_EXECUTOR=stub              → all providers mapped to stub (testing/dev)
@@ -887,8 +912,10 @@ if (mode == "validation")
     using var scope = host.Services.CreateScope();
     var workflowCfg = scope.ServiceProvider.GetRequiredService<WorkflowConfig>();
     var probe = scope.ServiceProvider.GetRequiredService<IBoardShapeProbe>();
+    var dockerImageProbe = scope.ServiceProvider.GetRequiredService<IDockerImageProbe>();
     var runnerLogger = scope.ServiceProvider.GetRequiredService<ILogger<ValidationRunner>>();
-    var validationRunner = new ValidationRunner(workflowCfg, probe, boardProvider, boardId, runnerLogger);
+    var validationRunner = new ValidationRunner(
+        workflowCfg, probe, dockerImageProbe, boardProvider, boardId, runnerLogger);
 
     var exitCode = await validationRunner.RunAsync(CancellationToken.None);
     Environment.ExitCode = exitCode;

@@ -2094,4 +2094,128 @@ public class WorkflowConfigValidatorAllowedChildrenTests
         Assert.Contains(warnings, w =>
             w.Contains("Codex role 'codex_role'") && w.Contains("no sandbox policy"));
     }
+
+    // ── Audit: cross-provider candidate model leak ────────────────────────────
+
+    [Fact]
+    public void Audit_CrossProviderCandidate_NoModelOverride_ProducesWarning()
+    {
+        // Role's provider is claude-cli with a Claude model name; candidate
+        // overrides provider to codex but doesn't override model. The role's
+        // Claude model must NOT leak into Codex CLI's --model arg — the runtime
+        // suppresses it, and the audit warns the operator to pin a model
+        // explicitly so the candidate isn't running on whatever the executor's
+        // own default happens to be.
+        var cfg = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["impl"] = new("Implementing", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("impl"),
+                        ["ERROR"]    = TransitionTarget.ForColumn("impl"),
+                    },
+                    Steps:
+                    [
+                        new WorkflowStep(
+                            Name: "implement",
+                            Role: "implementer",
+                            TaskPrompt: "do it",
+                            Candidates:
+                            [
+                                new CandidateOverride("codex"),  // no model override
+                                new CandidateOverride("docker-claude-cli"),
+                            ],
+                            Evaluator: new EvaluatorConfig("evaluator", TaskPrompt: "judge")),
+                    ]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["implementer"] = new("claude-opus-4-6", "sys", [], Provider: "claude-cli"),
+                ["evaluator"]   = new("claude-opus-4-6", "sys", [], Provider: "claude-cli"),
+            });
+
+        var warnings = WorkflowConfigValidator.Audit(cfg);
+
+        Assert.Contains(warnings, w =>
+            w.Contains("step 'implement' candidate #0")
+            && w.Contains("provider 'codex'")
+            && w.Contains("Set 'model' on the candidate"));
+    }
+
+    [Fact]
+    public void Audit_CrossProviderCandidate_WithModelOverride_NoWarning()
+    {
+        // Same shape as above but candidate pins its own model — the operator
+        // has made an intentional choice; no warning.
+        var cfg = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["impl"] = new("Implementing", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("impl"),
+                        ["ERROR"]    = TransitionTarget.ForColumn("impl"),
+                    },
+                    Steps:
+                    [
+                        new WorkflowStep(
+                            Name: "implement",
+                            Role: "implementer",
+                            TaskPrompt: "do it",
+                            Candidates:
+                            [
+                                new CandidateOverride("codex", Model: "gpt-5.4"),
+                            ],
+                            Evaluator: new EvaluatorConfig("evaluator", TaskPrompt: "judge")),
+                    ]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["implementer"] = new("claude-opus-4-6", "sys", [], Provider: "claude-cli"),
+                ["evaluator"]   = new("claude-opus-4-6", "sys", [], Provider: "claude-cli"),
+            });
+
+        var warnings = WorkflowConfigValidator.Audit(cfg);
+
+        Assert.DoesNotContain(warnings, w => w.Contains("candidate #0"));
+    }
+
+    [Fact]
+    public void Audit_SameProviderCandidate_InheritsRoleModel_NoWarning()
+    {
+        // Candidate's provider matches role's — the role's model is the right
+        // default, no warning.
+        var cfg = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["impl"] = new("Implementing", null, "agent_run", null,
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("impl"),
+                        ["ERROR"]    = TransitionTarget.ForColumn("impl"),
+                    },
+                    Steps:
+                    [
+                        new WorkflowStep(
+                            Name: "implement",
+                            Role: "implementer",
+                            TaskPrompt: "do it",
+                            Candidates:
+                            [
+                                new CandidateOverride("claude-cli"),
+                            ],
+                            Evaluator: new EvaluatorConfig("evaluator", TaskPrompt: "judge")),
+                    ]),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["implementer"] = new("claude-opus-4-6", "sys", [], Provider: "claude-cli"),
+                ["evaluator"]   = new("claude-opus-4-6", "sys", [], Provider: "claude-cli"),
+            });
+
+        var warnings = WorkflowConfigValidator.Audit(cfg);
+
+        Assert.DoesNotContain(warnings, w => w.Contains("candidate #0"));
+    }
 }

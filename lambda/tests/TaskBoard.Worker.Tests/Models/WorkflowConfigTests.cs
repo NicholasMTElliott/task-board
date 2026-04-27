@@ -208,4 +208,56 @@ public class WorkflowConfigTests
 
         Assert.Single(providers);
     }
+
+    // ── GetAllReferencedProviders tests ───────────────────────────────────────
+
+    [Fact]
+    public void GetAllReferencedProviders_IncludesRoleAndCandidateProviders()
+    {
+        // Workflow uses claude-cli for the step's role but routes one candidate
+        // through codex and another through docker-opencode. The probe needs to
+        // see ALL three providers so it can check ALL the relevant images.
+        var config = MakeConfig(
+            roles: new Dictionary<string, WorkflowRole>
+            {
+                ["impl"] = new("claude-opus-4-6", "prompt", [], Provider: "claude-cli"),
+            },
+            steps:
+            [
+                new WorkflowStep(
+                    Name: "implement",
+                    Role: "impl",
+                    TaskPrompt: "do",
+                    Candidates:
+                    [
+                        new CandidateOverride("docker-opencode"),
+                        new CandidateOverride("codex"),
+                    ],
+                    Evaluator: new EvaluatorConfig("impl", TaskPrompt: "judge")),
+            ]);
+
+        var providers = config.GetAllReferencedProviders();
+
+        Assert.Contains("claude-cli", providers);
+        Assert.Contains("docker-opencode", providers);
+        Assert.Contains("codex", providers);
+    }
+
+    [Fact]
+    public void GetAllReferencedProviders_NoCandidates_ReturnsRolesOnly()
+    {
+        var config = MakeConfig(
+            roles: new Dictionary<string, WorkflowRole>
+            {
+                ["impl"] = new("m", "p", [], Provider: "claude-cli"),
+                ["gate"] = new("m", "p", [], Provider: "docker-claude-cli"),
+            },
+            steps: [new WorkflowStep("step1", "impl")]);
+
+        var providers = config.GetAllReferencedProviders();
+
+        Assert.Equal(2, providers.Count);
+        Assert.Contains("claude-cli", providers);
+        Assert.Contains("docker-claude-cli", providers);
+    }
 }

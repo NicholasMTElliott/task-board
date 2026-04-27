@@ -100,6 +100,28 @@ public sealed class CandidateExecutor(
             var verdict = ParseEvaluatorVerdict(
                 evaluatorResult, executions.Count, evaluatorCfg.Scoring);
 
+            // Schema-violation defense: outcome=COMPLETE without a winner_index
+            // is the failure mode KvA hit on v0.0.15. The evaluator schema
+            // (EvaluatorOutcomeSchema) makes winner_index required when
+            // outcome=COMPLETE, but we still defend in code for two reasons:
+            //   (1) The OpenAI variant types winner_index as ["integer", "null"]
+            //       because OpenAI structured outputs don't support if/then —
+            //       so a null can still slip through on the codex path.
+            //   (2) Some CLI versions / models may drift on schema enforcement.
+            // Surface this as ERROR with a clear message instead of silently
+            // discarding all candidates.
+            if (evaluatorResult.Outcome == AgentOutcome.COMPLETE && verdict.WinnerIndex is null)
+            {
+                logger.LogWarning(
+                    "Evaluator returned outcome=COMPLETE but winner_index was missing or null for step '{StepName}' — overriding to ERROR (schema violation).",
+                    request.Step.Name);
+                evaluatorResult = new AgentResult(
+                    AgentOutcome.ERROR,
+                    "Evaluator returned outcome=COMPLETE but did not include a winner_index. " +
+                    "The evaluator schema requires winner_index when outcome=COMPLETE; the response violated this contract. " +
+                    "Original detail:\n\n" + (evaluatorResult.Detail ?? "(empty)"));
+            }
+
             await PersistEvaluatorVerdictAsync(
                 request.RunId, groupId, executions, verdict, cancellationToken);
 
@@ -213,10 +235,20 @@ public sealed class CandidateExecutor(
 
         var executor = executorResolver.Resolve(candidate.Provider);
 
-        // Resolve the model and provider params: candidate overrides win, but
-        // unset values fall back to the step's role defaults.
+        // Resolve the model and provider params. Precedence:
+        //   1. candidate.Model — explicit override always wins
+        //   2. role.Model — applies ONLY when the candidate's provider matches
+        //      the role's. Otherwise the role's default name (e.g. an Anthropic
+        //      model on a senior_engineer role) would leak into a different
+        //      provider's executor (e.g. Codex), which then errors with
+        //      "the 'claude-opus-4-6' model is not supported when using Codex
+        //      with a ChatGPT account." When the providers diverge, leave
+        //      Model null so the executor falls back to its own default.
         var role = request.Role;
-        var model = candidate.Model ?? role.Model;
+        var model = candidate.Model
+            ?? (string.Equals(candidate.Provider, role.Provider, StringComparison.OrdinalIgnoreCase)
+                ? role.Model
+                : null);
         var providerParams = MergeProviderParams(request.StateProviderParams, candidate.ProviderParams);
 
         var startedAt = DateTimeOffset.UtcNow;
@@ -234,7 +266,7 @@ public sealed class CandidateExecutor(
                 "Failed to create candidate worktree for index {Index} (branch={Branch})",
                 index, candidateBranch);
             return CandidateExecution.FailedSetup(
-                index, candidate.Provider, model, candidateBranch,
+                index, candidate.Provider, model ?? "(provider default)", candidateBranch,
                 startedAt, ex.Message);
         }
 
@@ -308,7 +340,11 @@ public sealed class CandidateExecutor(
         }
 
         // Persist the candidate row immediately so the in-flight work is
-        // recorded even if the evaluator step blows up later.
+        // recorded even if the evaluator step blows up later. step_result.model
+        // is NOT NULL in the schema, so we use a sentinel when the candidate
+        // ran with the executor's default (cross-provider candidate, no model
+        // override).
+        var modelForRecord = model ?? "(provider default)";
         var stepRecord = new StepResultRecord(
             RunId: request.RunId,
             CardId: request.CardId,
@@ -316,7 +352,7 @@ public sealed class CandidateExecutor(
             StepName: $"{step.Name}:cand-{index}:{providerSlug}",
             StepIndex: request.StepIndex,
             Role: step.Role,
-            Model: model,
+            Model: modelForRecord,
             Outcome: result.Outcome,
             Summary: result.Detail,
             Detail: null,
@@ -347,7 +383,7 @@ public sealed class CandidateExecutor(
         return new CandidateExecution(
             Index: index,
             Provider: candidate.Provider,
-            Model: model,
+            Model: modelForRecord,
             BranchName: candidateBranch,
             WorktreePath: candidateWorktreePath,
             AgentResult: result,
@@ -543,6 +579,18 @@ public sealed class CandidateExecutor(
         // The evaluator runs against the canonical worktree (it doesn't write
         // code — it reads each candidate's diff via the embedded prompt and
         // returns a structured verdict).
+        //
+        // SchemaOverride: pin the response shape to the evaluator-specific
+        // schema so winner_index is required when outcome=COMPLETE. Without
+        // this, the LLM can pick a winner in prose but omit the structured
+        // field, and the orchestrator silently cleans up all candidates with
+        // no winner promoted (KvA card #3 v0.0.15 reproduction). The variant
+        // matches the evaluator's provider — codex needs the OpenAI shape;
+        // everything else uses the JSON-Schema-2020-12 if/then form.
+        var schemaOverride = string.Equals(evaluatorRole.Provider, "codex", StringComparison.OrdinalIgnoreCase)
+            ? AgentSchemas.EvaluatorOutcomeSchemaOpenAI
+            : AgentSchemas.EvaluatorOutcomeSchema;
+
         var context = new AgentExecutionContext(
             TargetCardId: request.CardId,
             TargetCardTitle: request.CardTitle,
@@ -551,7 +599,8 @@ public sealed class CandidateExecutor(
             SystemPromptFilePath: evaluatorSystemPromptPath,
             Model: evaluatorRole.Model,
             ProviderParams: request.StateProviderParams,
-            CommentsFilePath: request.CommentsFilePath);
+            CommentsFilePath: request.CommentsFilePath,
+            SchemaOverride: schemaOverride);
 
         AgentResult evaluatorResult;
         try
@@ -690,8 +739,9 @@ public sealed class CandidateExecutor(
         sb.AppendLine("- `outcome`: `COMPLETE` if you can pick a winner, `NEEDS_INFO` if you need more, `ERROR` if all candidates are unacceptable.");
         sb.AppendLine("- `detail`: GitHub-flavored markdown summary that gets posted as the step comment.");
         sb.AppendLine();
-        sb.AppendLine("When `outcome = COMPLETE`, also include:");
+        sb.AppendLine("When `outcome = COMPLETE`, you **MUST** include:");
         sb.AppendLine("- `winner_index`: integer (0-indexed) selecting the best candidate.");
+        sb.AppendLine("  The schema enforces this — a COMPLETE response without `winner_index` is rejected as a schema violation, the run is marked ERROR, and no winner is promoted. Picking the winner in prose only is not enough; the structured field is the only signal the orchestrator reads.");
 
         if (evaluatorCfg.Scoring == EvaluatorScoring.WinnerWithScores)
         {

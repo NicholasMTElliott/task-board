@@ -412,7 +412,50 @@ public static class WorkflowConfigValidator
     {
         var warnings = new List<string>();
         AuditCodexSandboxDefaults(config, warnings);
+        AuditCrossProviderCandidateModels(config, warnings);
         return warnings;
+    }
+
+    /// <summary>
+    /// Warns when a candidate's <c>provider</c> differs from its step role's
+    /// configured provider AND the candidate doesn't pin a <c>model</c>.
+    /// In that case the runtime will deliberately NOT pass the role's default
+    /// model to the candidate's executor — the role default is provider-scoped
+    /// and would be nonsense for a different provider (e.g. Codex CLI rejects
+    /// <c>--model claude-opus-4-6</c> with "model not supported when using
+    /// Codex with a ChatGPT account"). The candidate's executor will fall back
+    /// to its own default model, which may not be what the operator wanted.
+    /// Pin a model on the candidate to silence this warning.
+    /// </summary>
+    private static void AuditCrossProviderCandidateModels(WorkflowConfig config, List<string> warnings)
+    {
+        foreach (var (stateId, state) in config.States)
+        {
+            if (state.Steps is not { Count: > 0 }) continue;
+
+            foreach (var step in state.Steps)
+            {
+                if (step.Candidates is not { Count: > 0 }) continue;
+                if (!config.Roles.TryGetValue(step.Role, out var role)) continue;
+
+                for (var i = 0; i < step.Candidates.Count; i++)
+                {
+                    var candidate = step.Candidates[i];
+                    if (string.IsNullOrEmpty(candidate.Provider)) continue;
+                    if (string.Equals(candidate.Provider, role.Provider, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (!string.IsNullOrWhiteSpace(candidate.Model)) continue;
+
+                    warnings.Add(
+                        $"State '{stateId}' ({state.Name}) step '{step.Name}' candidate #{i} uses provider " +
+                        $"'{candidate.Provider}' on role '{step.Role}' (role.provider='{role.Provider}', " +
+                        $"role.model='{role.Model}'). The role's default model will NOT be passed to the " +
+                        $"candidate's executor (it would mis-route across providers — e.g. a Claude model name " +
+                        $"on a Codex executor). The candidate's executor will use its own default. " +
+                        $"Set 'model' on the candidate to pin a specific model for this provider.");
+                }
+            }
+        }
     }
 
     /// <summary>

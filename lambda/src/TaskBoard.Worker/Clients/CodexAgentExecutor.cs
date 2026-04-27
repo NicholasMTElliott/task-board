@@ -53,7 +53,8 @@ public sealed class CodexAgentExecutor(
                 combinedPrompt.Length);
         }
 
-        var schemaJson = AgentOutputParser.MinifyJson(AgentSchemas.OutcomeSchemaOpenAI);
+        var schemaSource = context.SchemaOverride ?? AgentSchemas.OutcomeSchemaOpenAI;
+        var schemaJson = AgentOutputParser.MinifyJson(schemaSource);
         var schemaHash = Sha256Prefix(schemaJson);
         logger.LogInformation(
             "Codex output schema: {Length} chars, sha256={Hash}",

@@ -456,7 +456,7 @@ public sealed class DockerClaudeQwenAgentExecutor(
             // Anthropic, so structured-output reliability matches the
             // real-Anthropic path (per the local-llm/Qwen-3.6.md card's 96.7–100%
             // tool-call benchmark).
-            "--json-schema", AgentOutputParser.MinifyJson(AgentSchemas.OutcomeSchema),
+            "--json-schema", AgentOutputParser.MinifyJson(context.SchemaOverride ?? AgentSchemas.OutcomeSchema),
             "--append-system-prompt-file", containerSystemPromptPath,
         ]);
 

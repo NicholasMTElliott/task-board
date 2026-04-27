@@ -148,11 +148,18 @@ public sealed class ClaudeAgentExecutor(
 
         var args = new List<string>
         {
-            "--model", context.Model,
             "--verbose",
             "--output-format", "stream-json",
             "--max-budget-usd", budget.ToString("F2"),
         };
+
+        // Pass --model only when set. Cross-provider candidates may leave Model
+        // null so the role's default (e.g., a Claude model name) doesn't leak
+        // into a different provider; in that case the CLI uses its own default.
+        if (!string.IsNullOrWhiteSpace(context.Model))
+        {
+            args.AddRange(["--model", context.Model]);
+        }
 
         // Permission/tools: omit for print-mode invocations (e.g., gate checks)
         if (context.ProviderParams?.TryGetValue("permissionMode", out var pm) != true
@@ -161,9 +168,10 @@ public sealed class ClaudeAgentExecutor(
             args.AddRange(["--permission-mode", "bypassPermissions", "--allowedTools", "*"]);
         }
 
+        var schema = context.SchemaOverride ?? AgentSchemas.OutcomeSchema;
         args.AddRange([
             "--no-session-persistence",
-            "--json-schema", AgentOutputParser.MinifyJson(AgentSchemas.OutcomeSchema),
+            "--json-schema", AgentOutputParser.MinifyJson(schema),
             "--append-system-prompt-file", context.SystemPromptFilePath,
         ]);
 

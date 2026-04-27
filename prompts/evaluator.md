@@ -32,8 +32,9 @@ Required:
 - `outcome`: `COMPLETE` (winner picked), `NEEDS_INFO` (need more from the operator before deciding), or `ERROR` (no candidate is acceptable).
 - `detail`: GitHub-flavored markdown summary that gets posted as the step comment. Lead with the verdict and a short justification. Include a scoreboard table if the task prompt requested per-candidate scores.
 
-When `outcome = COMPLETE`, also include:
+When `outcome = COMPLETE`, you **MUST** include:
 - `winner_index`: integer (0-indexed) selecting the best candidate.
+  The output schema enforces this — a COMPLETE response without `winner_index` is rejected as a schema violation, the run is marked ERROR, and no winner is promoted. Picking the winner in prose only is not enough; the structured field is the only signal the orchestrator reads.
 - `scores` (when the task prompt asks for per-candidate scores): one object per candidate with `index`, `score` (0–10), and a one-sentence `reasoning`.
 
 If you produce both prose and JSON, the JSON must come last so the parser can extract it reliably.

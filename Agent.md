@@ -492,12 +492,23 @@ There are **five real executors** plus a stub. All implement `IAgentExecutor`; s
 
 ### 8.2 OpenAI (via `codex`)
 
-Model selection is handled by Codex CLI; what's exposed via `providerParams`:
+Codex CLI accepts an explicit `--model` arg. The runtime passes it from the role's `model` field (or a candidate's `model` override). Models valid against a Codex / ChatGPT account today:
+
+| Model | Tier | Use for |
+|---|---|---|
+| `gpt-5.5` | Top | Hardest reasoning, slowest, most expensive — design / specialist reviews when you want to A/B against Opus |
+| `gpt-5.4` | Mid | Strong general use; the standard implementation / review pick on the OpenAI side |
+| `gpt-5.4-mini` | Light | Cheap and fast — gate checks, estimation, mechanical structured extraction |
+| `gpt-5.3-codex` | Coding-tuned | Implementation tasks where you want a coding-specialised pretrain over generality |
+
+`providerParams` exposed for Codex execution:
 - `sandbox: workspace-write | read-only | docker-network` — sandbox policy (auto-warned if neither set)
 - `fullAuto: true | false` — full autonomy
 - `yolo: true | false` — bypass all safety prompts (overrides `fullAuto` and `sandbox`)
 
 Workflow roles using `provider=codex` should pin one of `sandbox` / `yolo` / `fullAuto` in their `providerParams` — the workflow validator emits a warning otherwise.
+
+**Cross-provider candidates:** if a step's role has `provider: claude-cli` (so its `model` is e.g. `claude-opus-4-6`) but a candidate sets `provider: codex` without overriding `model`, the runtime now suppresses `--model` rather than passing the Anthropic name to Codex CLI (which would error). Pin `model` on the candidate to a value from the table above to silence the validator's audit warning.
 
 ### 8.3 Local Qwen3.6 (via `docker-opencode` or `docker-claude-qwen`)
 
@@ -571,6 +582,20 @@ Opt-in per step. Lets you run N agents in parallel against the same task, have a
 - `candidates` requires `evaluator` and vice versa.
 - Each candidate must specify a `provider`.
 - Evaluator's role must exist; evaluator must have `taskPrompt` or `taskPromptFile`.
+
+**Pick the right evaluator prompt for the step type** — `prompts/evaluator/` ships three task-prompt templates calibrated to different step shapes:
+
+| Prompt | Use for | Compares on |
+|---|---|---|
+| `code_review_candidates.md` | Implementation steps (`gitBehavior: commit_*`) | Per-candidate `git diff` (Correctness/Quality/Scope/Tests/Safety) |
+| `design_candidates.md` | Design / tasking steps (`gitBehavior: discard`) | Per-candidate `.aiboard/tasks/*.md` body and `updates/*.md` files (Completeness/Correctness/Actionability/Scope/Conventions) |
+| `gate_check_candidates.md` | Gate-check candidate groups (rare) | Per-candidate verdicts (Calibration/Reasoning/Conciseness) |
+
+If your step is `gitBehavior: discard`, do NOT route the evaluator to `code_review_candidates.md` — its rubric anchors on diffs that won't exist for discard candidates, and the evaluator will spuriously conclude "no design artifact was produced."
+
+**Schema enforcement on `winner_index`** — the evaluator's response schema (`AgentSchemas.EvaluatorOutcomeSchema`) makes `winner_index` required when `outcome=COMPLETE` (via JSON Schema `if`/`then`; the OpenAI variant uses parser-side enforcement). If the model returns `outcome=COMPLETE` without a `winner_index` (or with null), the orchestrator overrides the result to ERROR with a diagnostic detail rather than silently cleaning up all candidates with no promotion.
+
+**Cross-provider candidate model leak** — when a candidate's `provider` differs from the role's `provider` and the candidate doesn't pin its own `model`, the runtime suppresses `--model` rather than passing the role's default name (e.g. an Anthropic model name) to the wrong executor (e.g. Codex CLI, which would error). Pin `model` on the candidate to silence the validator's audit warning and give yourself a known model identity to attribute metrics to.
 
 **No artificial caps**: candidate count, duplicate-provider, and `gitBehavior=discard` were all rejected by the validator in earlier versions. They aren't anymore — eval-prompt size and wall-time are user-managed concerns; same-provider model A/B (Opus vs Sonnet on Claude) is a legitimate use case; design / tasking states (`gitBehavior: discard`) are now supported via file-based winner promotion (see below).
 

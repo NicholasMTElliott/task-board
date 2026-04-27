@@ -168,4 +168,63 @@ public class CliDefinitionsTests
         Assert.True(CliDefinitions.SwitchMappings.ContainsKey("--MODE"));
         Assert.True(CliDefinitions.SwitchMappings.ContainsKey("--Workflow-Config"));
     }
+
+    // ── ValidateKnownFlags ────────────────────────────────────────────────────
+
+    [Fact]
+    public void ValidateKnownFlags_AllRecognised_ReturnsEmpty()
+    {
+        var report = CliDefinitions.ValidateKnownFlags(
+            ["--mode", "polling", "--board-id", "1", "--workspace", "."]);
+        Assert.Empty(report.UnknownFlags);
+    }
+
+    [Fact]
+    public void ValidateKnownFlags_HelpForm_NotRejected()
+    {
+        var report = CliDefinitions.ValidateKnownFlags(["--help"]);
+        Assert.Empty(report.UnknownFlags);
+
+        var report2 = CliDefinitions.ValidateKnownFlags(["-h"]);
+        Assert.Empty(report2.UnknownFlags);
+
+        var report3 = CliDefinitions.ValidateKnownFlags(["-?"]);
+        Assert.Empty(report3.UnknownFlags);
+    }
+
+    [Fact]
+    public void ValidateKnownFlags_UnknownFlag_AppearsInReport()
+    {
+        var report = CliDefinitions.ValidateKnownFlags(["--definitely-not-real", "value"]);
+        Assert.Contains("--definitely-not-real", report.UnknownFlags);
+    }
+
+    [Fact]
+    public void ValidateKnownFlags_KvAReproduction_SuggestsModeValidation()
+    {
+        // KvA's exact v0.0.15 typo: typed --validate, expected --mode validation.
+        var report = CliDefinitions.ValidateKnownFlags(["--validate"]);
+        Assert.Contains("--validate", report.UnknownFlags);
+        Assert.True(report.TypoHints.TryGetValue("--validate", out var hint));
+        Assert.Equal("--mode validation", hint);
+    }
+
+    [Fact]
+    public void ValidateKnownFlags_NameEqualsValueForm_RecognisesFlag()
+    {
+        // --mode=polling is shorthand for --mode polling — the `=value` half is
+        // not a separate flag and should not trigger an unknown-flag rejection.
+        var report = CliDefinitions.ValidateKnownFlags(["--mode=polling"]);
+        Assert.Empty(report.UnknownFlags);
+    }
+
+    [Fact]
+    public void ValidateKnownFlags_PositionalValuesIgnored()
+    {
+        // Positional (non-flag) tokens shouldn't be rejected even if they
+        // happen to be unrecognised — only `-`-prefixed tokens are scrutinised.
+        var report = CliDefinitions.ValidateKnownFlags(
+            ["--mode", "agent", "some-positional-word"]);
+        Assert.Empty(report.UnknownFlags);
+    }
 }

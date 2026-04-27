@@ -109,10 +109,22 @@ The evaluator returns the standard Agent Contract JSON (`outcome` + `detail`) ex
 ```
 
 - `outcome = COMPLETE` + a valid `winner_index` → winner promoted, candidate rows updated.
-- `outcome = COMPLETE` + invalid/missing `winner_index` → no winner promoted; candidate worktrees torn down, canonical worktree unchanged. AgentRunner sees `COMPLETE` and follows the state's COMPLETE transition.
+- `outcome = COMPLETE` + missing/null `winner_index` → **schema violation**. The orchestrator overrides the result to `ERROR` with a diagnostic detail (instead of silently cleaning up with no winner promoted, which is the v0.0.15 KvA-reported bug). The evaluator schema (`AgentSchemas.EvaluatorOutcomeSchema`) makes `winner_index` required when `outcome = COMPLETE` via JSON Schema `if`/`then`; the OpenAI variant types it `["integer", "null"]` and relies on parser-side enforcement.
 - `outcome = NEEDS_INFO` / `ERROR` → no winner; cleanup; AgentRunner follows the matching transition.
 
 The parser accepts the JSON either as a top-level object (entire response) or inside a ```json fenced block. If both prose and JSON appear, the JSON must come last.
+
+### Picking the right evaluator prompt
+
+`prompts/evaluator/` ships three task-prompt templates. Pick the one that matches the step type you're putting candidates around — the rubric in each is calibrated for that step type, and the wrong rubric will anchor the evaluator on the wrong signals:
+
+| Prompt | Use for | Compares on |
+|---|---|---|
+| `code_review_candidates.md` | Implementation steps (`gitBehavior: commit_*`) | `git diff` from each candidate against the canonical branch (Correctness / Quality / Scope / Tests / Safety) |
+| `design_candidates.md` | Design / tasking steps and other write-ups (`gitBehavior: discard`) | Each candidate's `.aiboard/tasks/{cardId}.md` body and `.aiboard/updates/*.md` files (Completeness / Correctness / Actionability / Scope / Conventions / Conciseness). `git diff` is empty in discard mode and not used here. |
+| `gate_check_candidates.md` | Gate-check candidate groups (rare today) | Each candidate's pass/fail verdict and reasoning (Calibration / Reasoning quality / Conciseness) |
+
+Rule of thumb: if your step's `gitBehavior` is `discard`, don't point at `code_review_candidates.md` — its rubric anchors on diffs that won't exist, and the evaluator will spuriously conclude "no design artifact was produced."
 
 ---
 

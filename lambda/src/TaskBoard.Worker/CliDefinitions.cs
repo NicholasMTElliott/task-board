@@ -79,6 +79,69 @@ internal static class CliDefinitions
     public static bool ShouldShowHelp(string[] args) =>
         Array.Exists(args, a => a is "--help" or "-h" or "-?");
 
+    /// <summary>
+    /// Common typo / wrong-form flags mapped to a hint about the canonical form.
+    /// Hits print a "did you mean" line in addition to the generic unknown-flag
+    /// rejection. Add new entries when the same shape gets typed often enough.
+    /// </summary>
+    private static readonly Dictionary<string, string> CommonTypoHints = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["--validate"]   = "--mode validation",
+        ["--validation"] = "--mode validation",
+        ["--metrics"]    = "--mode metrics",
+        ["--polling"]    = "--mode polling",
+        ["--agent"]      = "--mode agent",
+        ["--queue"]      = "--mode queue",
+        ["--help-me"]    = "--help",
+    };
+
+    /// <summary>
+    /// Result of a CLI-arg sanity check. <see cref="UnknownFlags"/> is empty
+    /// when every <c>--foo</c>/<c>-x</c> token in <paramref name="args"/> is
+    /// either a recognised switch in <see cref="SwitchMappings"/>, the help
+    /// flag, or a value attached to one (e.g. <c>--mode=agent</c>'s <c>=agent</c>
+    /// half is consumed by the previous flag).
+    /// </summary>
+    public sealed record UnknownFlagsReport(
+        IReadOnlyList<string> UnknownFlags,
+        IReadOnlyDictionary<string, string> TypoHints);
+
+    /// <summary>
+    /// Scans <paramref name="args"/> for tokens that look like flags
+    /// (<c>--name</c> or <c>-x</c>) but aren't in <see cref="SwitchMappings"/>
+    /// or the help-flag set. AddCommandLine silently ignores unknown flags,
+    /// which means a typo like <c>--validate</c> falls through to whatever
+    /// <c>Mode</c> is set in appsettings.user.json (e.g. polling mode), which
+    /// is exactly the v0.0.15 surprise KvA hit. Call this immediately after
+    /// AddCommandLine and exit early on a non-empty report.
+    /// </summary>
+    public static UnknownFlagsReport ValidateKnownFlags(string[] args)
+    {
+        var unknown = new List<string>();
+        var hints = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (string.IsNullOrEmpty(arg)) continue;
+            if (!arg.StartsWith('-')) continue;
+
+            // `--name=value` form: only the `--name` half needs to match.
+            var flagToken = arg;
+            var eqIdx = arg.IndexOf('=');
+            if (eqIdx > 0) flagToken = arg[..eqIdx];
+
+            if (flagToken is "--help" or "-h" or "-?") continue;
+            if (SwitchMappings.ContainsKey(flagToken)) continue;
+
+            unknown.Add(flagToken);
+            if (CommonTypoHints.TryGetValue(flagToken, out var hint))
+                hints[flagToken] = hint;
+        }
+
+        return new UnknownFlagsReport(unknown, hints);
+    }
+
     public static void PrintHelp()
     {
         const int pad = 36;

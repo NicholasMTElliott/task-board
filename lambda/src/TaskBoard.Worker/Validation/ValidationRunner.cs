@@ -10,6 +10,7 @@ namespace TaskBoard.Worker.Validation;
 public sealed class ValidationRunner(
     WorkflowConfig config,
     IBoardShapeProbe probe,
+    IDockerImageProbe dockerImageProbe,
     string boardProvider,
     string boardId,
     ILogger<ValidationRunner> logger)
@@ -47,6 +48,39 @@ public sealed class ValidationRunner(
         else
         {
             findings.AddRange(BoardShapeChecks.Check(config, shape));
+        }
+
+        // Pass 4: docker images for every docker-* provider referenced by the
+        // workflow (roles AND candidate overrides). Catches the "workflow loads
+        // fine but runtime fails on missing image" case (KvA v0.0.15 with
+        // docker-opencode candidates and no aiboard-opencode-sandbox built).
+        try
+        {
+            var providers = config.GetAllReferencedProviders();
+            var checks = await dockerImageProbe.CheckAsync(providers, ct);
+            foreach (var c in checks)
+            {
+                if (c.ExistsLocally) continue;
+                var hint = c.ProviderKey switch
+                {
+                    "docker-claude-cli"  => "build via scripts/build-sandbox.ps1",
+                    "docker-opencode"    => "build via scripts/build-opencode-sandbox.ps1",
+                    "docker-claude-qwen" => "build via scripts/build-sandbox.ps1 (reuses the Claude image)",
+                    _ => null,
+                };
+                findings.Add(new ValidationFinding(
+                    ValidationSeverity.Warning, "docker-image",
+                    c.ProviderKey,
+                    $"Docker image '{c.ImageName}' not found locally for provider '{c.ProviderKey}'. " +
+                    (string.IsNullOrEmpty(c.ProbeError) ? "" : $"docker stderr: {c.ProbeError}"),
+                    hint));
+            }
+        }
+        catch (Exception ex)
+        {
+            findings.Add(new ValidationFinding(
+                ValidationSeverity.Info, "docker-image", "",
+                $"Docker image probe failed (Docker may be unavailable): {ex.Message}. Skipped."));
         }
 
         return Report(findings);

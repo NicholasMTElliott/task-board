@@ -222,6 +222,47 @@ public sealed record WorkflowConfig(
     }
 
     /// <summary>
+    /// Returns every distinct provider key referenced anywhere in the config —
+    /// across <see cref="Roles"/>, every state's steps / gate check / optional
+    /// steps, AND every step's <see cref="WorkflowStep.Candidates"/> override.
+    /// Differs from <see cref="GetRequiredProviders"/> by including candidate
+    /// overrides, which can introduce providers that no role uses (e.g. a
+    /// step's role uses <c>claude-cli</c> but a candidate routes to <c>codex</c>).
+    /// Used by validation to enumerate every executor whose preconditions
+    /// (Docker images, etc.) need to be probed.
+    /// </summary>
+    public HashSet<string> GetAllReferencedProviders()
+    {
+        var providers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var role in Roles.Values)
+        {
+            if (!string.IsNullOrWhiteSpace(role.Provider))
+                providers.Add(role.Provider);
+        }
+
+        foreach (var state in States.Values)
+        {
+            if (state.Steps is { Count: > 0 })
+            {
+                foreach (var step in state.Steps)
+                {
+                    if (step.Candidates is { Count: > 0 })
+                    {
+                        foreach (var c in step.Candidates)
+                        {
+                            if (!string.IsNullOrWhiteSpace(c.Provider))
+                                providers.Add(c.Provider);
+                        }
+                    }
+                }
+            }
+        }
+
+        return providers;
+    }
+
+    /// <summary>
     /// Returns a new config with all states normalised (legacy single-step → steps array).
     /// </summary>
     public WorkflowConfig Normalised()
