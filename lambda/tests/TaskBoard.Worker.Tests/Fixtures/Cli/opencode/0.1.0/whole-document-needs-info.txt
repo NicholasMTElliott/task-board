@@ -1,0 +1,1 @@
+{"outcome":"NEEDS_INFO","detail":"Need clarification before proceeding.","questions":[{"question":"Which database engine is the migration targeting?","recommendations":["postgres","mysql","sqlite"]}]}

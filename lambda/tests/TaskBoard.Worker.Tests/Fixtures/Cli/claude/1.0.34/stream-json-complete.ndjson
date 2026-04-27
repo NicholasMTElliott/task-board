@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"s-abc","model":"claude-sonnet-4-6"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Inspecting workspace and verifying outputs."}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"All checks passed; ready to mark complete."}]}}
+{"type":"result","subtype":"success","structured_output":{"outcome":"COMPLETE","detail":"All checks passed; no issues found."},"usage":{"input_tokens":120,"output_tokens":48},"total_cost_usd":0.0023}

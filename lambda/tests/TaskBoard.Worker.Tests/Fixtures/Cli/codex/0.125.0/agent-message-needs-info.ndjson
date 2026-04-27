@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"t-question1"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"type":"reasoning","text":"Reviewing requirements"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"{\"outcome\":\"NEEDS_INFO\",\"detail\":\"Need clarification before proceeding.\",\"questions\":[{\"question\":\"Should the migration preserve historical data or start fresh?\",\"recommendations\":[\"Preserve\",\"Fresh start\"]}]}"}}
+{"type":"turn.completed","usage":{"input_tokens":95,"output_tokens":63}}

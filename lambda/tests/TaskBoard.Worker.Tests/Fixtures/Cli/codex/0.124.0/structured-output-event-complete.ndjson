@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"t-abc123"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"type":"reasoning","text":"Inspecting workspace"}}
+{"type":"item.completed","item":{"type":"output_text","text":"All checks passed."}}
+{"type":"result","structured_output":{"outcome":"COMPLETE","detail":"All checks passed."}}
+{"type":"turn.completed","usage":{"input_tokens":42,"output_tokens":17}}

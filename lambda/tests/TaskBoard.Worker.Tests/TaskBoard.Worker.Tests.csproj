@@ -23,4 +23,11 @@
     <ProjectReference Include="..\..\src\TaskBoard.Worker\TaskBoard.Worker.csproj" />
   </ItemGroup>
 
+  <!-- Versioned CLI stdout fixtures used by *ParserCorpusTests to pin parser
+       behaviour against real captured output from each shipped CLI version.
+       See docs/CliVersionTesting.md for the capture workflow. -->
+  <ItemGroup>
+    <Content Include="Fixtures\Cli\**\*.*" CopyToOutputDirectory="PreserveNewest" LinkBase="Fixtures\Cli" />
+  </ItemGroup>
+
 </Project>

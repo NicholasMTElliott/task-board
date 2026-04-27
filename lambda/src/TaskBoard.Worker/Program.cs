@@ -601,23 +601,29 @@ void LogMissingConfig(string requiredKeys)
     logger.LogInformation("Available AI providers: {Providers}",
         string.Join(", ", detectedProviders.Where(p => p != "stub").Order()));
 
-    // Codex version probe — emit at Info so ops can correlate behaviour changes with CLI upgrades.
-    // Never throws; "(unknown: ...)" indicates probe failure but does not block startup.
+    // CLI version checks against CliVersionPolicy.KnownGood. Old → block
+    // startup; Newer → loud warning + proceed; Supported/Unknown → log + proceed.
+    // See CliVersionStartupCheck for the severity rules.
     if (detectedProviders.Contains("codex"))
     {
         var codexOpts = host.Services.GetRequiredService<IOptions<CodexCliLlmOptions>>().Value;
-        var codexVersion = await CodexCliResolver.TryGetVersionAsync(codexOpts.ExecutablePath);
-        logger.LogInformation(
-            "Codex CLI resolved to '{Path}', version: {Version}",
-            codexOpts.ExecutablePath, codexVersion);
-        if (codexVersion.StartsWith("(unknown:", StringComparison.Ordinal))
-        {
-            logger.LogWarning(
-                "Codex CLI version probe failed. Executor runs will still be attempted, " +
-                "but CLI-version-drift bugs will be harder to diagnose without a recorded version. " +
-                "Run '{Path} --version' manually to investigate.",
-                codexOpts.ExecutablePath);
-        }
+        var codexOk = await CliVersionStartupCheck.CheckAsync(
+            CliKey.Codex, codexOpts.ExecutablePath, logger);
+        if (!codexOk) return;
+    }
+
+    // Claude CLI is exercised via three providers (claude-cli direct,
+    // docker-claude-cli, docker-claude-qwen). Only check the host-installed
+    // version when at least one path uses the host CLI directly. Docker
+    // paths bake the CLI into the sandbox image — that version is checked
+    // against the same policy from inside the container at first use, but
+    // not from here.
+    if (detectedProviders.Contains("claude-cli") && !dockerModeRequested)
+    {
+        var claudeOpts = host.Services.GetRequiredService<IOptions<ClaudeCliLlmOptions>>().Value;
+        var claudeOk = await CliVersionStartupCheck.CheckAsync(
+            CliKey.Claude, claudeOpts.ExecutablePath, logger);
+        if (!claudeOk) return;
     }
 
     // Check for orphaned aiboard-* containers from prior crashed runs

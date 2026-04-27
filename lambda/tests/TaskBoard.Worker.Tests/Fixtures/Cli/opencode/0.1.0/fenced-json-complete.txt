@@ -1,0 +1,8 @@
+I've inspected the workspace and verified that all the relevant outputs are present. Here is the structured response:
+
+```json
+{
+  "outcome": "COMPLETE",
+  "detail": "All checks passed; no issues found."
+}
+```

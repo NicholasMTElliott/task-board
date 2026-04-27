@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"t-fenced"}
+{"type":"item.completed","item":{"type":"reasoning","text":"Drafting verdict"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"```json\n{\"outcome\":\"COMPLETE\",\"detail\":\"Done.\"}\n```"}}
+{"type":"turn.completed","usage":{"input_tokens":40,"output_tokens":12}}

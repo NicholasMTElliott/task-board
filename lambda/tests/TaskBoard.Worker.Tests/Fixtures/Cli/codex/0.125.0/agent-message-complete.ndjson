@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"t-xyz789"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"type":"reasoning","text":"Inspecting workspace"}}
+{"type":"item.completed","item":{"type":"reasoning","text":"Verifying outputs"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"{\"outcome\":\"COMPLETE\",\"detail\":\"All checks passed; no issues found.\"}"}}
+{"type":"turn.completed","usage":{"input_tokens":118,"output_tokens":54}}
