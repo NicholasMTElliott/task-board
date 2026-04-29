@@ -220,7 +220,13 @@ public class ClaudeQwenSignatureTests
     [InlineData("context length 200000 exceeds limit", "Model")]
     [InlineData("invalid_api_key for tenant", "Auth")]
     [InlineData("Please set ANTHROPIC_API_KEY", "Auth")]
-    [InlineData("HTTP/1.1 404 path missing", "Config")]
+    // 404 is its own "Path" category: a 404 reaching the CLI means the proxy
+    // AND backend are running (otherwise we'd see ENOTFOUND or 502), so it's
+    // a real path mismatch — most likely the CLI probing an endpoint
+    // llama.cpp's Anthropic-Messages compatibility doesn't expose. The URL
+    // config is verified-correct against local-llm's wire contract.
+    [InlineData("HTTP/1.1 404 path missing", "Path")]
+    [InlineData("upstream unreachable: 502 Bad Gateway", "Network")]
     [InlineData("hasCompletedOnboarding required", "Config")]
     public void Detect_KnownSignatures_ReturnsExpectedCategory(string stderr, string expectedCategory)
     {

@@ -7,88 +7,325 @@ using TaskBoard.Worker.Models;
 namespace TaskBoard.Worker.Processing;
 
 /// <summary>
-/// Runs a single step as a parallel candidate group: N executors race on the
-/// same task in separate worktrees, an evaluator picks a winner, and the
-/// winning branch is promoted onto the canonical worktree before the next
-/// step runs.
+/// Runs a single SLOT of a step's candidate-fallback chain: N executors race
+/// on the same task in separate worktrees (in parallel), an evaluator picks a
+/// winner among the survivors, and the winning branch / artifact set is
+/// promoted onto the canonical worktree.
 /// </summary>
 /// <remarks>
-/// Owned by <see cref="AgentRunner"/>. AgentRunner identifies a candidate-group
-/// step (<c>step.Candidates is { Count: &gt; 0 }</c>) and delegates the entire
-/// step body here — this class persists candidate + evaluator step_result rows,
-/// posts per-candidate and consolidated comments, promotes the winner via
-/// <see cref="GitWorkspaceManager.ResetWorktreeToBranchAsync"/>, and cleans up
-/// loser worktrees / branches. AgentRunner only consumes the returned
-/// <see cref="AgentResult"/> to drive outcome transitions.
-///
-/// <para>v1 supports candidates only on commit-based git behaviors
-/// (<c>commit_only</c> / <c>commit_and_push</c>); the validator rejects
-/// candidates on <c>discard</c> states.</para>
+/// Owned by <see cref="AgentRunner"/>. AgentRunner walks the step's effective
+/// slots (<see cref="WorkflowStep.GetEffectiveSlots"/>) and calls
+/// <see cref="ExecuteSlotAsync"/> per slot in order. Each slot returns a
+/// <see cref="SlotResult"/> indicating Won / NeedsInfo / Failed; AgentRunner
+/// short-circuits on Won/NeedsInfo and falls back to the next slot on Failed.
+/// <para>
+/// Single-candidate slots whose <see cref="SlotConfig.Evaluator"/> is null
+/// skip the evaluator phase entirely — the candidate's outcome surfaces
+/// directly. Multi-candidate slots require an evaluator (the validator
+/// enforces this).
+/// </para>
+/// <para>
+/// Per-candidate retries on transient failures (RATE_LIMIT, TIMEOUT) happen
+/// in-place inside the slot before its result is decided; they do not cross
+/// slot boundaries — that's what fallback slots are for.
+/// </para>
+/// <para>
+/// Both commit-based git behaviors (<c>commit_only</c> / <c>commit_and_push</c>)
+/// and <c>discard</c> mode are supported. In commit modes the winner is
+/// promoted via <see cref="GitWorkspaceManager.ResetWorktreeToBranchAsync"/>;
+/// in discard mode via <see cref="PromoteDiscardWinnerArtifacts"/>
+/// (file-copy, no commits).
+/// </para>
 /// </remarks>
 public sealed class CandidateExecutor(
     GitWorkspaceManager gitWorkspaceManager,
     IAgentExecutorResolver executorResolver,
     IRunStore runStore,
     ITaskBoardClient boardClient,
-    ILogger<CandidateExecutor> logger)
+    ILogger<CandidateExecutor> logger,
+    RerunPreambleBuilder? rerunPreambleBuilder = null)
 {
+    /// <summary>
+    /// Backward-compatible single-slot entry. Treats the request's step as a
+    /// single-slot config (legacy <c>Candidates</c>+<c>Evaluator</c>) and
+    /// returns just the <see cref="AgentResult"/>. New code should call
+    /// <see cref="ExecuteSlotAsync"/> directly with explicit slots from
+    /// <see cref="WorkflowStep.GetEffectiveSlots"/>.
+    /// </summary>
     public async Task<AgentResult> ExecuteCandidateGroupAsync(
         CandidateGroupRequest request, CancellationToken cancellationToken)
     {
+        var slots = request.Step.GetEffectiveSlots();
+        if (slots.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"ExecuteCandidateGroupAsync called for step '{request.Step.Name}' with no candidates.");
+        }
+        if (slots.Count > 1)
+        {
+            throw new InvalidOperationException(
+                $"ExecuteCandidateGroupAsync called for step '{request.Step.Name}' with {slots.Count} slots. " +
+                "Multi-slot steps must be driven by AgentRunner's slot loop calling ExecuteSlotAsync per slot.");
+        }
+        var result = await ExecuteSlotAsync(slots[0], slotIndex: 0, totalSlots: 1, request, cancellationToken);
+        return result.AgentResult;
+    }
+
+    /// <summary>
+    /// Run a single slot end-to-end: phase 1 candidate fan-out (with per-candidate
+    /// retries), phase 2 evaluator, phase 3 verdict parse, phase 4 winner promotion,
+    /// phase 5 comment posting + cleanup. The returned <see cref="SlotResult"/>
+    /// tells AgentRunner whether to short-circuit (Won / NeedsInfo) or fall back
+    /// to the next slot (Failed).
+    /// </summary>
+    /// <param name="slot">This slot's candidates + evaluator.</param>
+    /// <param name="slotIndex">0-based position in the step's slot list (used in
+    ///   step_result names and comment markers when <paramref name="totalSlots"/> &gt; 1).</param>
+    /// <param name="totalSlots">Total slot count for this step. When 1, names and
+    ///   markers omit the slot infix for backward compatibility with single-slot configs.</param>
+    public async Task<SlotResult> ExecuteSlotAsync(
+        SlotConfig slot,
+        int slotIndex,
+        int totalSlots,
+        CandidateGroupRequest request,
+        CancellationToken cancellationToken)
+    {
         var step = request.Step;
-        var candidates = step.Candidates ?? throw new InvalidOperationException(
-            $"ExecuteCandidateGroupAsync called for step '{step.Name}' with no candidates.");
-        var evaluatorCfg = step.Evaluator ?? throw new InvalidOperationException(
-            $"Step '{step.Name}' has candidates but no evaluator. Validator should have caught this.");
+        var candidates = slot.Candidates ?? throw new InvalidOperationException(
+            $"ExecuteSlotAsync called for step '{step.Name}' slot {slotIndex} with no candidates.");
+        if (candidates.Count == 0)
+            throw new InvalidOperationException(
+                $"ExecuteSlotAsync called for step '{step.Name}' slot {slotIndex} with empty candidates list.");
+
+        // Single-candidate slots may omit the evaluator: the runtime surfaces
+        // the candidate's outcome directly. Multi-candidate slots require one;
+        // the validator enforces this.
+        var skipEvaluator = candidates.Count == 1 && slot.Evaluator is null;
+        var evaluatorCfg = slot.Evaluator;
+        if (!skipEvaluator && evaluatorCfg is null)
+        {
+            throw new InvalidOperationException(
+                $"Step '{step.Name}' slot {slotIndex} has {candidates.Count} candidates but no evaluator. " +
+                "Validator should have caught this.");
+        }
 
         var groupId = Guid.NewGuid();
 
         logger.LogInformation(
-            "Starting candidate group for step '{StepName}' on card {CardId}: {Count} candidate(s), groupId={GroupId}",
-            step.Name, request.CardId, candidates.Count, groupId);
+            "Starting slot {SlotIndex}/{TotalSlots} for step '{StepName}' on card {CardId}: {Count} candidate(s), groupId={GroupId}{Eval}",
+            slotIndex, totalSlots, step.Name, request.CardId, candidates.Count, groupId,
+            skipEvaluator ? ", evaluator skipped (single-candidate)" : "");
 
         var canonicalBranch = await gitWorkspaceManager.GetCurrentBranchAsync(
             request.WorktreePath, cancellationToken);
 
-        var executions = new List<CandidateExecution>(candidates.Count);
+        // ── Phase 1: run candidates with per-provider serialization ─────────
+        // Different providers run concurrently (a Codex CLI call can overlap
+        // with a docker-claude-cli call without contending). Same-provider
+        // candidates run sequentially within their group — one CLI/credential
+        // pool + per-provider rate-limit affinity make concurrent same-provider
+        // calls a fast route to a 429.
+        //
+        // Wall-clock time is bounded by the slowest provider group (sum of its
+        // own candidates' durations), not by the sum of all candidates. The
+        // original candidate-index is preserved in the returned list so
+        // downstream consumers (evaluator's "Candidate N" enumeration,
+        // step_result.candidate_index, branch naming) see the declaration
+        // order regardless of completion order.
+        var groupedByProvider = candidates
+            .Select((candidate, index) => (Index: index, Candidate: candidate))
+            .GroupBy(x => x.Candidate.Provider, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        // ── Phase 1: run each candidate in its own worktree ──────────────────
-        for (var i = 0; i < candidates.Count; i++)
+        logger.LogInformation(
+            "Slot {SlotIndex}/{TotalSlots} step '{StepName}' card {CardId}: fanning out {ProviderCount} provider group(s) in parallel ({Layout})",
+            slotIndex, totalSlots, step.Name, request.CardId,
+            groupedByProvider.Count,
+            string.Join(", ", groupedByProvider.Select(g => $"{g.Key}×{g.Count()}")));
+
+        var groupTasks = groupedByProvider.Select(async providerGroup =>
         {
-            var candidate = candidates[i];
-            var execution = await ExecuteSingleCandidateAsync(
-                request, groupId, canonicalBranch, i, candidate, cancellationToken);
-            executions.Add(execution);
+            // Sequential per provider. Materialise the group up-front so the
+            // GroupBy iterator isn't enumerated concurrently from elsewhere.
+            var ordered = providerGroup.ToList();
+            var groupResults = new List<(int Index, CandidateExecution Execution)>(ordered.Count);
+            foreach (var entry in ordered)
+            {
+                var execution = await ExecuteSingleCandidateAsync(
+                    request, slotIndex, totalSlots, groupId, canonicalBranch,
+                    entry.Index, entry.Candidate, cancellationToken);
+                groupResults.Add((entry.Index, execution));
+            }
+            return groupResults;
+        }).ToList();
+
+        // Task.WhenAll waits for every group to complete (or throw). On a thrown
+        // RateLimitException from any group, sibling groups still finish their
+        // current await before propagation. Because branch names embed a
+        // per-run UUID, leaked candidate worktrees from sibling groups are NOT
+        // self-cleaning on a re-run (the next attempt uses different paths) —
+        // so we sweep them here on the way out before rethrowing. AgentRunner
+        // still restores the card to the trigger column on RateLimitException;
+        // this just stops disk accumulation.
+        List<(int Index, CandidateExecution Execution)>[] allGroupResults;
+        try
+        {
+            allGroupResults = await Task.WhenAll(groupTasks);
+        }
+        catch
+        {
+            var siblingCompleted = groupTasks
+                .Where(t => t.Status == TaskStatus.RanToCompletion)
+                .SelectMany(t => t.Result.Select(r => r.Execution))
+                .ToList();
+            if (siblingCompleted.Count > 0)
+            {
+                try
+                {
+                    // Use CancellationToken.None — the original token may be
+                    // cancelled (shutdown path), but disk state still needs
+                    // cleaning. Cleanup is itself best-effort; failures log.
+                    await CleanupCandidateWorktreesAsync(
+                        request.RepoPath, siblingCompleted,
+                        deleteWinnerBranch: true, CancellationToken.None);
+                }
+                catch (Exception cleanupEx)
+                {
+                    logger.LogWarning(cleanupEx,
+                        "Failed to clean up {Count} sibling-group candidate worktree(s) after slot {SlotIndex} threw",
+                        siblingCompleted.Count, slotIndex);
+                }
+            }
+            throw;
+        }
+
+        var executions = allGroupResults
+            .SelectMany(r => r)
+            .OrderBy(r => r.Index)
+            .Select(r => r.Execution)
+            .ToList();
+
+        // ── Phase 1b: single-candidate slot with no evaluator ────────────────
+        // The slot's result is the (only) candidate's result, regardless of
+        // outcome. Skip the evaluator phase entirely. Checked BEFORE the
+        // all-failed short-circuit so a NEEDS_INFO from the single candidate
+        // surfaces as NeedsInfo (propagate questions to operator) rather than
+        // Failed (force fallback to next slot, losing the questions).
+        if (skipEvaluator)
+        {
+            var soleCandidate = executions[0];
+            logger.LogInformation(
+                "Single-candidate slot {SlotIndex} for step '{StepName}': using candidate 0 ({Provider}) directly without evaluator (outcome={Outcome})",
+                slotIndex, step.Name, soleCandidate.Provider, soleCandidate.AgentResult.Outcome);
+
+            // ERROR / NEEDS_INFO from the sole candidate: no winner to promote,
+            // so we just clean up and return the candidate's outcome directly.
+            // COMPLETE: promote artifacts and return Won.
+            if (soleCandidate.AgentResult.Outcome != AgentOutcome.COMPLETE)
+            {
+                await CleanupCandidateWorktreesAsync(
+                    request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
+
+                try
+                {
+                    await PostCandidateCommentsAsync(
+                        request, step.Name, slotIndex, totalSlots, executions,
+                        soleCandidate.AgentResult,
+                        new EvaluatorVerdict(WinnerIndex: null, Scores: []),
+                        cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex,
+                        "Failed to post per-candidate comments for single-candidate slot {SlotIndex} of step '{StepName}'",
+                        slotIndex, step.Name);
+                }
+
+                // NEEDS_INFO short-circuits the slot chain (questions reach the
+                // operator). ERROR falls through to the next slot. The
+                // rate-limit flag is meaningful only on Failed: if the sole
+                // candidate's ERROR was due to rate-limit, AgentRunner can use
+                // it to keep the chain "rate-limit only" and eventually bubble.
+                return new SlotResult(
+                    soleCandidate.AgentResult.Outcome == AgentOutcome.NEEDS_INFO
+                        ? SlotOutcome.NeedsInfo  // propagate questions; no fallback
+                        : SlotOutcome.Failed,    // ERROR → fallback to next slot
+                    soleCandidate.AgentResult,
+                    WasRateLimited: soleCandidate.RateLimited);
+            }
+
+            // COMPLETE: promote and finalize as the winner.
+            return await PromoteAndFinalizeWinnerAsync(
+                request, slotIndex, totalSlots, step, executions,
+                winnerIdx: 0,
+                evaluatorResultForReturn: soleCandidate.AgentResult,
+                verdict: new EvaluatorVerdict(
+                    WinnerIndex: 0,
+                    Scores: [new CandidateScore(Index: 0, Score: null, Reasoning: null)]),
+                evaluatorTempPromptPath: null,
+                cancellationToken);
         }
 
         // ── Short-circuit: if every candidate failed, skip the evaluator ─────
+        // (Multi-candidate slot path. The single-candidate-no-evaluator case
+        // was handled above so it can surface NEEDS_INFO as the slot's outcome.)
         if (executions.All(e => e.AgentResult.Outcome != AgentOutcome.COMPLETE))
         {
             logger.LogWarning(
-                "All {Count} candidate(s) for step '{StepName}' returned non-COMPLETE outcomes; halting without running evaluator",
-                executions.Count, step.Name);
+                "All {Count} candidate(s) for step '{StepName}' slot {SlotIndex} returned non-COMPLETE outcomes; halting without running evaluator",
+                executions.Count, step.Name, slotIndex);
 
             await CleanupCandidateWorktreesAsync(
                 request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
 
             // Pick the merged outcome by recoverability rather than candidate
             // declaration order: NEEDS_INFO is recoverable by a human (card moves
-            // to Questions), ERROR is terminal. If even one candidate asked a
-            // question, the operator deserves to see that path; otherwise fall
-            // back to ERROR. Without this, a mix of {ERROR at index 0, NEEDS_INFO
-            // at index 1} would route to Error and the questions would be lost.
+            // to Questions), ERROR is terminal. The SLOT outcome is Failed
+            // either way — the slot didn't produce a single coherent result,
+            // so AgentRunner should try the next slot. The merged
+            // NEEDS_INFO/ERROR matters only as the AgentResult to surface if
+            // every slot ends up failing.
             var mergedOutcome = executions.Any(e => e.AgentResult.Outcome == AgentOutcome.NEEDS_INFO)
                 ? AgentOutcome.NEEDS_INFO
                 : AgentOutcome.ERROR;
             var detail = BuildAllFailedDetail(executions);
-            return new AgentResult(mergedOutcome, detail);
+
+            // Best-effort: post per-candidate audit comments even on all-failed
+            // so the operator can see what each provider returned. No verdict
+            // yet (no evaluator ran); pass an empty verdict.
+            try
+            {
+                await PostCandidateCommentsAsync(
+                    request, step.Name, slotIndex, totalSlots, executions,
+                    new AgentResult(mergedOutcome, detail),
+                    new EvaluatorVerdict(WinnerIndex: null, Scores: []),
+                    cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Failed to post per-candidate comments for all-failed slot {SlotIndex} of step '{StepName}'",
+                    slotIndex, step.Name);
+            }
+
+            // WasRateLimited: only true when EVERY candidate in the slot ended
+            // in a transient rate-limit failure. A single non-rate-limit
+            // candidate (e.g., a hard ERROR from a code-broken provider, or a
+            // legitimate NEEDS_INFO) means the slot's failure isn't purely
+            // capacity-driven — AgentRunner shouldn't treat the chain as
+            // rate-limited just because one of N providers ran into a 429.
+            var slotWasRateLimited = executions.All(e => e.RateLimited);
+            return new SlotResult(
+                SlotOutcome.Failed,
+                new AgentResult(mergedOutcome, detail),
+                WasRateLimited: slotWasRateLimited);
         }
 
         // ── Phase 2: run the evaluator ───────────────────────────────────────
         // RunEvaluatorAsync may write an inline-system-prompt to a temp file;
         // it returns both the result and the path so we can clean up afterwards.
         var (evaluatorResult, evaluatorTempPromptPath) = await RunEvaluatorAsync(
-            request, evaluatorCfg, executions, groupId, cancellationToken);
+            request, evaluatorCfg!, slotIndex, totalSlots, executions, groupId, cancellationToken);
 
         // Phases 3–5 are wrapped in try/finally so the evaluator's inline-prompt
         // temp file is always cleaned up even if parsing, persistence, promotion,
@@ -98,7 +335,7 @@ public sealed class CandidateExecutor(
         {
             // ── Phase 3: parse evaluator output, persist per-candidate verdicts ──
             var verdict = ParseEvaluatorVerdict(
-                evaluatorResult, executions.Count, evaluatorCfg.Scoring);
+                evaluatorResult, executions.Count, evaluatorCfg!.Scoring);
 
             // Schema-violation defense: outcome=COMPLETE without a winner_index
             // is the failure mode KvA hit on v0.0.15. The evaluator schema
@@ -109,12 +346,12 @@ public sealed class CandidateExecutor(
             //       so a null can still slip through on the codex path.
             //   (2) Some CLI versions / models may drift on schema enforcement.
             // Surface this as ERROR with a clear message instead of silently
-            // discarding all candidates.
+            // discarding all candidates. Slot-level: this is Failed → fallback.
             if (evaluatorResult.Outcome == AgentOutcome.COMPLETE && verdict.WinnerIndex is null)
             {
                 logger.LogWarning(
-                    "Evaluator returned outcome=COMPLETE but winner_index was missing or null for step '{StepName}' — overriding to ERROR (schema violation).",
-                    request.Step.Name);
+                    "Evaluator returned outcome=COMPLETE but winner_index was missing or null for step '{StepName}' slot {SlotIndex} — overriding to ERROR (schema violation).",
+                    request.Step.Name, slotIndex);
                 evaluatorResult = new AgentResult(
                     AgentOutcome.ERROR,
                     "Evaluator returned outcome=COMPLETE but did not include a winner_index. " +
@@ -125,78 +362,34 @@ public sealed class CandidateExecutor(
             await PersistEvaluatorVerdictAsync(
                 request.RunId, groupId, executions, verdict, cancellationToken);
 
-            // ── Phase 4: promote the winner (if the evaluator picked one) ───────
+            // ── Phase 4 & 5: promote winner + post comments ───────────────────
             if (evaluatorResult.Outcome == AgentOutcome.COMPLETE && verdict.WinnerIndex is int winnerIdx)
             {
-                var winner = executions[winnerIdx];
-                var promotionMode = IsDiscardMode(request.GitBehavior) ? "files" : "git";
-                logger.LogInformation(
-                    "Promoting candidate {Index} (provider={Provider}) as winner for step '{StepName}' via {Mode} promotion",
-                    winnerIdx, winner.Provider, step.Name, promotionMode);
-
-                try
-                {
-                    if (IsDiscardMode(request.GitBehavior))
-                    {
-                        // Discard mode: candidates didn't commit (no point — the state
-                        // doesn't keep git changes anyway). Adopt the winner's
-                        // .aiboard/{tasks,updates}/ contents into the canonical worktree
-                        // so AgentRunner's post-step processors (TaskFileManager,
-                        // UpdateFileProcessor) read the winner's outputs as normal.
-                        PromoteDiscardWinnerArtifacts(winner.WorktreePath, request.WorktreePath);
-                    }
-                    else
-                    {
-                        await gitWorkspaceManager.ResetWorktreeToBranchAsync(
-                            request.WorktreePath, winner.BranchName, cancellationToken);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // Promotion failure is fatal — without the winner's outputs the
-                    // canonical worktree would proceed with stale state. Surface as ERROR.
-                    logger.LogError(ex,
-                        "Failed to promote candidate {Index} ({Mode} promotion, branch={Branch}) for step '{StepName}'",
-                        winnerIdx, promotionMode, winner.BranchName, step.Name);
-                    await CleanupCandidateWorktreesAsync(
-                        request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
-                    return new AgentResult(
-                        AgentOutcome.ERROR,
-                        $"Evaluator selected candidate {winnerIdx} but {promotionMode} promotion failed: {ex.Message}");
-                }
-
-                if (IsDiscardMode(request.GitBehavior))
-                {
-                    // Discard mode: no commits to preserve, so all candidate branches
-                    // (winner included) can be torn down. The canonical worktree is
-                    // unchanged at the git layer — only its .aiboard/ contents updated.
-                    await CleanupCandidateWorktreesAsync(
-                        request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
-                }
-                else
-                {
-                    // Commit modes: keep the winner's branch (it now backs the
-                    // canonical worktree's HEAD).
-                    await CleanupLoserWorktreesAsync(
-                        request.RepoPath, executions, winnerIdx, cancellationToken);
-                }
-            }
-            else
-            {
-                // Evaluator returned NEEDS_INFO / ERROR or no winner. Tear down all
-                // candidate worktrees + branches; canonical worktree is unchanged.
-                logger.LogInformation(
-                    "Evaluator did not select a winner (outcome={Outcome}); cleaning up all {Count} candidate worktrees",
-                    evaluatorResult.Outcome, executions.Count);
-                await CleanupCandidateWorktreesAsync(
-                    request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
+                return await PromoteAndFinalizeWinnerAsync(
+                    request, slotIndex, totalSlots, step, executions,
+                    winnerIdx, evaluatorResult, verdict,
+                    evaluatorTempPromptPath: null,  // we own the cleanup in finally
+                    cancellationToken);
             }
 
-            // ── Phase 5: post per-candidate audit comments + the consolidated step comment
+            // No winner: the evaluator declined to pick (NEEDS_INFO or ERROR or
+            // post-override). Tear everything down; the canonical worktree is
+            // untouched. NEEDS_INFO from the evaluator surfaces up as a slot
+            // success-with-questions (no fallback). ERROR maps to Failed.
+            logger.LogInformation(
+                "Evaluator did not select a winner for slot {SlotIndex} of step '{StepName}' (outcome={Outcome}); cleaning up all {Count} candidate worktrees",
+                slotIndex, step.Name, evaluatorResult.Outcome, executions.Count);
+            await CleanupCandidateWorktreesAsync(
+                request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
+
+            // Phase 5: post per-candidate audit comments
             await PostCandidateCommentsAsync(
-                request, step.Name, executions, evaluatorResult, verdict, cancellationToken);
+                request, step.Name, slotIndex, totalSlots, executions, evaluatorResult, verdict, cancellationToken);
 
-            return evaluatorResult;
+            var slotOutcome = evaluatorResult.Outcome == AgentOutcome.NEEDS_INFO
+                ? SlotOutcome.NeedsInfo   // evaluator's own questions propagate
+                : SlotOutcome.Failed;     // ERROR / no-winner_index → fallback
+            return new SlotResult(slotOutcome, evaluatorResult);
         }
         finally
         {
@@ -215,10 +408,242 @@ public sealed class CandidateExecutor(
         }
     }
 
+    /// <summary>
+    /// Phase 4 + 5 helper: promote the chosen winner's artifacts (file-based or
+    /// git-reset depending on git behaviour), tear down loser worktrees, post
+    /// per-candidate comments, and translate the result into a
+    /// <see cref="SlotResult"/>. Used by both the evaluator-picks-winner path
+    /// and the single-candidate-no-evaluator path.
+    /// </summary>
+    private async Task<SlotResult> PromoteAndFinalizeWinnerAsync(
+        CandidateGroupRequest request,
+        int slotIndex, int totalSlots,
+        WorkflowStep step,
+        IReadOnlyList<CandidateExecution> executions,
+        int winnerIdx,
+        AgentResult evaluatorResultForReturn,
+        EvaluatorVerdict verdict,
+        string? evaluatorTempPromptPath,
+        CancellationToken cancellationToken)
+    {
+        var winner = executions[winnerIdx];
+        var promotionMode = IsDiscardMode(request.GitBehavior) ? "files" : "git";
+        logger.LogInformation(
+            "Promoting candidate {Index} (provider={Provider}) as winner for step '{StepName}' slot {SlotIndex} via {Mode} promotion",
+            winnerIdx, winner.Provider, step.Name, slotIndex, promotionMode);
+
+        try
+        {
+            if (IsDiscardMode(request.GitBehavior))
+            {
+                PromoteDiscardWinnerArtifacts(winner.WorktreePath, request.WorktreePath);
+            }
+            else
+            {
+                await gitWorkspaceManager.ResetWorktreeToBranchAsync(
+                    request.WorktreePath, winner.BranchName, cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Promotion failure is fatal for THIS slot — surface as Failed so
+            // AgentRunner falls back to the next slot rather than continuing
+            // with stale canonical state.
+            logger.LogError(ex,
+                "Failed to promote candidate {Index} ({Mode} promotion, branch={Branch}) for step '{StepName}' slot {SlotIndex}",
+                winnerIdx, promotionMode, winner.BranchName, step.Name, slotIndex);
+            await CleanupCandidateWorktreesAsync(
+                request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
+            return new SlotResult(
+                SlotOutcome.Failed,
+                new AgentResult(
+                    AgentOutcome.ERROR,
+                    $"Evaluator selected candidate {winnerIdx} but {promotionMode} promotion failed: {ex.Message}"));
+        }
+
+        if (IsDiscardMode(request.GitBehavior))
+        {
+            await CleanupCandidateWorktreesAsync(
+                request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
+        }
+        else
+        {
+            await CleanupLoserWorktreesAsync(
+                request.RepoPath, executions, winnerIdx, cancellationToken);
+        }
+
+        // Phase 5: post per-candidate audit comments
+        await PostCandidateCommentsAsync(
+            request, step.Name, slotIndex, totalSlots, executions, evaluatorResultForReturn, verdict, cancellationToken);
+
+        // Slot outcome derives from the WINNER's outcome, not the evaluator's.
+        // Evaluator says COMPLETE = "I picked a winner"; the winner itself can
+        // still be NEEDS_INFO from the candidate-agent's perspective. The user
+        // chose: NEEDS_INFO from a winning slot propagates up — no fallback.
+        return winner.AgentResult.Outcome switch
+        {
+            AgentOutcome.COMPLETE => new SlotResult(SlotOutcome.Won, evaluatorResultForReturn),
+            AgentOutcome.NEEDS_INFO => new SlotResult(SlotOutcome.NeedsInfo, winner.AgentResult),
+            _ => new SlotResult(SlotOutcome.Failed, winner.AgentResult),
+        };
+    }
+
+    /// <summary>
+    /// Builds the slot infix used in step_result names and comment markers.
+    /// Single-slot steps (legacy, or new but with one slot) get an empty
+    /// infix for backward compatibility — existing JSON workflow configs and
+    /// existing comment markers continue to deserialize/match. Multi-slot
+    /// steps prefix every per-candidate row/marker with <c>:slot-N</c> so the
+    /// step_result rows and audit comments stay disambiguated across the
+    /// fallback chain.
+    /// </summary>
+    private static string SlotInfix(int slotIndex, int totalSlots)
+        => totalSlots > 1 ? $":slot-{slotIndex}" : string.Empty;
+
+    /// <summary>
+    /// Default failure categories that are retried in-place when the candidate
+    /// doesn't supply its own <see cref="CandidateOverride.RetryOn"/> list.
+    /// Both are typically transient; the others (AGENT_ERROR, INFRASTRUCTURE)
+    /// are usually permanent for the same provider+model and won't recover from
+    /// a 30-second wait — fall back to the next slot instead.
+    /// </summary>
+    private static readonly FailureReason[] DefaultRetryOn =
+        [FailureReason.RATE_LIMIT, FailureReason.TIMEOUT];
+
+    /// <summary>
+    /// Runs the candidate's executor with bounded retries on transient failures
+    /// (RATE_LIMIT, TIMEOUT — configurable via <see cref="CandidateOverride.RetryOn"/>).
+    /// Other exceptions short-circuit and are recorded as an ERROR result. The
+    /// final result wins; intermediate failed attempts are not persisted as
+    /// separate <c>step_result</c> rows (they're an internal attempt count).
+    /// </summary>
+    /// <remarks>
+    /// Backoff: 30s base, 2× exponential, 5min cap, ±20% jitter — bounded to
+    /// keep retries snappy enough that a card doesn't sit pending for hours.
+    /// Cancellation is honored on the delay so Ctrl+C still interrupts cleanly.
+    /// <para>
+    /// Returns a tuple of <c>(AgentResult, bool RateLimited)</c>. When retries
+    /// are exhausted on <see cref="RateLimitException"/> or
+    /// <see cref="TimeoutException"/>, the exception is converted to an
+    /// <see cref="AgentOutcome.ERROR"/> result with <c>RateLimited=true</c>
+    /// rather than propagating. This lets sibling candidates in the same slot
+    /// continue to run (a single bad provider no longer aborts the whole slot)
+    /// and lets the slot's all-failed short-circuit produce a slot-level
+    /// rate-limit signal that AgentRunner can use to fall through to the next
+    /// slot in the fallback chain.
+    /// </para>
+    /// </remarks>
+    private async Task<(AgentResult Result, bool RateLimited)> ExecuteCandidateWithRetriesAsync(
+        IAgentExecutor executor,
+        AgentExecutionContext context,
+        CandidateOverride candidate,
+        int slotIndex,
+        int candidateIndex,
+        CancellationToken cancellationToken)
+    {
+        var retryOn = candidate.RetryOn is { Count: > 0 } ? candidate.RetryOn : (IReadOnlyList<FailureReason>)DefaultRetryOn;
+        var maxRetries = Math.Max(0, candidate.Retries);
+        var attempt = 0;
+
+        while (true)
+        {
+            try
+            {
+                // Each candidate runs as its own short-lived process. Do NOT attempt
+                // session reuse — sessions assume a single canonical worktree mount.
+                var result = await executor.ExecuteAsync(context, cancellationToken);
+                return (result, RateLimited: false);
+            }
+            catch (RateLimitException ex) when (
+                attempt < maxRetries && retryOn.Contains(FailureReason.RATE_LIMIT))
+            {
+                attempt++;
+                logger.LogWarning(ex,
+                    "Slot {Slot} candidate {Index} ({Provider}) hit RATE_LIMIT; retry {Attempt}/{Max}",
+                    slotIndex, candidateIndex, candidate.Provider, attempt, maxRetries);
+                await DelayWithBackoffAsync(attempt, cancellationToken);
+            }
+            catch (TimeoutException ex) when (
+                attempt < maxRetries && retryOn.Contains(FailureReason.TIMEOUT))
+            {
+                attempt++;
+                logger.LogWarning(ex,
+                    "Slot {Slot} candidate {Index} ({Provider}) hit TIMEOUT; retry {Attempt}/{Max}",
+                    slotIndex, candidateIndex, candidate.Provider, attempt, maxRetries);
+                await DelayWithBackoffAsync(attempt, cancellationToken);
+            }
+            catch (RateLimitException ex)
+            {
+                // Retries exhausted (or rate-limit not in RetryOn): convert to
+                // an ERROR outcome with the rate-limit flag set instead of
+                // propagating. Sibling candidates and sibling slots get a
+                // chance; if every candidate at every level rate-limits,
+                // AgentRunner re-raises a RateLimitException at the top.
+                logger.LogWarning(ex,
+                    "Slot {Slot} candidate {Index} ({Provider}) rate-limited after {Attempt} attempt(s); recording as ERROR outcome (will surface as slot-level rate-limit if all candidates fail)",
+                    slotIndex, candidateIndex, candidate.Provider, attempt + 1);
+                return (
+                    new AgentResult(
+                        AgentOutcome.ERROR,
+                        $"[RATE_LIMIT after {attempt + 1} attempt(s)] {ex.Message}"),
+                    RateLimited: true);
+            }
+            catch (TimeoutException ex)
+            {
+                // Convert to ERROR but do NOT set the rate-limit flag. Timeout
+                // is transient enough to retry within the slot, but a chain of
+                // timeouts is more likely a real problem (model too slow,
+                // prompt too complex) than a capacity issue — surfacing it as
+                // a plain ERROR via AgentResult is more honest than bubbling
+                // RateLimitException at the top and triggering 30-minute
+                // poller backoff.
+                logger.LogWarning(ex,
+                    "Slot {Slot} candidate {Index} ({Provider}) timed out after {Attempt} attempt(s); recording as ERROR outcome",
+                    slotIndex, candidateIndex, candidate.Provider, attempt + 1);
+                return (
+                    new AgentResult(
+                        AgentOutcome.ERROR,
+                        $"[TIMEOUT after {attempt + 1} attempt(s)] {ex.Message}"),
+                    RateLimited: false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex,
+                    "Slot {Slot} candidate {Index} ({Provider}) threw {ExceptionType}; recording as ERROR outcome",
+                    slotIndex, candidateIndex, candidate.Provider, ex.GetType().Name);
+                return (
+                    new AgentResult(
+                        AgentOutcome.ERROR,
+                        $"Candidate execution threw {ex.GetType().Name}: {ex.Message}"),
+                    RateLimited: false);
+            }
+            // OperationCanceledException is intentionally NOT caught here —
+            // shutdown/Ctrl+C should propagate immediately, not be retried or
+            // swallowed.
+        }
+    }
+
+    /// <summary>
+    /// Bounded exponential backoff between retries: 30s × 2^(attempt-1),
+    /// capped at 5 minutes, with ±20% random jitter so multiple candidates
+    /// retrying the same upstream don't synchronise their wait windows.
+    /// </summary>
+    private static async Task DelayWithBackoffAsync(int attempt, CancellationToken cancellationToken)
+    {
+        const double BaseSeconds = 30.0;
+        const double CapSeconds = 300.0;
+        var raw = Math.Min(CapSeconds, BaseSeconds * Math.Pow(2, attempt - 1));
+        var jitterFactor = 1.0 + (Random.Shared.NextDouble() * 0.4 - 0.2);  // [0.8, 1.2)
+        var delay = TimeSpan.FromSeconds(raw * jitterFactor);
+        await Task.Delay(delay, cancellationToken);
+    }
+
     // ── Phase 1 helpers ──────────────────────────────────────────────────────
 
     private async Task<CandidateExecution> ExecuteSingleCandidateAsync(
         CandidateGroupRequest request,
+        int slotIndex,
+        int totalSlots,
         Guid groupId,
         string canonicalBranch,
         int index,
@@ -229,9 +654,12 @@ public sealed class CandidateExecutor(
         var providerSlug = SlugifyProvider(candidate.Provider);
         // Use a SEPARATE top-level prefix so the candidate worktree is not
         // nested inside the canonical worktree's directory (which would put one
-        // git worktree inside another and fail).
+        // git worktree inside another and fail). Multi-slot steps include the
+        // slot index in the branch name so retried slots don't collide with
+        // their predecessors' branches if those happen to linger.
         var groupShort = groupId.ToString("N")[..8];
-        var candidateBranch = $"aiboard-cand/{request.CardId}-{groupShort}-{index}-{providerSlug}".ToLowerInvariant();
+        var slotBranchInfix = totalSlots > 1 ? $"-s{slotIndex}" : string.Empty;
+        var candidateBranch = $"aiboard-cand/{request.CardId}-{groupShort}{slotBranchInfix}-{index}-{providerSlug}".ToLowerInvariant();
 
         var executor = executorResolver.Resolve(candidate.Provider);
 
@@ -283,7 +711,19 @@ public sealed class CandidateExecutor(
                 index);
         }
 
-        // Build the per-candidate execution context.
+        // Build the per-candidate execution context. The comments file path
+        // must point to the CANDIDATE'S copy of the file (CopyAiboardArtifacts
+        // copied .aiboard/tasks/ into the candidate worktree), not the
+        // canonical worktree's copy. Without this rewrite, the prompt embeds
+        // the canonical host path (e.g. C:\…\worktrees\aiboard\3-… on Windows)
+        // which doesn't exist inside the candidate's container at all and
+        // sends the agent into a doomed read-fail-glob-fail loop until the
+        // step times out.
+        var candidateCommentsFilePath = request.CommentsFilePath is null
+            ? null
+            : TaskFileManager.GetCommentsFilePath(
+                candidateWorktreePath, request.CardId, request.CardTitle);
+
         var context = new AgentExecutionContext(
             TargetCardId: request.CardId,
             TargetCardTitle: request.CardTitle,
@@ -292,26 +732,10 @@ public sealed class CandidateExecutor(
             SystemPromptFilePath: request.SystemPromptFilePath,
             Model: model,
             ProviderParams: providerParams,
-            CommentsFilePath: request.CommentsFilePath);
+            CommentsFilePath: candidateCommentsFilePath);
 
-        AgentResult result;
-        try
-        {
-            // Each candidate runs as its own short-lived process. Do NOT attempt
-            // session reuse — sessions assume a single canonical worktree mount.
-            result = await executor.ExecuteAsync(context, cancellationToken);
-        }
-        catch (Exception ex) when (
-            ex is not OperationCanceledException
-            && ex is not RateLimitException)
-        {
-            logger.LogWarning(ex,
-                "Candidate {Index} (provider={Provider}) threw {ExceptionType}; recording as ERROR outcome",
-                index, candidate.Provider, ex.GetType().Name);
-            result = new AgentResult(
-                AgentOutcome.ERROR,
-                $"Candidate execution threw {ex.GetType().Name}: {ex.Message}");
-        }
+        var (result, rateLimited) = await ExecuteCandidateWithRetriesAsync(
+            executor, context, candidate, slotIndex, index, cancellationToken);
 
         var completedAt = DateTimeOffset.UtcNow;
 
@@ -349,7 +773,7 @@ public sealed class CandidateExecutor(
             RunId: request.RunId,
             CardId: request.CardId,
             StateName: request.StateName,
-            StepName: $"{step.Name}:cand-{index}:{providerSlug}",
+            StepName: $"{step.Name}{SlotInfix(slotIndex, totalSlots)}:cand-{index}:{providerSlug}",
             StepIndex: request.StepIndex,
             Role: step.Role,
             Model: modelForRecord,
@@ -368,7 +792,8 @@ public sealed class CandidateExecutor(
             CandidateIndex: index,
             Selected: null,
             QualityScore: null,
-            EvaluatorReasoning: null);
+            EvaluatorReasoning: null,
+            SlotIndex: totalSlots > 1 ? slotIndex : null);
 
         try
         {
@@ -388,7 +813,8 @@ public sealed class CandidateExecutor(
             WorktreePath: candidateWorktreePath,
             AgentResult: result,
             StartedAt: startedAt,
-            CompletedAt: completedAt);
+            CompletedAt: completedAt,
+            RateLimited: rateLimited);
     }
 
     private static IReadOnlyDictionary<string, string>? MergeProviderParams(
@@ -488,16 +914,22 @@ public sealed class CandidateExecutor(
     /// block when the state is discard-mode and there are no commits to diff.
     /// </summary>
     private static void AppendDiscardCandidateOutputs(
-        StringBuilder sb, string candidateWorktree, string cardId)
+        StringBuilder sb, string candidateWorktree, string cardId, string? cardTitle)
     {
         const int TaskBodyCap = 8_000;       // headroom for design docs without blowing the prompt
         const int UpdateFileCap = 2_000;     // each new-*.md is small, but cap to be safe
         const int MaxUpdateFiles = 20;
 
-        var taskFile = Path.Combine(candidateWorktree, ".aiboard", "tasks", $"{cardId}.md");
+        // The orchestrator writes the task file via TaskFileManager, which slugs
+        // the title into the filename ({cardId}-{slug}.md). Building a plain
+        // {cardId}.md path here would silently miss the file for any card with
+        // a non-empty title and force the evaluator to score on candidates'
+        // self-reported claims rather than actual outputs.
+        var fileName = TaskFileManager.GetTaskFileName(cardId, cardTitle);
+        var taskFile = Path.Combine(candidateWorktree, ".aiboard", "tasks", fileName);
         if (File.Exists(taskFile))
         {
-            sb.AppendLine("**Card body (`.aiboard/tasks/{cardId}.md`):**");
+            sb.AppendLine($"**Card body (`.aiboard/tasks/{fileName}`):**");
             sb.AppendLine();
             sb.AppendLine("```markdown");
             try { sb.AppendLine(Truncate(File.ReadAllText(taskFile), TaskBodyCap)); }
@@ -561,6 +993,8 @@ public sealed class CandidateExecutor(
     private async Task<(AgentResult Result, string? TempPromptPathToDelete)> RunEvaluatorAsync(
         CandidateGroupRequest request,
         EvaluatorConfig evaluatorCfg,
+        int slotIndex,
+        int totalSlots,
         IReadOnlyList<CandidateExecution> executions,
         Guid groupId,
         CancellationToken cancellationToken)
@@ -621,12 +1055,13 @@ public sealed class CandidateExecutor(
 
         // Persist evaluator step. Note: candidate_group_id stays NULL on the
         // evaluator row — it's a regular step that follows the group. The
-        // step_name suffix `:evaluator` lets callers correlate by name.
+        // step_name suffix `:evaluator` (with `:slot-N` infix when multi-slot)
+        // lets callers correlate by name.
         var evaluatorRecord = new StepResultRecord(
             RunId: request.RunId,
             CardId: request.CardId,
             StateName: request.StateName,
-            StepName: $"{request.Step.Name}:evaluator",
+            StepName: $"{request.Step.Name}{SlotInfix(slotIndex, totalSlots)}:evaluator",
             StepIndex: request.StepIndex,
             Role: evaluatorCfg.Role,
             Model: evaluatorRole.Model,
@@ -640,7 +1075,8 @@ public sealed class CandidateExecutor(
             StartedAtUtc: startedAt,
             CompletedAtUtc: completedAt,
             SessionExecMs: null,
-            Provider: evaluatorRole.Provider);
+            Provider: evaluatorRole.Provider,
+            SlotIndex: totalSlots > 1 ? slotIndex : null);
 
         try
         {
@@ -662,6 +1098,33 @@ public sealed class CandidateExecutor(
         CancellationToken cancellationToken)
     {
         var sb = new StringBuilder();
+
+        // Re-run fast-path for the evaluator: if the prior canonical step output
+        // is still on the card (and the prior run completed this step with COMPLETE),
+        // tell the evaluator that candidates may have just confirmed prior — so a
+        // tie of "Confirmed" details is a valid outcome rather than a verdict.
+        // Operator force-rerun is identical to the candidate path: delete the
+        // canonical agent-step:{step.Name} comment.
+        if (rerunPreambleBuilder is not null && request.ExistingComments is { Count: > 0 })
+        {
+            var evaluatorPreamble = await rerunPreambleBuilder.TryBuildPreambleAsync(
+                request.CardId, request.StateName, request.Step.Name,
+                markerName: $"agent-step:{request.Step.Name}",
+                currentRunId: request.RunId,
+                existingComments: request.ExistingComments,
+                variant: PreambleVariant.Evaluator,
+                cancellationToken);
+            if (evaluatorPreamble is not null)
+            {
+                sb.AppendLine(evaluatorPreamble);
+                sb.AppendLine();
+                sb.AppendLine("---");
+                sb.AppendLine();
+                logger.LogInformation(
+                    "Re-run preamble injected for evaluator on step '{StepName}' card {CardId}",
+                    request.Step.Name, request.CardId);
+            }
+        }
 
         // Task prompt template: configured in EvaluatorConfig, with a sane
         // built-in fallback so users don't have to supply one for the v1 trial.
@@ -703,7 +1166,7 @@ public sealed class CandidateExecutor(
             // appropriate so the evaluator has real material to compare on.
             if (IsDiscardMode(request.GitBehavior))
             {
-                AppendDiscardCandidateOutputs(sb, e.WorktreePath, request.CardId);
+                AppendDiscardCandidateOutputs(sb, e.WorktreePath, request.CardId, request.CardTitle);
             }
             else
             {
@@ -1222,17 +1685,22 @@ public sealed class CandidateExecutor(
     private async Task PostCandidateCommentsAsync(
         CandidateGroupRequest request,
         string stepName,
+        int slotIndex,
+        int totalSlots,
         IReadOnlyList<CandidateExecution> executions,
         AgentResult evaluatorResult,
         EvaluatorVerdict verdict,
         CancellationToken cancellationToken)
     {
         // Per-candidate audit comments — make individual outputs visible without
-        // bloating the consolidated step comment.
+        // bloating the consolidated step comment. Multi-slot steps include a
+        // `:slot-N` infix in the marker so candidate comments from earlier
+        // (failed) slots and the winning slot don't collide on upsert.
+        var slotInfix = SlotInfix(slotIndex, totalSlots);
         for (var i = 0; i < executions.Count; i++)
         {
             var e = executions[i];
-            var marker = $"<!-- agent-step:{stepName}:cand-{i}:{SlugifyProvider(e.Provider)} -->";
+            var marker = $"<!-- agent-step:{stepName}{slotInfix}:cand-{i}:{SlugifyProvider(e.Provider)} -->";
             var won = verdict.WinnerIndex is int w && w == i;
             var sb = new StringBuilder();
             sb.AppendLine($"**Candidate {i}** — provider `{e.Provider}`, model `{e.Model}` {(won ? "🏆" : "")}".TrimEnd());
@@ -1302,7 +1770,13 @@ public sealed record CandidateGroupRequest(
     string RepoPath,
     string GitBehavior,
     string? CommentsFilePath,
-    string? PromptBaseDirectory);
+    string? PromptBaseDirectory,
+    /// <summary>
+    /// Card comments fetched just before this candidate group runs. Threaded
+    /// through so the evaluator's re-run fast-path can find prior step markers
+    /// without re-fetching. Empty list when no comments exist on the card.
+    /// </summary>
+    IReadOnlyList<CardComment>? ExistingComments = null);
 
 internal sealed record CandidateExecution(
     int Index,
@@ -1312,7 +1786,18 @@ internal sealed record CandidateExecution(
     string WorktreePath,
     AgentResult AgentResult,
     DateTimeOffset StartedAt,
-    DateTimeOffset CompletedAt)
+    DateTimeOffset CompletedAt,
+    /// <summary>
+    /// True if this candidate exhausted retries on a transient failure (RATE_LIMIT
+    /// or TIMEOUT) and the executor would have thrown <see cref="RateLimitException"/>
+    /// or <see cref="TimeoutException"/> on the final attempt — but the runtime
+    /// converted the failure to <see cref="AgentOutcome.ERROR"/> so sibling
+    /// candidates and sibling slots still get a chance. Surfaces upward through
+    /// <see cref="SlotResult.WasRateLimited"/> so AgentRunner can decide whether
+    /// to bubble a real <see cref="RateLimitException"/> after the whole chain
+    /// exhausts.
+    /// </summary>
+    bool RateLimited = false)
 {
     /// <summary>Constructs a record for a candidate that failed during worktree setup.</summary>
     public static CandidateExecution FailedSetup(
@@ -1327,7 +1812,8 @@ internal sealed record CandidateExecution(
             AgentResult: new AgentResult(AgentOutcome.ERROR,
                 $"Candidate setup failed: {errorMessage}"),
             StartedAt: startedAt,
-            CompletedAt: DateTimeOffset.UtcNow);
+            CompletedAt: DateTimeOffset.UtcNow,
+            RateLimited: false);
 }
 
 /// <summary>Evaluator's verdict — winner index and per-candidate scores.</summary>
@@ -1340,3 +1826,32 @@ internal sealed record CandidateScore(
     int Index,
     decimal? Score,
     string? Reasoning);
+
+/// <summary>
+/// Outcome of a single slot's execution, used by <see cref="AgentRunner"/> to
+/// decide whether to short-circuit (Won/NeedsInfo) or fall back to the next slot
+/// (Failed) in the step's slot list.
+/// </summary>
+public enum SlotOutcome
+{
+    /// <summary>Slot produced a winner whose outcome is COMPLETE — step succeeds with this winner.</summary>
+    Won,
+    /// <summary>Slot produced a result with NEEDS_INFO — step propagates the questions; no fallback.</summary>
+    NeedsInfo,
+    /// <summary>Slot did not produce a usable result — step should try the next slot.</summary>
+    Failed,
+}
+
+/// <summary>Slot-level result returned to AgentRunner.</summary>
+/// <param name="WasRateLimited">
+/// True only when <see cref="Outcome"/> is <see cref="SlotOutcome.Failed"/> AND every
+/// candidate in the slot exhausted retries on a transient failure (RATE_LIMIT / TIMEOUT).
+/// AgentRunner's slot loop uses this to distinguish "fall through and try the next slot"
+/// from "the whole slot chain was rate-limited; bubble a real RateLimitException so the
+/// poller backs off." Always false for <see cref="SlotOutcome.Won"/> /
+/// <see cref="SlotOutcome.NeedsInfo"/>.
+/// </param>
+public sealed record SlotResult(
+    SlotOutcome Outcome,
+    AgentResult AgentResult,
+    bool WasRateLimited = false);

@@ -82,7 +82,15 @@ public sealed class DockerOpenCodeAgentExecutor(
                 context.WorkspacePath, context.TargetCardId, context.TargetCardTitle);
             var containerTaskFilePath = mountContext?.TranslatePath(taskFilePath) ?? taskFilePath;
 
-            var basePrompt = BuildUserPromptWithSchema(context, containerTaskFilePath);
+            // Mirror task-file translation for the comments file — see
+            // DockerClaudeAgentExecutor for the full rationale. OpenCode is
+            // particularly sensitive: its file-resolution layer half-converts
+            // Windows host paths (`C:\...\tasks\file.md` → `/C/...\tasks\file.md`),
+            // making the failure mode silent until the agent times out.
+            var promptContext = (mountContext is not null && context.CommentsFilePath is not null)
+                ? context with { CommentsFilePath = mountContext.TranslatePath(context.CommentsFilePath) }
+                : context;
+            var basePrompt = BuildUserPromptWithSchema(promptContext, containerTaskFilePath);
 
             var (hostPromptDir, _) = TranslateSystemPromptPath(context.SystemPromptFilePath);
             var openCodeArgs = BuildOpenCodeArgumentList();

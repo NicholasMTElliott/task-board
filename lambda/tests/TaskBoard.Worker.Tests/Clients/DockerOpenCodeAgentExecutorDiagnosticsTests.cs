@@ -210,7 +210,14 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
     [InlineData("Error: network llm-net not found", "Network")]
     [InlineData("curl: (6) could not resolve host: llama-server", "Network")]
     [InlineData("connection refused on port 8080", "Network")]
-    [InlineData("llama-server returned 404", "Config")]
+    // 404 is its own "Path" category: a 404 reaching the SDK means the proxy
+    // AND backend are running (otherwise we'd see ENOTFOUND or 502), so it's
+    // a real path mismatch — most likely an SDK probe call to an endpoint
+    // llama.cpp doesn't expose (`/v1/embeddings`, `/v1/models/{id}`, etc.).
+    // The previous "Config / wrong URL" categorization sent diagnosis the wrong
+    // way: the URL config is verified-correct against local-llm's wire contract.
+    [InlineData("llama-server returned 404", "Path")]
+    [InlineData("upstream unreachable: 502 Bad Gateway", "Network")]
     [InlineData("model not found: qwen3.6-bogus", "Model")]
     public async Task ExecuteAsync_StderrMatchesKnownSignature_HintIncludedInException(
         string stderr, string expectedCategory)

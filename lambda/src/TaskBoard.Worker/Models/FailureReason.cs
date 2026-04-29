@@ -1,10 +1,19 @@
+using System.Text.Json.Serialization;
+
 namespace TaskBoard.Worker.Models;
 
 /// <summary>
 /// Classifies why an agent run failed when outcome is ERROR.
 /// Only populated on error outcomes; null for COMPLETE and NEEDS_INFO.
 /// Persisted as TEXT to the agent_run.failure_reason column.
+/// <para>
+/// The <see cref="JsonStringEnumConverter"/> attribute lets workflow JSON
+/// reference these by name (e.g. <c>"retryOn": ["RATE_LIMIT", "TIMEOUT"]</c>)
+/// without making operators write integer ordinals. DB persistence is
+/// unaffected — Npgsql parameters call <c>.ToString()</c> directly.
+/// </para>
 /// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum FailureReason
 {
     /// <summary>The agent CLI or board API hit a rate limit.</summary>

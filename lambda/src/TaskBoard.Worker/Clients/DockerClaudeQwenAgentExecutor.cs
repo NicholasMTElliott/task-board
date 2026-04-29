@@ -80,7 +80,12 @@ public sealed class DockerClaudeQwenAgentExecutor(
                 context.WorkspacePath, context.TargetCardId, context.TargetCardTitle);
             var containerTaskFilePath = mountContext?.TranslatePath(taskFilePath) ?? taskFilePath;
 
-            var userPrompt = ClaudeAgentExecutor.BuildUserPrompt(context, containerTaskFilePath);
+            // Mirror task-file translation for the comments file — see
+            // DockerClaudeAgentExecutor for the full rationale.
+            var promptContext = (mountContext is not null && context.CommentsFilePath is not null)
+                ? context with { CommentsFilePath = mountContext.TranslatePath(context.CommentsFilePath) }
+                : context;
+            var userPrompt = ClaudeAgentExecutor.BuildUserPrompt(promptContext, containerTaskFilePath);
 
             var (hostPromptDir, containerPromptPath) = TranslateSystemPromptPath(
                 context.SystemPromptFilePath);

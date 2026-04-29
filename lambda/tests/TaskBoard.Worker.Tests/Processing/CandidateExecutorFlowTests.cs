@@ -15,6 +15,15 @@ namespace TaskBoard.Worker.Tests.Processing;
 /// </summary>
 public class CandidateExecutorFlowTests : IDisposable
 {
+    // Card identity reused across tests. The filename is what TaskFileManager
+    // would write — slugged from the title — so test setup mirrors real
+    // production behaviour.
+    private const string TestCardId = "1";
+    private const string TestCardTitle = "Test card";
+    private static readonly string TestTaskFileName =
+        TaskFileManager.GetTaskFileName(TestCardId, TestCardTitle);
+    private static readonly string TestTaskWriteKey = $"tasks/{TestTaskFileName}";
+
     private readonly string _repoRoot;
     private readonly string _canonicalWorktree;
     private readonly GitWorkspaceManager _git;
@@ -36,7 +45,7 @@ public class CandidateExecutorFlowTests : IDisposable
         // Seed canonical worktree with the .aiboard task file copy logic exercises.
         var taskDir = Path.Combine(_canonicalWorktree, ".aiboard", "tasks");
         Directory.CreateDirectory(taskDir);
-        File.WriteAllText(Path.Combine(taskDir, "1.md"), "# Card 1\n\noriginal task body\n");
+        File.WriteAllText(Path.Combine(taskDir, TestTaskFileName), "# Card 1\n\noriginal task body\n");
 
         _runStore = new RecordingRunStore();
         _boardClient = new RecordingBoardClient();
@@ -210,12 +219,12 @@ public class CandidateExecutorFlowTests : IDisposable
 
         var cand0Writes = new Dictionary<string, string>
         {
-            ["tasks/1.md"] = "# Card 1\n\n## Technical Design\n\nApproach A: monolith.\n",
+            [TestTaskWriteKey] = "# Card 1\n\n## Technical Design\n\nApproach A: monolith.\n",
             ["updates/new-task-foo.md"] = "---\ntitle: Task Foo\n---\nFrom A.\n",
         };
         var cand1Writes = new Dictionary<string, string>
         {
-            ["tasks/1.md"] = "# Card 1\n\n## Technical Design\n\nApproach B: microservices.\n",
+            [TestTaskWriteKey] = "# Card 1\n\n## Technical Design\n\nApproach B: microservices.\n",
             ["updates/new-task-bar.md"] = "---\ntitle: Task Bar\n---\nFrom B.\n",
             ["updates/new-task-baz.md"] = "---\ntitle: Task Baz\n---\nAlso from B.\n",
         };
@@ -250,7 +259,8 @@ public class CandidateExecutorFlowTests : IDisposable
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
 
         // (1) Canonical task body is candidate 1's
-        var canonicalTask = File.ReadAllText(Path.Combine(_canonicalWorktree, ".aiboard", "tasks", "1.md"));
+        var canonicalTask = File.ReadAllText(
+            Path.Combine(_canonicalWorktree, ".aiboard", "tasks", TestTaskFileName));
         Assert.Contains("Approach B: microservices", canonicalTask);
         Assert.DoesNotContain("Approach A: monolith", canonicalTask);
 
@@ -272,6 +282,252 @@ public class CandidateExecutorFlowTests : IDisposable
         // Verdict persisted with selected=true on index 1
         var winnerVerdict = _runStore.RecordedVerdicts.Single(v => v.CandidateIndex == 1);
         Assert.True(winnerVerdict.Selected);
+    }
+
+    // ── Parallel-by-provider execution ───────────────────────────────────────
+
+    [Fact]
+    public async Task ParallelByProvider_DifferentProvidersOverlap_SameProviderSerializes()
+    {
+        // Three candidates: docker-claude-cli×2, docker-opencode×1.
+        // Each candidate sleeps 250ms before returning COMPLETE. Expected timing:
+        //   - claude[1] starts AFTER claude[0] finishes (same-provider serialization)
+        //   - opencode[2] starts BEFORE claude[0] finishes (cross-provider parallelism)
+        // Pure-sequential execution (the pre-fix shape) would fail the second
+        // assertion: opencode would only start after both claude calls complete.
+        var sleepDuration = TimeSpan.FromMilliseconds(250);
+
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = new SleepingExecutor(sleepDuration, AgentOutcome.COMPLETE, "claude-ok"),
+            ["docker-opencode"]   = new SleepingExecutor(sleepDuration, AgentOutcome.COMPLETE, "opencode-ok"),
+            ["claude-cli"]        = new ScriptedExecutor(AgentOutcome.COMPLETE,
+                """
+                {"outcome":"COMPLETE","winner_index":0,"scores":[
+                  {"index":0,"score":7,"reasoning":"a"},
+                  {"index":1,"score":7,"reasoning":"b"},
+                  {"index":2,"score":7,"reasoning":"c"}
+                ]}
+                """),
+        };
+
+        var candidateExecutor = new CandidateExecutor(
+            _git,
+            new MapResolver(byProvider),
+            _runStore,
+            _boardClient,
+            NullLogger<CandidateExecutor>.Instance);
+
+        var request = NewRequest(
+            stepName: "implement",
+            providers: ["docker-claude-cli", "docker-claude-cli", "docker-opencode"]);
+
+        var result = await candidateExecutor.ExecuteCandidateGroupAsync(
+            request, CancellationToken.None);
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+
+        var candidateRecords = _runStore.SavedSteps
+            .Where(r => r.CandidateGroupId is not null)
+            .ToDictionary(r => r.CandidateIndex!.Value);
+
+        Assert.Equal(3, candidateRecords.Count);
+        var claude0 = candidateRecords[0];
+        var claude1 = candidateRecords[1];
+        var opencode = candidateRecords[2];
+
+        // Same-provider serialization: claude[1] starts no earlier than claude[0] ends.
+        // 10ms slop accommodates clock-resolution + scheduling jitter.
+        Assert.True(
+            claude1.StartedAtUtc >= claude0.CompletedAtUtc - TimeSpan.FromMilliseconds(10),
+            $"Same-provider candidates should serialize. claude[0] completed at {claude0.CompletedAtUtc:O}, " +
+            $"claude[1] started at {claude1.StartedAtUtc:O} (gap {(claude1.StartedAtUtc - claude0.CompletedAtUtc).TotalMilliseconds:F0}ms — should be ≥0).");
+
+        // Cross-provider parallelism: opencode starts before claude[0] finishes.
+        Assert.True(
+            opencode.StartedAtUtc < claude0.CompletedAtUtc,
+            $"Different-provider candidates should overlap. claude[0] completed at {claude0.CompletedAtUtc:O}, " +
+            $"opencode started at {opencode.StartedAtUtc:O} (lag {(opencode.StartedAtUtc - claude0.CompletedAtUtc).TotalMilliseconds:F0}ms — should be <0).");
+    }
+
+    // ── CommentsFilePath candidate-relative rewrite ──────────────────────────
+
+    [Fact]
+    public async Task CandidateExecution_CommentsFilePath_PointsAtCandidateWorktree_NotCanonical()
+    {
+        // Regression: prior to the fix, CandidateGroupRequest.CommentsFilePath
+        // (canonical-worktree path) was passed verbatim into each candidate's
+        // AgentExecutionContext, so PromptBuilder embedded the canonical path
+        // in the prompt — the candidate's container had no such file at that
+        // path and the agent burned its timeout in a doomed read-fail-glob-fail
+        // loop. Fix: rebuild CommentsFilePath from the candidate's WorkspacePath
+        // after CopyAiboardArtifactsToCandidate runs.
+
+        // Seed the canonical worktree's comments file (production AgentRunner
+        // would have written it before invoking CandidateExecutor).
+        var canonicalCommentsPath = TaskFileManager.GetCommentsFilePath(
+            _canonicalWorktree, TestCardId, TestCardTitle);
+        Directory.CreateDirectory(Path.GetDirectoryName(canonicalCommentsPath)!);
+        File.WriteAllText(canonicalCommentsPath, "# prior conversation\n");
+
+        // Capture (context, file-existed-at-call-time). We must check
+        // file-exists DURING the executor call — by the time the assertion
+        // runs, the loser candidate's worktree has been cleaned up by the
+        // evaluator's promotion phase, and a post-call File.Exists would
+        // false-negative on the cleaned-up path.
+        var capturedSnapshots = new List<(AgentExecutionContext Context, bool FileExistedAtCallTime)>();
+        var capturingExecutor = new CapturingExecutor(
+            AgentOutcome.COMPLETE, "ok", capturedSnapshots);
+
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = capturingExecutor,
+            ["docker-opencode"]   = capturingExecutor,
+            ["claude-cli"] = new ScriptedExecutor(AgentOutcome.COMPLETE,
+                "Both fine.\n```json\n{\"outcome\":\"COMPLETE\",\"winner_index\":0," +
+                "\"scores\":[{\"index\":0,\"score\":8,\"reasoning\":\"\"}," +
+                "{\"index\":1,\"score\":6,\"reasoning\":\"\"}]}\n```"),
+        };
+
+        var executor = new CandidateExecutor(
+            _git, new MapResolver(byProvider),
+            _runStore, _boardClient, NullLogger<CandidateExecutor>.Instance);
+
+        // Re-use NewRequest's shape but inject CommentsFilePath. NewRequest's
+        // default leaves it null; we want it set to the canonical path so the
+        // bug-vs-fix is observable.
+        var systemPromptFile = Path.Combine(_repoRoot, "system.md");
+        File.WriteAllText(systemPromptFile, "# evaluator system prompt");
+        var request = new CandidateGroupRequest(
+            RunId: "run-comments-rewrite-1",
+            CardId: TestCardId,
+            CardTitle: TestCardTitle,
+            StateName: "Implementing",
+            StepIndex: 0,
+            Step: new WorkflowStep(
+                Name: "implement",
+                Role: "implementer",
+                TaskPromptFile: null,
+                TaskPrompt: "Implement the thing.",
+                Candidates: [
+                    new CandidateOverride("docker-claude-cli"),
+                    new CandidateOverride("docker-opencode"),
+                ],
+                Evaluator: new EvaluatorConfig(
+                    Role: "evaluator",
+                    TaskPrompt: "Evaluate.")),
+            Role: new WorkflowRole(
+                Model: "claude-sonnet-4-6",
+                SystemPrompt: "you are an implementer",
+                Sections: []),
+            WorkflowRoles: new Dictionary<string, WorkflowRole>
+            {
+                ["implementer"] = new("claude-sonnet-4-6", "sys", []),
+                ["evaluator"]   = new("claude-opus-4-6", "you are an evaluator", []),
+            },
+            StateProviderParams: null,
+            TaskPrompt: "Implement.",
+            SystemPromptFilePath: systemPromptFile,
+            WorktreePath: _canonicalWorktree,
+            RepoPath: _repoRoot,
+            GitBehavior: "commit_and_push",
+            CommentsFilePath: canonicalCommentsPath,
+            PromptBaseDirectory: null);
+
+        await executor.ExecuteCandidateGroupAsync(request, CancellationToken.None);
+
+        // Both candidates' contexts captured. Each must have a CommentsFilePath
+        // that lives UNDER the candidate's own worktree, NOT the canonical one.
+        Assert.Equal(2, capturedSnapshots.Count);
+        foreach (var (ctx, fileExistedAtCallTime) in capturedSnapshots)
+        {
+            Assert.NotNull(ctx.CommentsFilePath);
+            Assert.NotEqual(canonicalCommentsPath, ctx.CommentsFilePath);
+            // Candidate worktree path == ctx.WorkspacePath; the comments file
+            // must live underneath it (so production-side TaskFileManager.Read
+            // finds the file the candidate sees).
+            Assert.StartsWith(ctx.WorkspacePath, ctx.CommentsFilePath!,
+                StringComparison.OrdinalIgnoreCase);
+            // The actual file must exist at the rewritten path AT THE MOMENT
+            // the executor saw the context (proves CopyAiboardArtifactsToCandidate
+            // seeded it before the agent ran). After the call returns, the
+            // evaluator's cleanup may have removed the loser worktree.
+            Assert.True(fileExistedAtCallTime,
+                $"Comments file should exist on disk at the rewritten path when the agent runs: {ctx.CommentsFilePath}");
+        }
+    }
+
+    [Fact]
+    public async Task CandidateExecution_CommentsFilePathNullOnRequest_RemainsNullPerCandidate()
+    {
+        // When the canonical request didn't have a comments file (no comments
+        // on the card yet, or the test path), candidates must also see null —
+        // not a fabricated path that doesn't exist anywhere.
+        var capturedSnapshots = new List<(AgentExecutionContext Context, bool FileExistedAtCallTime)>();
+        var capturingExecutor = new CapturingExecutor(
+            AgentOutcome.COMPLETE, "ok", capturedSnapshots);
+
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = capturingExecutor,
+            ["claude-cli"] = new ScriptedExecutor(AgentOutcome.COMPLETE,
+                "OK.\n```json\n{\"outcome\":\"COMPLETE\",\"winner_index\":0," +
+                "\"scores\":[{\"index\":0,\"score\":8,\"reasoning\":\"\"}]}\n```"),
+        };
+        var executor = new CandidateExecutor(
+            _git, new MapResolver(byProvider),
+            _runStore, _boardClient, NullLogger<CandidateExecutor>.Instance);
+
+        // NewRequest defaults CommentsFilePath: null.
+        var request = NewRequest("implement", ["docker-claude-cli"]);
+        await executor.ExecuteCandidateGroupAsync(request, CancellationToken.None);
+
+        Assert.Single(capturedSnapshots);
+        Assert.Null(capturedSnapshots[0].Context.CommentsFilePath);
+    }
+
+    /// <summary>
+    /// Executor that records every <see cref="AgentExecutionContext"/> it sees so
+    /// tests can assert on what the context looked like at the executor boundary.
+    /// Also captures whether the resolved CommentsFilePath existed on disk at
+    /// the moment of the call (post-call cleanup of loser candidate worktrees
+    /// can remove the file before assertions run).
+    /// </summary>
+    private sealed class CapturingExecutor(
+        AgentOutcome outcome,
+        string detail,
+        List<(AgentExecutionContext Context, bool FileExistedAtCallTime)> capturedSnapshots) : IAgentExecutor
+    {
+        private readonly object _lock = new();
+
+        public Task<AgentResult> ExecuteAsync(
+            AgentExecutionContext context, CancellationToken cancellationToken)
+        {
+            var fileExisted = context.CommentsFilePath is not null
+                && File.Exists(context.CommentsFilePath);
+            lock (_lock) { capturedSnapshots.Add((context, fileExisted)); }
+            // Touch a file so commit_and_push has something to commit.
+            var marker = Path.Combine(context.WorkspacePath, "candidate-output.txt");
+            File.WriteAllText(marker, $"{detail}\n");
+            return Task.FromResult(new AgentResult(outcome, detail));
+        }
+    }
+
+    /// <summary>
+    /// Executor that delays for a fixed duration before returning, to widen the
+    /// timing window the parallel-by-provider test inspects. Touches a marker
+    /// file so commit_and_push promotion has something to commit.
+    /// </summary>
+    private sealed class SleepingExecutor(
+        TimeSpan delay, AgentOutcome outcome, string detail) : IAgentExecutor
+    {
+        public async Task<AgentResult> ExecuteAsync(
+            AgentExecutionContext context, CancellationToken cancellationToken)
+        {
+            var marker = Path.Combine(context.WorkspacePath, "candidate-output.txt");
+            await File.WriteAllTextAsync(marker, $"{detail}\n", cancellationToken);
+            await Task.Delay(delay, cancellationToken);
+            return new AgentResult(outcome, detail);
+        }
     }
 
     // ── Builders ─────────────────────────────────────────────────────────────
@@ -396,11 +652,26 @@ public class CandidateExecutorFlowTests : IDisposable
         }
     }
 
-    /// <summary>RunStore that records every call. Read-only methods return empty.</summary>
+    /// <summary>
+    /// RunStore that records every call. Read-only methods return empty.
+    /// Mutable lists guarded by a lock so different-provider candidate groups
+    /// running in parallel can't race on List&lt;T&gt;.Add (which corrupts internal state).
+    /// </summary>
     private sealed class RecordingRunStore : IRunStore
     {
-        public List<StepResultRecord> SavedSteps { get; } = new();
-        public List<RecordedVerdict> RecordedVerdicts { get; } = new();
+        private readonly object _lock = new();
+        private readonly List<StepResultRecord> _savedSteps = new();
+        private readonly List<RecordedVerdict> _recordedVerdicts = new();
+
+        public IReadOnlyList<StepResultRecord> SavedSteps
+        {
+            get { lock (_lock) { return _savedSteps.ToList(); } }
+        }
+
+        public IReadOnlyList<RecordedVerdict> RecordedVerdicts
+        {
+            get { lock (_lock) { return _recordedVerdicts.ToList(); } }
+        }
 
         public Task CreateRunAsync(RunRecord run, CancellationToken ct) => Task.CompletedTask;
         public Task UpdateRunProgressAsync(string runId, int completedSteps, CancellationToken ct) => Task.CompletedTask;
@@ -408,7 +679,7 @@ public class CandidateExecutorFlowTests : IDisposable
 
         public Task SaveStepResultAsync(StepResultRecord result, CancellationToken ct)
         {
-            SavedSteps.Add(result);
+            lock (_lock) { _savedSteps.Add(result); }
             return Task.CompletedTask;
         }
 
@@ -426,8 +697,11 @@ public class CandidateExecutorFlowTests : IDisposable
             bool selected, decimal? qualityScore, string? evaluatorReasoning,
             CancellationToken ct)
         {
-            RecordedVerdicts.Add(new RecordedVerdict(
-                runId, candidateGroupId, candidateIndex, selected, qualityScore, evaluatorReasoning));
+            lock (_lock)
+            {
+                _recordedVerdicts.Add(new RecordedVerdict(
+                    runId, candidateGroupId, candidateIndex, selected, qualityScore, evaluatorReasoning));
+            }
             return Task.CompletedTask;
         }
     }

@@ -222,52 +222,12 @@ public static class WorkflowConfigValidator
                     errors.Add($"State '{stateId}' ({state.Name}) is children_complete but has no 'COMPLETE' transition.");
             }
 
-            // ── candidate / evaluator validation ─────────────────────────────
+            // ── candidate / evaluator / slots validation ─────────────────────
             if (state.Steps is { Count: > 0 })
             {
                 foreach (var step in state.Steps)
                 {
-                    var hasCandidates = step.Candidates is { Count: > 0 };
-                    var hasEvaluator = step.Evaluator is not null;
-
-                    if (hasCandidates && !hasEvaluator)
-                        errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' has candidates but no evaluator. Add an evaluator config or remove the candidates.");
-
-                    if (!hasCandidates && hasEvaluator)
-                        errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' has an evaluator but no candidates. Remove the evaluator or add at least one candidate.");
-
-                    if (hasCandidates)
-                    {
-                        // No cap on Count and no rejection of duplicate providers — both were
-                        // self-imposed conservatism. Cap-of-4 was nominally to keep evaluator
-                        // prompts manageable, but eval prompt size is the user's call (they
-                        // see if it degrades). Duplicate-provider rejection broke same-provider
-                        // model A/B testing (e.g. claude-cli + opus vs claude-cli + sonnet) and
-                        // also blocked variance-measurement runs (same agent twice). The user
-                        // can ensure the right shape; the validator should not.
-
-                        // Discard-mode states are now supported via file-based winner promotion
-                        // (CandidateExecutor copies the winner's .aiboard/{tasks,updates}/
-                        // contents to the canonical worktree instead of git-resetting).
-
-                        foreach (var cand in step.Candidates!)
-                        {
-                            if (string.IsNullOrWhiteSpace(cand.Provider))
-                                errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' has a candidate with an empty provider.");
-                        }
-                    }
-
-                    if (hasEvaluator)
-                    {
-                        var ev = step.Evaluator!;
-                        if (string.IsNullOrWhiteSpace(ev.Role))
-                            errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' evaluator has no role.");
-                        else if (!config.Roles.ContainsKey(ev.Role))
-                            errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' evaluator references role '{ev.Role}' which does not exist in Roles.");
-
-                        if (string.IsNullOrWhiteSpace(ev.TaskPrompt) && string.IsNullOrWhiteSpace(ev.TaskPromptFile))
-                            errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' evaluator has neither taskPrompt nor taskPromptFile.");
-                    }
+                    ValidateStepSlots(stateId, state, step, config, errors);
                 }
             }
 
@@ -404,6 +364,78 @@ public static class WorkflowConfigValidator
     }
 
     /// <summary>
+    /// Per-step validation of candidate / evaluator / slots. Walks both the
+    /// legacy step-level <c>Candidates+Evaluator</c> and the new <c>Slots</c>
+    /// list via <see cref="WorkflowStep.GetEffectiveSlots"/> so the rules are
+    /// uniform across both shapes.
+    /// </summary>
+    /// <remarks>
+    /// Mixing the legacy and new shape (setting both <c>Candidates</c> and
+    /// <c>Slots</c> on the same step) is rejected up front — the runtime would
+    /// silently prefer one and the user would not notice. Likewise an evaluator
+    /// without candidates remains an error.
+    /// </remarks>
+    private static void ValidateStepSlots(
+        string stateId, WorkflowState state, WorkflowStep step,
+        WorkflowConfig config, List<string> errors)
+    {
+        var hasLegacyCandidates = step.Candidates is { Count: > 0 };
+        var hasLegacyEvaluator = step.Evaluator is not null;
+        var hasSlots = step.Slots is { Count: > 0 };
+
+        // ── shape: legacy vs new ────────────────────────────────────────────
+        if (hasSlots && (hasLegacyCandidates || hasLegacyEvaluator))
+            errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' sets BOTH 'slots' and the legacy 'candidates'/'evaluator' fields. Use one form: either 'candidates'+'evaluator' (single slot) OR 'slots' (ordered fallback chain).");
+
+        if (!hasLegacyCandidates && hasLegacyEvaluator)
+            errors.Add($"State '{stateId}' ({state.Name}) step '{step.Name}' has an evaluator but no candidates. Remove the evaluator or add at least one candidate.");
+
+        // ── per-slot validation (uniform across legacy + new) ───────────────
+        var slots = step.GetEffectiveSlots();
+        for (var slotIdx = 0; slotIdx < slots.Count; slotIdx++)
+        {
+            var slot = slots[slotIdx];
+            var slotLabel = slots.Count == 1 && !hasSlots
+                ? $"step '{step.Name}'"
+                : $"step '{step.Name}' slot {slotIdx}";
+
+            if (slot.Candidates is null or { Count: 0 })
+            {
+                errors.Add($"State '{stateId}' ({state.Name}) {slotLabel} has no candidates. Every slot must have at least one candidate.");
+                continue;
+            }
+
+            // 2+ candidates require an evaluator (single-candidate slots may
+            // omit it — the runtime surfaces the candidate's result directly).
+            if (slot.Candidates.Count >= 2 && slot.Evaluator is null)
+                errors.Add($"State '{stateId}' ({state.Name}) {slotLabel} has {slot.Candidates.Count} candidates but no evaluator. Multi-candidate slots need an evaluator to pick the winner.");
+
+            // Per-candidate field checks
+            for (var ci = 0; ci < slot.Candidates.Count; ci++)
+            {
+                var cand = slot.Candidates[ci];
+                if (string.IsNullOrWhiteSpace(cand.Provider))
+                    errors.Add($"State '{stateId}' ({state.Name}) {slotLabel} candidate #{ci} has an empty provider.");
+
+                if (cand.Retries < 0)
+                    errors.Add($"State '{stateId}' ({state.Name}) {slotLabel} candidate #{ci} has negative retries={cand.Retries}. Retries must be 0 or greater.");
+            }
+
+            // Evaluator validation (when set)
+            if (slot.Evaluator is { } ev)
+            {
+                if (string.IsNullOrWhiteSpace(ev.Role))
+                    errors.Add($"State '{stateId}' ({state.Name}) {slotLabel} evaluator has no role.");
+                else if (!config.Roles.ContainsKey(ev.Role))
+                    errors.Add($"State '{stateId}' ({state.Name}) {slotLabel} evaluator references role '{ev.Role}' which does not exist in Roles.");
+
+                if (string.IsNullOrWhiteSpace(ev.TaskPrompt) && string.IsNullOrWhiteSpace(ev.TaskPromptFile))
+                    errors.Add($"State '{stateId}' ({state.Name}) {slotLabel} evaluator has neither taskPrompt nor taskPromptFile.");
+            }
+        }
+    }
+
+    /// <summary>
     /// Non-fatal audit checks — return soft warnings about configurations that are
     /// valid but might not be what the operator intended. Callers log these as
     /// warnings; they do not block startup.
@@ -413,7 +445,45 @@ public static class WorkflowConfigValidator
         var warnings = new List<string>();
         AuditCodexSandboxDefaults(config, warnings);
         AuditCrossProviderCandidateModels(config, warnings);
+        AuditFinalSlotRetries(config, warnings);
         return warnings;
+    }
+
+    /// <summary>
+    /// Warns when a step's final fallback slot has all candidates with zero
+    /// retries. A transient outage of that slot's provider(s) (rate limit,
+    /// timeout) will surface as a step-level error rather than being absorbed
+    /// by retry. The point of fallbacks is graceful degradation; if every slot
+    /// is "expensive subscription, no retries" the operator gets paged on
+    /// every blip. Worth flagging on review even though the config is valid.
+    /// </summary>
+    private static void AuditFinalSlotRetries(WorkflowConfig config, List<string> warnings)
+    {
+        foreach (var (stateId, state) in config.States)
+        {
+            if (state.Steps is not { Count: > 0 }) continue;
+
+            foreach (var step in state.Steps)
+            {
+                var slots = step.GetEffectiveSlots();
+                if (slots.Count == 0) continue;
+
+                var lastSlot = slots[^1];
+                if (lastSlot.Candidates is null or { Count: 0 }) continue;
+                if (lastSlot.Candidates.All(c => c.Retries == 0))
+                {
+                    var slotsCount = slots.Count;
+                    var location = slotsCount > 1
+                        ? $"step '{step.Name}' final slot (index {slotsCount - 1})"
+                        : $"step '{step.Name}' (single slot)";
+                    warnings.Add(
+                        $"State '{stateId}' ({state.Name}) {location} has all candidates with 0 retries. " +
+                        "A transient outage (rate limit, timeout) of this slot's provider(s) will surface " +
+                        "as a step-level error with no graceful degradation. Add 'retries' to at least one " +
+                        "candidate, or add a cheaper fallback slot, to make this step outage-tolerant.");
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -435,24 +505,36 @@ public static class WorkflowConfigValidator
 
             foreach (var step in state.Steps)
             {
-                if (step.Candidates is not { Count: > 0 }) continue;
                 if (!config.Roles.TryGetValue(step.Role, out var role)) continue;
 
-                for (var i = 0; i < step.Candidates.Count; i++)
-                {
-                    var candidate = step.Candidates[i];
-                    if (string.IsNullOrEmpty(candidate.Provider)) continue;
-                    if (string.Equals(candidate.Provider, role.Provider, StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    if (!string.IsNullOrWhiteSpace(candidate.Model)) continue;
+                var slots = step.GetEffectiveSlots();
+                if (slots.Count == 0) continue;
 
-                    warnings.Add(
-                        $"State '{stateId}' ({state.Name}) step '{step.Name}' candidate #{i} uses provider " +
-                        $"'{candidate.Provider}' on role '{step.Role}' (role.provider='{role.Provider}', " +
-                        $"role.model='{role.Model}'). The role's default model will NOT be passed to the " +
-                        $"candidate's executor (it would mis-route across providers — e.g. a Claude model name " +
-                        $"on a Codex executor). The candidate's executor will use its own default. " +
-                        $"Set 'model' on the candidate to pin a specific model for this provider.");
+                for (var slotIdx = 0; slotIdx < slots.Count; slotIdx++)
+                {
+                    var slot = slots[slotIdx];
+                    if (slot.Candidates is null or { Count: 0 }) continue;
+
+                    var slotLabel = slots.Count == 1
+                        ? $"step '{step.Name}'"
+                        : $"step '{step.Name}' slot {slotIdx}";
+
+                    for (var i = 0; i < slot.Candidates.Count; i++)
+                    {
+                        var candidate = slot.Candidates[i];
+                        if (string.IsNullOrEmpty(candidate.Provider)) continue;
+                        if (string.Equals(candidate.Provider, role.Provider, StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        if (!string.IsNullOrWhiteSpace(candidate.Model)) continue;
+
+                        warnings.Add(
+                            $"State '{stateId}' ({state.Name}) {slotLabel} candidate #{i} uses provider " +
+                            $"'{candidate.Provider}' on role '{step.Role}' (role.provider='{role.Provider}', " +
+                            $"role.model='{role.Model}'). The role's default model will NOT be passed to the " +
+                            $"candidate's executor (it would mis-route across providers — e.g. a Claude model name " +
+                            $"on a Codex executor). The candidate's executor will use its own default. " +
+                            $"Set 'model' on the candidate to pin a specific model for this provider.");
+                    }
                 }
             }
         }

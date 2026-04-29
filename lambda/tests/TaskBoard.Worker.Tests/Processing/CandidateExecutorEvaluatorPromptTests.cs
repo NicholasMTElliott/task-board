@@ -15,6 +15,16 @@ namespace TaskBoard.Worker.Tests.Processing;
 /// </summary>
 public class CandidateExecutorEvaluatorPromptTests : IDisposable
 {
+    // Card identity reused across tests. The filename is what TaskFileManager
+    // would write — slugged from the title — so test setup mirrors real
+    // production behaviour. AppendDiscardCandidateOutputs reads this exact
+    // filename from each candidate worktree to feed the evaluator's prompt.
+    private const string TestCardId = "1";
+    private const string TestCardTitle = "Test card";
+    private static readonly string TestTaskFileName =
+        TaskFileManager.GetTaskFileName(TestCardId, TestCardTitle);
+    private static readonly string TestTaskWriteKey = $"tasks/{TestTaskFileName}";
+
     private readonly string _repoRoot;
     private readonly string _canonicalWorktree;
     private readonly GitWorkspaceManager _git;
@@ -33,7 +43,7 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
 
         var taskDir = Path.Combine(_canonicalWorktree, ".aiboard", "tasks");
         Directory.CreateDirectory(taskDir);
-        File.WriteAllText(Path.Combine(taskDir, "1.md"), "# Card 1\n\noriginal task body\n");
+        File.WriteAllText(Path.Combine(taskDir, TestTaskFileName), "# Card 1\n\noriginal task body\n");
     }
 
     public void Dispose()
@@ -66,10 +76,10 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         {
             ["docker-claude-cli"] = new ScriptedWriter(AgentOutcome.COMPLETE,
                 "Approach A short summary",
-                new Dictionary<string, string> { ["tasks/1.md"] = cand0Body }),
+                new Dictionary<string, string> { [TestTaskWriteKey] = cand0Body }),
             ["docker-opencode"]   = new ScriptedWriter(AgentOutcome.COMPLETE,
                 "Approach B short summary",
-                new Dictionary<string, string> { ["tasks/1.md"] = cand1Body }),
+                new Dictionary<string, string> { [TestTaskWriteKey] = cand1Body }),
             ["claude-cli"]        = capturingEvaluator,  // evaluator role default provider
         };
 
@@ -96,6 +106,64 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         // Sanity: prompt should anchor on the per-candidate file label so the
         // evaluator agent knows what it's looking at.
         Assert.Contains("Card body", prompt);
+
+        // Regression guard for the v0.0.19 bug: the prompt builder previously
+        // hardcoded `{cardId}.md` and missed slug-suffixed filenames, so for
+        // any card with a non-empty title the evaluator saw "candidate did
+        // not write a card body" for every candidate even when the file was
+        // there. Both candidates wrote real bodies above; the prompt must
+        // not contain the false-negative marker for either.
+        Assert.DoesNotContain("(candidate did not write a card body)", prompt);
+
+        // The prompt label must reflect the actual filename the orchestrator
+        // wrote/read — i.e. include the slug — so the evaluator agent can
+        // tell humans where to look.
+        Assert.Contains(TestTaskFileName, prompt);
+    }
+
+    [Fact]
+    public async Task DiscardMode_EmptyCardTitle_FallsBackToCardIdOnlyFilename()
+    {
+        // When TaskFileManager has no title to slug, GetTaskFileName falls
+        // back to `{cardId}.md`. AppendDiscardCandidateOutputs must follow
+        // the same rule — read the same path the orchestrator wrote — or
+        // empty-title cards regress into the fixed bug from the other side.
+        var canonicalTaskDir = Path.Combine(_canonicalWorktree, ".aiboard", "tasks");
+        // Drop the slugged seed file from the constructor and use the
+        // empty-title shape instead so this test is self-contained.
+        foreach (var f in Directory.EnumerateFiles(canonicalTaskDir))
+            File.Delete(f);
+        File.WriteAllText(Path.Combine(canonicalTaskDir, "1.md"),
+            "# Card 1\n\noriginal task body\n");
+
+        var capturingEvaluator = new CapturingExecutor(AgentOutcome.COMPLETE,
+            """
+            ```json
+            {"outcome":"COMPLETE","winner_index":0,"scores":[
+              {"index":0,"score":7,"reasoning":"ok"}
+            ]}
+            ```
+            """);
+
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = new ScriptedWriter(AgentOutcome.COMPLETE, "wrote it",
+                new Dictionary<string, string> { ["tasks/1.md"] = "Empty-title card body" }),
+            ["claude-cli"]        = capturingEvaluator,
+        };
+
+        var executor = BuildExecutor(byProvider);
+        var request = NewRequestWithEmptyTitle("create_design",
+            ["docker-claude-cli"], gitBehavior: "discard");
+
+        var result = await executor.ExecuteCandidateGroupAsync(request, CancellationToken.None);
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+
+        var prompt = capturingEvaluator.LastContext?.TaskPrompt
+            ?? throw new InvalidOperationException("Evaluator was not invoked.");
+
+        Assert.Contains("Empty-title card body", prompt);
+        Assert.DoesNotContain("(candidate did not write a card body)", prompt);
     }
 
     [Fact]
@@ -111,7 +179,7 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
         {
             ["docker-claude-cli"] = new ScriptedWriter(AgentOutcome.COMPLETE, "claude side",
-                new Dictionary<string, string> { ["tasks/1.md"] = "Claude version" }),
+                new Dictionary<string, string> { [TestTaskWriteKey] = "Claude version" }),
             ["codex"]             = capturingCodex,
             ["claude-cli"]        = new CapturingExecutor(AgentOutcome.COMPLETE,
                 """
@@ -201,9 +269,9 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
         {
             ["docker-claude-cli"] = new ScriptedWriter(AgentOutcome.COMPLETE, "A",
-                new Dictionary<string, string> { ["tasks/1.md"] = "A body" }),
+                new Dictionary<string, string> { [TestTaskWriteKey] = "A body" }),
             ["docker-opencode"]   = new ScriptedWriter(AgentOutcome.COMPLETE, "B",
-                new Dictionary<string, string> { ["tasks/1.md"] = "B body" }),
+                new Dictionary<string, string> { [TestTaskWriteKey] = "B body" }),
             ["claude-cli"]        = capturingEvaluator,
         };
 
@@ -241,9 +309,9 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
         {
             ["docker-claude-cli"] = new ScriptedWriter(AgentOutcome.COMPLETE, "A",
-                new Dictionary<string, string> { ["tasks/1.md"] = "A body" }),
+                new Dictionary<string, string> { [TestTaskWriteKey] = "A body" }),
             ["docker-opencode"]   = new ScriptedWriter(AgentOutcome.COMPLETE, "B",
-                new Dictionary<string, string> { ["tasks/1.md"] = "B body" }),
+                new Dictionary<string, string> { [TestTaskWriteKey] = "B body" }),
             ["claude-cli"]        = capturingEvaluator,
         };
 
@@ -258,7 +326,8 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
 
         // Canonical worktree's task body should NOT have been promoted from
         // either candidate (no winner picked).
-        var canonicalTask = File.ReadAllText(Path.Combine(_canonicalWorktree, ".aiboard", "tasks", "1.md"));
+        var canonicalTask = File.ReadAllText(
+            Path.Combine(_canonicalWorktree, ".aiboard", "tasks", TestTaskFileName));
         Assert.Equal("# Card 1\n\noriginal task body\n", canonicalTask.Replace("\r\n", "\n"));
     }
 
@@ -284,9 +353,9 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
         {
             ["docker-claude-cli"] = new ScriptedWriter(AgentOutcome.COMPLETE, "A",
-                new Dictionary<string, string> { ["tasks/1.md"] = "A body" }),
+                new Dictionary<string, string> { [TestTaskWriteKey] = "A body" }),
             ["docker-opencode"]   = new ScriptedWriter(AgentOutcome.COMPLETE, "B",
-                new Dictionary<string, string> { ["tasks/1.md"] = "B body" }),
+                new Dictionary<string, string> { [TestTaskWriteKey] = "B body" }),
             ["claude-cli"]        = capturingEvaluator,
         };
 
@@ -299,7 +368,7 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         // Prose recovery: outcome stays COMPLETE; candidate 1's body is promoted.
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
         var canonicalTask = File.ReadAllText(
-            Path.Combine(_canonicalWorktree, ".aiboard", "tasks", "1.md"));
+            Path.Combine(_canonicalWorktree, ".aiboard", "tasks", TestTaskFileName));
         Assert.Equal("B body", canonicalTask.Replace("\r\n", "\n"));
     }
 
@@ -322,12 +391,12 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         {
             ["docker-claude-cli"] = new ScriptedWriter(AgentOutcome.COMPLETE,
                 "no decomposition",
-                new Dictionary<string, string> { ["tasks/1.md"] = "# Card 1\nNo split.\n" }),
+                new Dictionary<string, string> { [TestTaskWriteKey] = "# Card 1\nNo split.\n" }),
             ["docker-opencode"]   = new ScriptedWriter(AgentOutcome.COMPLETE,
                 "split into subtasks",
                 new Dictionary<string, string>
                 {
-                    ["tasks/1.md"] = "# Card 1\nDecomposed.\n",
+                    [TestTaskWriteKey] = "# Card 1\nDecomposed.\n",
                     ["updates/new-task-alpha.md"] = "---\ntitle: Alpha subtask\n---\nBody for alpha.\n",
                 }),
             ["claude-cli"]        = capturingEvaluator,
@@ -350,6 +419,229 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         Assert.Contains("Body for alpha", prompt);
     }
 
+    [Fact]
+    public async Task ReRun_EvaluatorPromptCarriesRerunPreamble_WhenPriorMarkerOnCard()
+    {
+        // Re-run scenario: the canonical agent-step:create_design comment is
+        // already on the card (from a prior run) AND the prior run's evaluator
+        // step row has outcome=COMPLETE. The evaluator's task prompt must be
+        // prepended with the re-run preamble so it knows candidates may have
+        // just confirmed prior, not produced fresh material.
+        var capturingEvaluator = new CapturingExecutor(AgentOutcome.COMPLETE,
+            """
+            ```json
+            {"outcome":"COMPLETE","winner_index":0,"scores":[
+              {"index":0,"score":7,"reasoning":"confirmed prior"},
+              {"index":1,"score":7,"reasoning":"confirmed prior"}
+            ]}
+            ```
+            """);
+
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = new ScriptedWriter(AgentOutcome.COMPLETE, "Confirmed prior",
+                new Dictionary<string, string> { [TestTaskWriteKey] = "A body" }),
+            ["docker-opencode"]   = new ScriptedWriter(AgentOutcome.COMPLETE, "Confirmed prior",
+                new Dictionary<string, string> { [TestTaskWriteKey] = "B body" }),
+            ["claude-cli"]        = capturingEvaluator,
+        };
+
+        var priorRunStore = new PriorEvaluatorRunStore(
+            stepName: "create_design:evaluator",
+            priorRunId: "run-prior",
+            outcome: AgentOutcome.COMPLETE);
+
+        var executor = new CandidateExecutor(
+            _git,
+            new MapResolver(byProvider),
+            priorRunStore,
+            new NullBoardClient(),
+            NullLogger<CandidateExecutor>.Instance,
+            new RerunPreambleBuilder(priorRunStore, NullLogger<RerunPreambleBuilder>.Instance));
+
+        var existingComments = new[]
+        {
+            new CardComment("agent",
+                "<!-- agent-step:create_design -->\n\n## Technical Design\n\nApproach A: monolith.\n",
+                DateTimeOffset.UtcNow.AddMinutes(-30))
+        };
+
+        var systemPromptFile = Path.Combine(_repoRoot, "system.md");
+        File.WriteAllText(systemPromptFile, "# evaluator system prompt");
+
+        var request = new CandidateGroupRequest(
+            RunId: "run-current",
+            CardId: TestCardId,
+            CardTitle: TestCardTitle,
+            StateName: "Designing",
+            StepIndex: 0,
+            Step: new WorkflowStep(
+                Name: "create_design",
+                Role: "designer",
+                TaskPromptFile: null,
+                TaskPrompt: "Design the thing.",
+                Candidates:
+                [
+                    new CandidateOverride("docker-claude-cli"),
+                    new CandidateOverride("docker-opencode"),
+                ],
+                Evaluator: new EvaluatorConfig("evaluator", TaskPrompt: "judge")),
+            Role: new WorkflowRole(
+                Model: "claude-opus-4-6",
+                SystemPrompt: "you are a designer",
+                Sections: []),
+            WorkflowRoles: new Dictionary<string, WorkflowRole>
+            {
+                ["designer"]  = new("claude-opus-4-6", "sys", []),
+                ["evaluator"] = new("claude-opus-4-6", "sys", []),
+            },
+            StateProviderParams: null,
+            TaskPrompt: "Design the thing.",
+            SystemPromptFilePath: systemPromptFile,
+            WorktreePath: _canonicalWorktree,
+            RepoPath: _repoRoot,
+            GitBehavior: "discard",
+            CommentsFilePath: null,
+            PromptBaseDirectory: null,
+            ExistingComments: existingComments);
+
+        await executor.ExecuteCandidateGroupAsync(request, CancellationToken.None);
+
+        var prompt = capturingEvaluator.LastContext?.TaskPrompt
+            ?? throw new InvalidOperationException("Evaluator was not invoked.");
+
+        Assert.Contains("RE-RUN OF PREVIOUSLY COMPLETED STEP", prompt);
+        Assert.Contains("All candidates confirmed prior output remains accurate.", prompt);
+        Assert.Contains("Approach A: monolith", prompt);
+        Assert.Contains("Design the thing.", prompt);
+    }
+
+    [Fact]
+    public async Task ReRun_NoMarkerOnCard_PreambleNotInjected()
+    {
+        // Force-rerun simulation: prior comment was deleted from the card.
+        // Even though the DB still has a prior COMPLETE evaluator row, the
+        // missing marker suppresses the preamble.
+        var capturingEvaluator = new CapturingExecutor(AgentOutcome.COMPLETE,
+            """
+            ```json
+            {"outcome":"COMPLETE","winner_index":0,"scores":[
+              {"index":0,"score":7,"reasoning":"fresh"},
+              {"index":1,"score":7,"reasoning":"fresh"}
+            ]}
+            ```
+            """);
+
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = new ScriptedWriter(AgentOutcome.COMPLETE, "fresh A",
+                new Dictionary<string, string> { [TestTaskWriteKey] = "A body" }),
+            ["docker-opencode"]   = new ScriptedWriter(AgentOutcome.COMPLETE, "fresh B",
+                new Dictionary<string, string> { [TestTaskWriteKey] = "B body" }),
+            ["claude-cli"]        = capturingEvaluator,
+        };
+
+        var priorRunStore = new PriorEvaluatorRunStore(
+            stepName: "create_design:evaluator",
+            priorRunId: "run-prior",
+            outcome: AgentOutcome.COMPLETE);
+
+        var executor = new CandidateExecutor(
+            _git,
+            new MapResolver(byProvider),
+            priorRunStore,
+            new NullBoardClient(),
+            NullLogger<CandidateExecutor>.Instance,
+            new RerunPreambleBuilder(priorRunStore, NullLogger<RerunPreambleBuilder>.Instance));
+
+        var systemPromptFile = Path.Combine(_repoRoot, "system.md");
+        File.WriteAllText(systemPromptFile, "# evaluator system prompt");
+
+        var request = new CandidateGroupRequest(
+            RunId: "run-current",
+            CardId: TestCardId,
+            CardTitle: TestCardTitle,
+            StateName: "Designing",
+            StepIndex: 0,
+            Step: new WorkflowStep(
+                Name: "create_design",
+                Role: "designer",
+                TaskPromptFile: null,
+                TaskPrompt: "Design the thing.",
+                Candidates:
+                [
+                    new CandidateOverride("docker-claude-cli"),
+                    new CandidateOverride("docker-opencode"),
+                ],
+                Evaluator: new EvaluatorConfig("evaluator", TaskPrompt: "judge")),
+            Role: new WorkflowRole(
+                Model: "claude-opus-4-6",
+                SystemPrompt: "you are a designer",
+                Sections: []),
+            WorkflowRoles: new Dictionary<string, WorkflowRole>
+            {
+                ["designer"]  = new("claude-opus-4-6", "sys", []),
+                ["evaluator"] = new("claude-opus-4-6", "sys", []),
+            },
+            StateProviderParams: null,
+            TaskPrompt: "Design the thing.",
+            SystemPromptFilePath: systemPromptFile,
+            WorktreePath: _canonicalWorktree,
+            RepoPath: _repoRoot,
+            GitBehavior: "discard",
+            CommentsFilePath: null,
+            PromptBaseDirectory: null,
+            ExistingComments: []);
+
+        await executor.ExecuteCandidateGroupAsync(request, CancellationToken.None);
+
+        var prompt = capturingEvaluator.LastContext?.TaskPrompt
+            ?? throw new InvalidOperationException("Evaluator was not invoked.");
+
+        Assert.DoesNotContain("RE-RUN OF PREVIOUSLY COMPLETED STEP", prompt);
+        Assert.DoesNotContain("All candidates confirmed prior output", prompt);
+    }
+
+    private sealed class PriorEvaluatorRunStore(
+        string stepName, string priorRunId, AgentOutcome outcome) : IRunStore
+    {
+        public Task CreateRunAsync(RunRecord run, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateRunProgressAsync(string runId, int completedSteps, CancellationToken ct) => Task.CompletedTask;
+        public Task CompleteRunAsync(string runId, AgentOutcome o, string? d, FailureReason? f, CancellationToken ct) => Task.CompletedTask;
+        public Task SaveStepResultAsync(StepResultRecord result, CancellationToken ct) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<StepResultRecord>> GetStepResultsForCardAsync(
+            string cardId, string? stateName, CancellationToken ct)
+        {
+            var record = new StepResultRecord(
+                RunId: priorRunId,
+                CardId: cardId,
+                StateName: stateName ?? "Unknown",
+                StepName: stepName,
+                StepIndex: 0,
+                Role: "evaluator",
+                Model: "claude-opus-4-6",
+                Outcome: outcome,
+                Summary: null,
+                Detail: null,
+                ReferenceContent: null,
+                ConversationLog: null,
+                Questions: null,
+                RequestedSteps: null,
+                StartedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-30),
+                CompletedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-29),
+                SessionExecMs: null,
+                Provider: "claude-cli");
+            return Task.FromResult<IReadOnlyList<StepResultRecord>>([record]);
+        }
+
+        public Task<IReadOnlyList<StepResultRecord>> GetLatestRunStepResultsAsync(string cardId, string stateName, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<StepResultRecord>>([]);
+        public Task UpdateRunEstimateAsync(string runId, double estimate, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateRunSessionStartupMsAsync(string runId, int startupMs, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateCandidateEvaluationAsync(string runId, Guid groupId, int idx, bool selected, decimal? score, string? reasoning, CancellationToken ct) => Task.CompletedTask;
+    }
+
     // ── Builders ─────────────────────────────────────────────────────────────
 
     private CandidateExecutor BuildExecutor(IReadOnlyDictionary<string, IAgentExecutor> byProvider)
@@ -363,14 +655,27 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         string stepName,
         string[] providers,
         string gitBehavior)
+        => BuildRequest(stepName, providers, gitBehavior, cardTitle: TestCardTitle);
+
+    private CandidateGroupRequest NewRequestWithEmptyTitle(
+        string stepName,
+        string[] providers,
+        string gitBehavior)
+        => BuildRequest(stepName, providers, gitBehavior, cardTitle: "");
+
+    private CandidateGroupRequest BuildRequest(
+        string stepName,
+        string[] providers,
+        string gitBehavior,
+        string cardTitle)
     {
         var systemPromptFile = Path.Combine(_repoRoot, "system.md");
         File.WriteAllText(systemPromptFile, "# evaluator system prompt");
 
         return new CandidateGroupRequest(
             RunId: "run-evalprompt-1",
-            CardId: "1",
-            CardTitle: "Test card",
+            CardId: TestCardId,
+            CardTitle: cardTitle,
             StateName: "Designing",
             StepIndex: 0,
             Step: new WorkflowStep(

@@ -22,7 +22,8 @@ public sealed partial class AgentRunner(
     DockerClaudeAgentOptions? dockerOptions = null,
     DockerClaudeMountBuilder? mountBuilder = null,
     ShutdownCoordinator? shutdownCoordinator = null,
-    CandidateExecutor? candidateExecutor = null)
+    CandidateExecutor? candidateExecutor = null,
+    RerunPreambleBuilder? rerunPreambleBuilder = null)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
 
@@ -417,6 +418,28 @@ public sealed partial class AgentRunner(
                 var resolvedPrompt = await ResolveStepTaskPromptAsync(
                     step, worktreePath, targetCard, workflowConfig.ConfigDirectory, cancellationToken, promptContext);
 
+                // 6b-ii. Re-run fast-path: if the step's marker is already on the card AND the
+                //        prior run completed this step with COMPLETE, prepend a "bail if nothing
+                //        changed" preamble so the agent can short-circuit without redoing work.
+                //        Operator force-rerun: delete the comment from the card → preamble suppressed.
+                if (rerunPreambleBuilder is not null)
+                {
+                    var rerunPreamble = await rerunPreambleBuilder.TryBuildPreambleAsync(
+                        cardId, state.Name, step.Name,
+                        markerName: $"agent-step:{step.Name}",
+                        currentRunId: runId,
+                        existingComments: comments,
+                        variant: PreambleVariant.TaskPrompt,
+                        cancellationToken);
+                    if (rerunPreamble is not null)
+                    {
+                        resolvedPrompt = rerunPreamble + "\n\n---\n\n" + resolvedPrompt;
+                        logger.LogInformation(
+                            "Re-run preamble injected for step '{StepName}' on card {CardId}; agent may fast-path if no changes",
+                            step.Name, cardId);
+                    }
+                }
+
                 if (isExistingBranch && stepIndex == 0)
                 {
                     resolvedPrompt += "\n\nNote: This task has been worked on previously. A branch with prior changes already exists. " +
@@ -430,21 +453,25 @@ public sealed partial class AgentRunner(
                 }
 
                 // 6c. Execute agent for this step.
-                // Two paths: candidate-group (parallel race + evaluator) or single-agent (canonical).
+                // Two paths: slot-driven (parallel candidates per slot, sequential
+                // fallback chain across slots) or single-agent (canonical worktree).
+                // GetEffectiveSlots normalises legacy step.Candidates+step.Evaluator
+                // to a single-element slot list so the same code path handles both.
                 AgentResult stepResult;
                 int? stepSessionExecMs;
                 var stepRanAsCandidateGroup = false;
 
-                if (step.Candidates is { Count: > 0 })
+                var effectiveSlots = step.GetEffectiveSlots();
+                if (effectiveSlots.Count > 0)
                 {
                     if (candidateExecutor is null)
                     {
                         logger.LogError(
-                            "Step '{StepName}' declares candidates but CandidateExecutor is not registered — candidate execution requires the optional service",
+                            "Step '{StepName}' declares candidates/slots but CandidateExecutor is not registered — slot execution requires the optional service",
                             step.Name);
                         stepResult = new AgentResult(
                             AgentOutcome.ERROR,
-                            "Candidate-group execution unavailable: CandidateExecutor not registered.");
+                            "Slot execution unavailable: CandidateExecutor not registered.");
                         stepSessionExecMs = null;
                     }
                     else
@@ -466,9 +493,72 @@ public sealed partial class AgentRunner(
                             RepoPath: workspacePath,
                             GitBehavior: gitBehavior,
                             CommentsFilePath: commentsFilePath,
-                            PromptBaseDirectory: workflowConfig.ConfigDirectory);
-                        stepResult = await candidateExecutor.ExecuteCandidateGroupAsync(
-                            groupRequest, cancellationToken);
+                            PromptBaseDirectory: workflowConfig.ConfigDirectory,
+                            ExistingComments: comments);
+
+                        // Walk slots in order: short-circuit on Won / NeedsInfo;
+                        // fall through to the next slot only on Failed.
+                        //
+                        // Rate-limit propagation: a slot that failed because
+                        // every candidate hit RATE_LIMIT (after retries
+                        // exhausted) sets WasRateLimited=true. We track whether
+                        // the ENTIRE chain failed that way — if so, after
+                        // exhausting all slots, we re-raise a RateLimitException
+                        // so the existing top-level handler restores the card to
+                        // its trigger column and the poller backs off. This
+                        // matches the user's stated semantics: "rate-limit
+                        // triggers fallback to next slot; only triggers the
+                        // handler if all levels rate-limit." A single non-rate-
+                        // limit failure anywhere in the chain (e.g., a hard
+                        // ERROR from a code-broken provider) means the chain
+                        // had a real problem and we should surface that ERROR
+                        // normally rather than pretending it's all capacity.
+                        SlotResult? lastSlotResult = null;
+                        var allFailedSlotsWereRateLimited = true;
+                        for (var slotIdx = 0; slotIdx < effectiveSlots.Count; slotIdx++)
+                        {
+                            if (slotIdx > 0)
+                            {
+                                logger.LogInformation(
+                                    "Slot {Prev} for step '{StepName}' on card {CardId} returned Failed (rateLimited={RateLimited}); falling back to slot {Next}/{Total}",
+                                    slotIdx - 1, step.Name, cardId,
+                                    lastSlotResult!.WasRateLimited,
+                                    slotIdx, effectiveSlots.Count);
+                            }
+                            lastSlotResult = await candidateExecutor.ExecuteSlotAsync(
+                                effectiveSlots[slotIdx], slotIdx, effectiveSlots.Count,
+                                groupRequest, cancellationToken);
+
+                            if (lastSlotResult.Outcome != SlotOutcome.Failed)
+                                break;
+
+                            // Slot Failed: track whether the chain so far has
+                            // been pure rate-limit. Any non-rate-limit Failed
+                            // slot poisons the flag for the rest of the chain.
+                            if (!lastSlotResult.WasRateLimited)
+                                allFailedSlotsWereRateLimited = false;
+                        }
+
+                        // If every slot in the chain Failed AND every Failed
+                        // slot was rate-limited, surface that as a real
+                        // RateLimitException so the top-level handler takes the
+                        // card back to its trigger column and the poller backs
+                        // off until the upstream limit clears.
+                        if (lastSlotResult!.Outcome == SlotOutcome.Failed
+                            && lastSlotResult.WasRateLimited
+                            && allFailedSlotsWereRateLimited)
+                        {
+                            logger.LogWarning(
+                                "Step '{StepName}' on card {CardId}: every slot in the {SlotCount}-slot chain failed with rate-limit; bubbling RateLimitException for card-restoration",
+                                step.Name, cardId, effectiveSlots.Count);
+                            throw new RateLimitException(
+                                $"All {effectiveSlots.Count} slot(s) for step '{step.Name}' " +
+                                $"on card {cardId} exhausted retries on RATE_LIMIT. " +
+                                $"Last detail: {lastSlotResult.AgentResult.Detail}",
+                                RateLimitSource.AgentCli);
+                        }
+
+                        stepResult = lastSlotResult.AgentResult;
                         stepSessionExecMs = null;
                     }
                 }
@@ -1078,6 +1168,28 @@ public sealed partial class AgentRunner(
             .Replace("{Diff}", changes)
             .Replace("{AgentReport}", agentReport);
 
+        // Re-run fast-path for the gate check: if a prior run completed this gate with COMPLETE
+        // and the canonical gate-check comment is still on the card, prepend a "confirm or update"
+        // preamble. Operator force-rerun = delete the gate-check comment.
+        if (rerunPreambleBuilder is not null)
+        {
+            var gateComments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
+            var gateRerunPreamble = await rerunPreambleBuilder.TryBuildPreambleAsync(
+                cardId, state.Name, stepName: "gate_check",
+                markerName: $"gate-check:{state.Name}",
+                currentRunId: runId,
+                existingComments: gateComments,
+                variant: PreambleVariant.TaskPrompt,
+                cancellationToken);
+            if (gateRerunPreamble is not null)
+            {
+                gatePrompt = gateRerunPreamble + "\n\n---\n\n" + gatePrompt;
+                logger.LogInformation(
+                    "Re-run preamble injected for gate check on card {CardId} state {State}",
+                    cardId, state.Name);
+            }
+        }
+
         // Append optional step catalog if configured
         if (state.OptionalSteps is { Count: > 0 })
         {
@@ -1311,6 +1423,28 @@ public sealed partial class AgentRunner(
 
             var resolvedPrompt = await ResolveTaskPromptFromFileOrInlineAsync(
                 step.TaskPromptFile, step.TaskPrompt, step.Name, worktreePath, targetCard, cancellationToken);
+
+            // Re-run fast-path for this optional specialist reviewer: same detection rule as
+            // regular steps (marker on card + prior COMPLETE row). Operator force-rerun =
+            // delete the optional step's comment.
+            if (rerunPreambleBuilder is not null)
+            {
+                var optComments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
+                var optRerunPreamble = await rerunPreambleBuilder.TryBuildPreambleAsync(
+                    cardId, state.Name, stepName: $"optional:{step.Name}",
+                    markerName: $"agent-step:optional:{step.Name}",
+                    currentRunId: runId,
+                    existingComments: optComments,
+                    variant: PreambleVariant.TaskPrompt,
+                    cancellationToken);
+                if (optRerunPreamble is not null)
+                {
+                    resolvedPrompt = optRerunPreamble + "\n\n---\n\n" + resolvedPrompt;
+                    logger.LogInformation(
+                        "Re-run preamble injected for optional step '{StepName}' on card {CardId}",
+                        step.Name, cardId);
+                }
+            }
 
             var effectiveParams = MergeProviderParams(state.ProviderParams, step.ProviderParams);
 

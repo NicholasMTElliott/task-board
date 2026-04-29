@@ -1919,13 +1919,38 @@ public class WorkflowConfigValidatorAllowedChildrenTests
             });
 
     [Fact]
-    public void Candidates_WithoutEvaluator_ReportsError()
+    public void SingleCandidate_WithoutEvaluator_IsAllowed()
     {
+        // A single-candidate slot may omit the evaluator — the runtime surfaces
+        // the candidate's outcome directly. This is the natural shape for the
+        // last fallback slot in a chain ("if all the expensive providers
+        // failed, just run a local Qwen and use whatever it produces").
         var step = new WorkflowStep(
             Name: "implement",
             Role: "implementer",
             TaskPromptFile: "prompts/states/impl.md",
             Candidates: [new CandidateOverride("docker-claude-cli")]);
+
+        var errors = WorkflowConfigValidator.Validate(MakeCandidateConfig(step));
+
+        Assert.DoesNotContain(errors, e =>
+            e.Contains("candidates but no evaluator", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void MultipleCandidates_WithoutEvaluator_ReportsError()
+    {
+        // A multi-candidate slot REQUIRES an evaluator to pick the winner.
+        // Without one there's no way to choose between the parallel results.
+        var step = new WorkflowStep(
+            Name: "implement",
+            Role: "implementer",
+            TaskPromptFile: "prompts/states/impl.md",
+            Candidates:
+            [
+                new CandidateOverride("docker-claude-cli"),
+                new CandidateOverride("docker-opencode"),
+            ]);
 
         var errors = WorkflowConfigValidator.Validate(MakeCandidateConfig(step));
 

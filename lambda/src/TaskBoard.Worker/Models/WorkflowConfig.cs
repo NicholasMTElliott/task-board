@@ -331,19 +331,58 @@ public sealed record WorkflowStep(
     string? TaskPromptFile = null,
     GenerationConfig? GenerationConfig = null,
     /// <summary>
-    /// When non-empty, the step runs as a parallel candidate group: each
-    /// override produces an independent execution against a different provider
-    /// (and optionally a different model / providerParams). The step's own
-    /// <see cref="Role"/> still controls system prompt and sections; only the
-    /// provider, model, and providerParams may differ per candidate. Requires
-    /// <see cref="Evaluator"/> to be set; the validator rejects candidates
-    /// without an evaluator.
+    /// Legacy single-slot form. When non-empty, the step runs as a parallel
+    /// candidate group with the paired <see cref="Evaluator"/>. Equivalent to
+    /// a single-element <see cref="Slots"/> list. Cannot be combined with
+    /// <see cref="Slots"/>; the validator rejects steps that set both.
     /// </summary>
     List<CandidateOverride>? Candidates = null,
     /// <summary>
-    /// Evaluator config for a candidate-group step. Required whenever
-    /// <see cref="Candidates"/> is non-empty.
+    /// Evaluator paired with the legacy <see cref="Candidates"/> field.
+    /// Required whenever <see cref="Candidates"/> has 2+ entries.
     /// </summary>
+    EvaluatorConfig? Evaluator = null,
+    /// <summary>
+    /// Ordered fallback chain. Slots are tried sequentially until one produces
+    /// a winner: slot 0 first; if it fails, slot 1; etc. Each slot is itself a
+    /// parallel candidate group (same shape as the legacy <see cref="Candidates"/>
+    /// + <see cref="Evaluator"/> fields). The first slot whose evaluator picks
+    /// a winner — or whose single candidate completes, for 1-candidate slots —
+    /// produces the step's result. NEEDS_INFO from a winning slot propagates
+    /// up and does NOT trigger fallback (the operator answers and re-runs from
+    /// slot 0). Cannot be combined with <see cref="Candidates"/>.
+    /// </summary>
+    List<SlotConfig>? Slots = null)
+{
+    /// <summary>
+    /// Returns the canonical slots list for this step:
+    /// <list type="bullet">
+    ///   <item><see cref="Slots"/> if set (the new shape).</item>
+    ///   <item>A single-element list wrapping the legacy
+    ///         <see cref="Candidates"/> + <see cref="Evaluator"/> when those are set.</item>
+    ///   <item>Empty for plain single-agent steps.</item>
+    /// </list>
+    /// Used by the runtime + validator so the rest of the codebase only sees
+    /// the slot-list shape regardless of which form the workflow JSON used.
+    /// </summary>
+    public IReadOnlyList<SlotConfig> GetEffectiveSlots()
+    {
+        if (Slots is { Count: > 0 })
+            return Slots;
+        if (Candidates is { Count: > 0 })
+            return [new SlotConfig(Candidates, Evaluator)];
+        return [];
+    }
+}
+
+/// <summary>
+/// One slot in a step's fallback chain. The candidates inside the slot run in
+/// parallel and are scored by the evaluator (when present). A slot with a
+/// single candidate may omit the evaluator — the runtime will surface that
+/// candidate's result directly. A slot with 2+ candidates requires an evaluator.
+/// </summary>
+public sealed record SlotConfig(
+    List<CandidateOverride> Candidates,
     EvaluatorConfig? Evaluator = null);
 
 /// <summary>
@@ -351,11 +390,20 @@ public sealed record WorkflowStep(
 /// <see cref="Provider"/> key must resolve to a registered executor at runtime;
 /// <see cref="Model"/> and <see cref="ProviderParams"/> default to the role's
 /// configured values when omitted.
+/// <para>
+/// <see cref="Retries"/> + <see cref="RetryOn"/> control in-slot retry behaviour
+/// for transient failures. Defaults: 0 retries, retry-on-RATE_LIMIT-or-TIMEOUT
+/// when <see cref="Retries"/> &gt; 0. Retries fire in-place (same provider, same
+/// slot) before the slot result is decided; they do NOT cross slot boundaries
+/// (that's what fallback slots are for).
+/// </para>
 /// </summary>
 public sealed record CandidateOverride(
     string Provider,
     string? Model = null,
-    Dictionary<string, string>? ProviderParams = null);
+    Dictionary<string, string>? ProviderParams = null,
+    int Retries = 0,
+    List<FailureReason>? RetryOn = null);
 
 /// <summary>
 /// Configures the evaluator step that follows a candidate group. The evaluator

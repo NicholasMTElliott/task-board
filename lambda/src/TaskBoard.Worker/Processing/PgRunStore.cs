@@ -87,9 +87,9 @@ public sealed class PgRunStore(
                  outcome, summary, detail, reference_content, conversation_log,
                  questions, requested_steps, started_at_utc, completed_at_utc, session_exec_ms,
                  provider, candidate_group_id, candidate_index,
-                 selected, quality_score, evaluator_reasoning)
+                 selected, quality_score, evaluator_reasoning, slot_index)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16, $17, $18,
-                    $19, $20, $21, $22, $23, $24)
+                    $19, $20, $21, $22, $23, $24, $25)
             ON CONFLICT (tenant_id, run_id, step_name) DO NOTHING
             """;
         cmd.Parameters.AddWithValue(tenant.Value);
@@ -124,6 +124,9 @@ public sealed class PgRunStore(
         cmd.Parameters.AddWithValue(result.Selected.HasValue ? (object)result.Selected.Value : DBNull.Value);
         cmd.Parameters.AddWithValue(result.QualityScore.HasValue ? (object)result.QualityScore.Value : DBNull.Value);
         cmd.Parameters.AddWithValue(result.EvaluatorReasoning is null ? DBNull.Value : (object)result.EvaluatorReasoning);
+        // V20 slot_index: null for single-slot steps (legacy + new 1-slot configs)
+        // and for non-candidate rows; populated for multi-slot fallback chains.
+        cmd.Parameters.AddWithValue(result.SlotIndex.HasValue ? (object)result.SlotIndex.Value : DBNull.Value);
 
         await cmd.ExecuteNonQueryAsync(ct);
 

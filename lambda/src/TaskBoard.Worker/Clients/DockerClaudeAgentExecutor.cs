@@ -68,7 +68,16 @@ public sealed class DockerClaudeAgentExecutor(
                 context.WorkspacePath, context.TargetCardId, context.TargetCardTitle);
             var containerTaskFilePath = mountContext?.TranslatePath(taskFilePath) ?? taskFilePath;
 
-            var userPrompt = ClaudeAgentExecutor.BuildUserPrompt(context, containerTaskFilePath);
+            // Mirror task-file translation for the comments file: PromptBuilder
+            // embeds context.CommentsFilePath verbatim into the user prompt, but
+            // the host path is meaningless inside a Linux container — without
+            // translation the agent tries to read a Windows path like
+            // C:\…\.aiboard\tasks\…-comments.md, fails, falls back to glob, and
+            // burns the timeout window.
+            var promptContext = (mountContext is not null && context.CommentsFilePath is not null)
+                ? context with { CommentsFilePath = mountContext.TranslatePath(context.CommentsFilePath) }
+                : context;
+            var userPrompt = ClaudeAgentExecutor.BuildUserPrompt(promptContext, containerTaskFilePath);
 
             // Translate system prompt file path: mount host directory into container
             var (hostPromptDir, containerPromptPath) = TranslateSystemPromptPath(

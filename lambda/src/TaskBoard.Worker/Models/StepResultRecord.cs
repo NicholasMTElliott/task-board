@@ -61,4 +61,11 @@ public sealed record StepResultRecord(
     /// <summary>
     /// Free-text reasoning from the evaluator about why this candidate won or lost.
     /// </summary>
-    string? EvaluatorReasoning = null);
+    string? EvaluatorReasoning = null,
+    /// <summary>
+    /// Position of this row's slot within the step's slot list (0..N-1) for
+    /// multi-slot fallback chains. Null for single-slot steps (the common case)
+    /// and for non-slot rows; legacy rows persisted before the slot model was
+    /// added are also null.
+    /// </summary>
+    int? SlotIndex = null);

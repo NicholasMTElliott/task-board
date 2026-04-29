@@ -588,7 +588,9 @@ If you copy `workflow.github.example.json` and adjust, you start with these role
 
 ## 10. Multi-agent candidate evaluation (`CandidateExecutor`)
 
-Opt-in per step. Lets you run N agents in parallel against the same task, have an evaluator pick a winner, promote the winner's branch, and accumulate per-(role, provider) win-rate metrics.
+Opt-in per step. Lets you race N agents on the same task, have an evaluator pick a winner, promote the winner's branch, and accumulate per-(role, provider) win-rate metrics.
+
+**Concurrency model**: candidates are grouped by their `provider` key (case-insensitive). Different provider groups run **in parallel**; same-provider candidates run **sequentially within their group**. Wall-clock time is bounded by the slowest provider group's total duration, not by the sum of all candidates. Why: a single CLI / credential pool / rate-limit window per provider makes concurrent same-provider invocations a fast route to a 429, while different providers (e.g. codex + docker-claude-cli + docker-opencode) don't contend on each other. So `[claude×2, opencode×1, codex×2]` runs as 3 concurrent provider tracks; if each candidate is ~3 minutes, total wall-clock is ~6 minutes (the slowest two-candidate track), not ~15.
 
 **How to opt in** — add `candidates[]` and `evaluator` to a step:
 
@@ -633,7 +635,7 @@ If your step is `gitBehavior: discard`, do NOT route the evaluator to `code_revi
 
 **What happens at runtime:**
 1. N candidate worktrees spawn off canonical HEAD: `aiboard-cand/{cardId}-{groupShort}-{index}-{provider}`.
-2. Each provider runs against its worktree. Per-candidate `step_result` rows persist with `candidate_group_id`, `candidate_index`, `provider`.
+2. Candidates run grouped by provider — each provider group's candidates execute in declaration order, but the groups themselves run concurrently (`Task.WhenAll`). Per-candidate `step_result` rows persist with `candidate_group_id`, `candidate_index`, `provider`.
 3. Evaluator role runs against the canonical worktree with comparison material per candidate. **The material differs by `gitBehavior`:**
    - **commit modes**: each candidate's `git diff` against the canonical branch (the actual code change).
    - **discard mode**: each candidate's `.aiboard/tasks/{cardId}.md` contents (the design / card body) plus any `.aiboard/updates/*.md` files (child-card requests). Diffs are useless for discard candidates because nothing is committed and `.aiboard/` is gitignored.
@@ -657,10 +659,104 @@ implementer     | docker-opencode    | 30         | 3    | 10.0             | 6.
 
 See `docs/CandidateEvaluation.md` for the full mechanics.
 
+### 10.1 Slot-based fallback chains (subscription failover + per-candidate retries)
+
+The single `candidates[]` + `evaluator` shape (above) is now also available as a **slot** — one of an ordered list of fallbacks. Use slots when:
+
+1. **Your primary provider hits a quota mid-run** — Codex CLI's per-plan ChatGPT cap, Claude API monthly limits — and you want to fall through to a cheaper or local backup instead of parking the card in the Questions column.
+2. **A provider is intermittently unavailable** — a transient outage of one upstream shouldn't block the step.
+3. **You want different retry budgets per provider** — `gpt-5.5` is expensive (zero retries), `gpt-5.4-mini` worth one, local Qwen worth three (free).
+
+**Shape:** add `slots[]` (ordered) instead of step-level `candidates`/`evaluator`. Each slot is its own parallel candidate group:
+
+```jsonc
+{
+  "name": "implement",
+  "role": "implementer",
+  "taskPromptFile": "prompts/states/ready_for_implementation.md",
+  "slots": [
+    {
+      // Slot 0: race two subscription providers
+      "candidates": [
+        { "provider": "docker-claude-cli", "model": "claude-sonnet-4-6", "retries": 0 },
+        { "provider": "codex",             "model": "gpt-5.4",            "retries": 1 }
+      ],
+      "evaluator": {
+        "role": "evaluator",
+        "taskPromptFile": "prompts/evaluator/code_review_candidates.md"
+      }
+    },
+    {
+      // Slot 1: free local Qwen as fallback. Single candidate -> no evaluator needed.
+      "candidates": [
+        { "provider": "docker-opencode", "model": "qwen3.6-35b-a3b", "retries": 3 }
+      ]
+    }
+  ]
+}
+```
+
+**Semantics:**
+- Slots are tried **sequentially**: slot 0 first; on slot 0 failure, slot 1 fires; etc.
+- **Inside** a slot, candidates run in **parallel** (just like the legacy single-slot flow). The evaluator picks one winner.
+- A slot **succeeds** when its evaluator picks a winner whose outcome is COMPLETE — or, for a single-candidate slot, when the candidate completes.
+- A slot **fails** (→ try next slot) when: every candidate returns non-COMPLETE, OR the evaluator returns ERROR / no `winner_index`, OR winner promotion fails.
+- A slot returning **NEEDS_INFO** (winner has legitimate questions for the operator) **propagates up — no fallback**. Operator answers and re-runs from slot 0. The user explicitly chose this so a cheap fallback can't repeatedly avoid a real question by guessing.
+- **Retries** fire in-place within a slot, only on `RATE_LIMIT` and `TIMEOUT` (defaults). 30s base, 2× exponential, 5min cap, ±20% jitter. Retries do NOT cross slot boundaries — that's what fallback slots are for. Override per candidate with `"retryOn": ["RATE_LIMIT"]` to opt out of timeout retries (e.g. for an expensive model where a 5-minute timeout is genuinely terminal).
+
+**Migration from `candidates`/`evaluator` to `slots`:**
+- The legacy step-level `candidates`+`evaluator` form **still works unchanged** — the runtime adapts it to a single-slot config under the hood. No JSON edits required to keep existing workflows running.
+- Mixing `candidates`/`evaluator` AND `slots[]` on the same step is rejected by the validator (configure one form only).
+- A 1-candidate slot with no evaluator is now legal (single-candidate slots may omit the evaluator). Previously this was an error in the legacy form too; the broadening lets you write the "single fallback provider" case naturally.
+
+**Three common patterns:**
+
+1. **Pure fallback chain** (no head-to-head):
+   ```jsonc
+   "slots": [
+     { "candidates": [{ "provider": "codex", "retries": 1 }] },
+     { "candidates": [{ "provider": "docker-claude-cli", "retries": 0 }] },
+     { "candidates": [{ "provider": "docker-opencode", "retries": 3 }] }
+   ]
+   ```
+   Try `codex` (with one retry on transient failure). On terminal failure, try Claude. On Claude failure, try local Qwen with up to 3 retries.
+
+2. **Head-to-head with fallback** — two slots, each with multiple parallel candidates and an evaluator. Slot 0 races subscription providers; slot 1 races local-only providers as fallback.
+
+3. **Single candidate, just retries** — one slot with one candidate that retries up to N times. Same shape as today's single-agent step but with bounded automatic retry on rate limits.
+
+**Persistence:** every candidate row from every attempted slot is persisted to `step_result` with a new `slot_index` column (NULL for single-slot steps). The `v_slot_outcomes` view surfaces "how often does slot 0 actually carry the day vs needing fallback?" — useful for tuning slot ordering. Per-`(role, provider)` win-rate metrics in `v_provider_role_metrics` are slot-agnostic, so existing dashboards keep working.
+
+**Audit warning** — the validator emits a non-fatal warning if a step's **final** slot has all candidates with 0 retries. The point of fallbacks is graceful degradation; if the last line of defence has no retry budget, a transient blip on its provider parks the card in Error. Add `"retries": N` to at least one candidate, or add a cheaper-still slot.
+
 **Not yet supported (deliberate gaps):**
 
 - **Gate-check candidates.** `gateCheck` is a state-level field, not an entry in `steps[]`, so it can't carry `candidates[]` / `evaluator`. To compare gate checkers (e.g. Qwen vs Haiku for `gate_checker` role), run separate cards with each provider routed to the gate role and compare metrics manually, OR temporarily inline the gate as a regular `steps[]` entry that supports candidates. This is a real limitation — file an issue if blocking.
 - **Cross-step session reuse for candidates.** Each candidate spawns its own short-lived process; no `IAgentExecutorSession` reuse across candidate runs (each has a different worktree mount, so sessions wouldn't help anyway).
+
+### 10.2 Re-run fast-path (skip-on-rerun)
+
+When a card returns from a Questions column for a re-run, every step in the state would re-execute from scratch by default — including ones that already completed successfully on the first pass. For multi-step states (design has 4 steps; impl has 2; test has 2), that wastes minutes and tokens on cycles that have nothing new to add.
+
+The runtime detects re-runs automatically and prepends a "RE-RUN; bail with COMPLETE if nothing relevant changed" preamble to the agent's task prompt. The agent reads its prior output (embedded in the preamble) and the latest comments (which include the user's clarification), then either:
+
+- Confirms with `outcome: COMPLETE` and `detail: "Confirmed prior output remains accurate."` in seconds, or
+- Produces a refreshed output that incorporates the new context.
+
+**No config knobs.** This is automatic for every step type — single-agent steps, candidate groups, gate checks, optional specialist reviewers, and the evaluator itself. The agent decides what's relevant; the orchestrator just frames the question.
+
+**Detection criteria (both must hold):**
+
+1. The step's marker is on the card (e.g. `<!-- agent-step:create_design -->`, `<!-- gate-check:Ready for Design -->`, `<!-- agent-step:optional:security_review -->`).
+2. The most recent `step_result` row for this `(card, state, step)` from a *prior* run (excluding the in-flight one) has `outcome = COMPLETE`. Prior `NEEDS_INFO` or `ERROR` outcomes don't qualify — those need to re-run normally.
+
+**Force a fresh re-run.** Delete the step's comment from the card before moving the card back to "Ready for X". With the marker gone, the preamble is suppressed and the step runs from scratch. This is operator-controllable per-step: keep the comments for steps that don't need refreshing, delete the ones that should re-evaluate.
+
+**The previously-NEEDS_INFO step always runs fully.** The step that asked the questions in the prior run gets no fast-path preamble — it needs to consider the operator's answers from scratch.
+
+**Logged signals.** Look for `Re-run preamble injected for step '...' on card N` (Information level) to verify the fast-path is firing. Absence of the log line on a re-run means: marker not found on card, OR prior outcome wasn't COMPLETE, OR DB drift (also logs a Warning in the last case).
+
+**No re-run preamble for first runs.** When there's no prior comment marker on the card, the step runs identically to today. The fast-path is purely additive.
 
 ---
 

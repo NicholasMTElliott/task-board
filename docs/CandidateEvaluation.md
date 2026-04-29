@@ -1,6 +1,8 @@
 # Multi-Agent Candidate Evaluation
 
-Run a step with N agents in parallel against the same task, then have an evaluator pick a winner. The losers get discarded; the winner's branch is promoted into the canonical workflow. Per-(role, provider) win-rate and quality-score metrics build up over time so you can decide whether a free local model (e.g. Qwen via OpenCode) is "close enough" to a paid one (e.g. Claude Opus) for a given role.
+Run a step with N agents racing on the same task, then have an evaluator pick a winner. The losers get discarded; the winner's branch is promoted into the canonical workflow. Per-(role, provider) win-rate and quality-score metrics build up over time so you can decide whether a free local model (e.g. Qwen via OpenCode) is "close enough" to a paid one (e.g. Claude Opus) for a given role.
+
+**Concurrency model**: candidates **of different providers run in parallel**; **candidates sharing a provider run sequentially within that group**. So `[claude×2, opencode×1, codex×2]` runs as three concurrent provider tracks (claude, opencode, codex), with each track processing its own candidates one at a time. Wall-clock time is bounded by the slowest provider track (sum of its candidates), not by the sum of all candidates. The constraint exists because a single CLI / credential pool / rate-limit window per provider makes concurrent same-provider invocations a fast route to a 429, while different providers don't contend on each other.
 
 This is **opt-in per step**. Steps without `candidates` keep the existing single-agent path with zero behavioural changes.
 
@@ -24,7 +26,7 @@ Once the data is in, you can route each role to the best (or cheapest acceptable
 For a step that declares `candidates`, the runtime:
 
 1. Generates a `candidate_group_id` (UUID).
-2. For each candidate:
+2. Groups candidates by provider (case-insensitive) and runs the groups concurrently. Within each group, candidates run in declaration order. For each candidate:
    - Creates a new branch off the canonical worktree's HEAD: `aiboard-cand/{cardId}-{groupShort}-{index}-{provider}`.
    - Spins up a fresh worktree, copies the canonical `.aiboard/{tasks,comments,images}/` into it.
    - Runs the candidate's executor (`docker-claude-cli`, `docker-opencode`, etc.) against that worktree with the candidate's optional model + providerParams overrides.
@@ -66,13 +68,67 @@ Add `candidates` and `evaluator` to any agent_run step. Example for the implemen
 
 | Field | Required | Notes |
 |---|---|---|
-| `candidates[].provider` | yes | Must resolve to a registered executor at runtime. Validator errors on duplicates. |
+| `candidates[].provider` | yes | Must resolve to a registered executor at runtime. Duplicate providers are now allowed (same-provider model A/B testing is a legitimate use case). |
 | `candidates[].model` | no | Override the role's default model for this candidate. |
 | `candidates[].providerParams` | no | Override per-candidate. Merged on top of the state's providerParams. |
+| `candidates[].retries` | no | Number of in-place retries on transient failures. Default 0. |
+| `candidates[].retryOn` | no | Which `FailureReason` values trigger retry. Default `["RATE_LIMIT", "TIMEOUT"]`. |
 | `evaluator.role` | yes | Must be a key in `roles`. Typically a strong reasoning model (`evaluator` → opus by default in `workflow.github.json`). |
 | `evaluator.taskPromptFile` | one of | Markdown file with the per-step-type evaluator prompt (see `prompts/evaluator/`). |
 | `evaluator.taskPrompt` | one of | Inline alternative to `taskPromptFile`. |
 | `evaluator.scoring` | no | `WinnerWithScores` (default) records 0–10 quality scores per candidate. `WinnerOnly` skips the scores and just records who won. |
+
+### Slot-based fallback chains (the `slots` shape)
+
+For multi-stage failover (e.g. "race subscription providers; if both fail, fall back to local Qwen"), use `slots[]` instead of step-level `candidates`+`evaluator`. Each slot is its own parallel candidate group.
+
+```jsonc
+{
+  "name": "implement",
+  "role": "implementer",
+  "taskPromptFile": "prompts/states/ready_for_implementation.md",
+  "slots": [
+    {
+      "candidates": [
+        { "provider": "docker-claude-cli", "retries": 0 },
+        { "provider": "codex",             "model": "gpt-5.4", "retries": 1 }
+      ],
+      "evaluator": {
+        "role": "evaluator",
+        "taskPromptFile": "prompts/evaluator/code_review_candidates.md"
+      }
+    },
+    {
+      "candidates": [
+        { "provider": "docker-opencode", "model": "qwen3.6-35b-a3b", "retries": 3 }
+      ]
+    }
+  ]
+}
+```
+
+**How slot iteration works:**
+1. Slot 0 runs (parallel candidates + evaluator → winner).
+2. If slot 0 returned a winner → that's the step result; **slot 1 is NOT invoked**.
+3. If slot 0 winner returned NEEDS_INFO → step ends with NEEDS_INFO; slot 1 NOT invoked. (User chose this so a cheap fallback can't repeatedly avoid a real question.)
+4. If slot 0 failed (all candidates non-COMPLETE, OR evaluator returned ERROR / no winner_index, OR promotion failed) → slot 1 fires.
+5. After all slots exhausted: surface the LAST slot's result.
+
+**Single-candidate slots may omit the evaluator** — the runtime surfaces that candidate's outcome directly. This is the natural shape for the last fallback ("just run local Qwen and use whatever it produces").
+
+**Per-candidate retries** fire in-place on `RATE_LIMIT` and `TIMEOUT` (configurable via `retryOn`). Backoff: 30s base, 2× exponential, 5min cap, ±20% jitter. Retries do NOT cross slot boundaries — that's what fallback slots are for. Failed retries are NOT persisted as separate `step_result` rows; only the final outcome is saved.
+
+**Validator rules for slots:**
+- A step may set EITHER `slots` OR step-level `candidates+evaluator`, never both.
+- Each slot's `candidates` must be non-empty.
+- A slot with 2+ candidates requires `evaluator`. A 1-candidate slot's evaluator is optional.
+- Each `retries` must be ≥ 0; each `retryOn` entry must be a valid `FailureReason`.
+
+**Audit warning** (non-fatal): if the **final** slot has all candidates with 0 retries, the validator warns. The point of fallbacks is graceful degradation; if the last line of defence has no retry budget, a transient blip parks the card in Error.
+
+**Backward compatibility:** legacy step-level `candidates+evaluator` workflows continue to work unchanged — the runtime adapts them to a single-slot config under the hood. No JSON edits required.
+
+**Persistence:** every candidate row from every attempted slot is saved to `step_result`. The new `slot_index` column (NULL for single-slot steps) disambiguates which slot a row belonged to. The `v_slot_outcomes` view aggregates "how often does slot N actually carry the day vs needing further fallback?" — useful for tuning slot ordering. Per-`(role, provider)` metrics in `v_provider_role_metrics` are slot-agnostic.
 
 ### Validator constraints
 
@@ -173,6 +229,14 @@ After promotion, AgentRunner's existing post-step processors run unchanged: `Tas
 - **Sessions disabled per candidate.** Each candidate runs as its own short-lived process; the optional Docker container session is bypassed because each candidate has a different worktree mount. This is a per-candidate cold start, not a per-run one.
 - **Gate checks can't have candidates yet.** `gateCheck` is a state-level field, not a `steps[]` entry. To compare gate checkers (e.g. Qwen vs Haiku for the `gate_checker` role), run separate cards with each provider routed and compare in the metrics. A future change could either (a) extend `GateCheckConfig` to support `candidates` + `evaluator` directly, or (b) inline the gate as a regular step.
 - **Cost tracking deferred.** Use `session_exec_ms` × hourly rate per provider as a proxy for now; explicit USD totals would require pulling token counts out of each CLI's output.
+
+## Re-run fast-path
+
+When a card returns from a Questions column for a re-run, candidate-group steps are subject to the same fast-path detection as single-agent steps. The runtime checks for the canonical step marker on the card (`<!-- agent-step:{step.Name} -->`) and the prior run's evaluator outcome (`step_result` row whose name ends with `:evaluator` or `:slot-N:evaluator`, with `outcome = COMPLETE`). If both signals fire, every candidate in every slot receives a "RE-RUN; bail with COMPLETE if nothing relevant changed" preamble that includes the prior winning output. Candidates that agree return `outcome: COMPLETE` with `detail: "Confirmed prior output remains accurate."` in seconds; candidates that disagree produce updated outputs.
+
+The evaluator gets its own variant of the preamble: "if all candidates confirmed prior, pick any with `winner_index: 0`; otherwise evaluate normally." So a unanimous "no change" re-run completes cheaply with the existing winner re-elected; a re-run where one candidate proposes updates produces a real comparison.
+
+**Force a fresh re-run** by deleting the canonical `<!-- agent-step:{step.Name} -->` comment from the card before moving back to "Ready". With the marker gone, the preamble is suppressed and all candidates run from scratch. Slot ordering is unaffected — slot 0 still tries first.
 
 ---
 
