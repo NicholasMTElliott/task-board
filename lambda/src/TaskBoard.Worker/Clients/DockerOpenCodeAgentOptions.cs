@@ -28,9 +28,10 @@ public sealed class DockerOpenCodeAgentOptions : DockerAgentOptionsBase
         // Short prefix keeps container names readable while preserving the
         // `aiboard-` marker that orphaned-container detection filters on.
         ContainerNamePrefix = "aiboard-oc";
-        // Cold prefix cache on the first request to a 128K ctx llama.cpp
-        // instance can take 1–2 minutes; give the run generous headroom.
-        TimeoutSeconds = 600;
+        // TimeoutSeconds / InactivityTimeoutSeconds inherit from the base
+        // (7200 / 1200) — the inactivity timer is the relevant signal for
+        // local Qwen runs that get stuck mid-explore; the 2h hard cap is
+        // the outer bound for genuinely long implementations.
     }
 
     /// <summary>

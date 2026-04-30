@@ -70,7 +70,7 @@ public class DockerClaudeQwenAgentExecutorDiagnosticsTests
         try
         {
             string[]? capturedArgs = null;
-            ProcessRunnerDelegate capturingRunner = (exe, args, wd, t, ct, stdin, rm, n) =>
+            ProcessRunnerDelegate capturingRunner = (exe, args, wd, t, ct, stdin, rm, n, _) =>
             {
                 capturedArgs = args;
                 return Task.FromResult((0, StreamJsonResult("COMPLETE", "ok"), ""));
@@ -105,7 +105,7 @@ public class DockerClaudeQwenAgentExecutorDiagnosticsTests
         try
         {
             string[]? capturedArgs = null;
-            ProcessRunnerDelegate capturingRunner = (exe, args, wd, t, ct, stdin, rm, n) =>
+            ProcessRunnerDelegate capturingRunner = (exe, args, wd, t, ct, stdin, rm, n, _) =>
             {
                 capturedArgs = args;
                 return Task.FromResult((0, StreamJsonResult("COMPLETE", "ok"), ""));
@@ -133,7 +133,7 @@ public class DockerClaudeQwenAgentExecutorDiagnosticsTests
         var (ws, promptFile) = NewWorkspace();
         try
         {
-            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n)
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _)
                 => Task.FromResult((1, "", "Error: rate limit exceeded"));
 
             var executor = CreateExecutor(runner);
@@ -151,7 +151,7 @@ public class DockerClaudeQwenAgentExecutorDiagnosticsTests
         var (ws, promptFile) = NewWorkspace();
         try
         {
-            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n)
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _)
                 => Task.FromResult((0, "", "rate limit exceeded — try later"));
 
             var executor = CreateExecutor(runner);
@@ -172,7 +172,7 @@ public class DockerClaudeQwenAgentExecutorDiagnosticsTests
         var (ws, promptFile) = NewWorkspace();
         try
         {
-            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n)
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _)
                 => Task.FromResult((127, "", "docker: claude: command not found"));
 
             var executor = CreateExecutor(runner);
@@ -189,7 +189,7 @@ public class DockerClaudeQwenAgentExecutorDiagnosticsTests
         var (ws, promptFile) = NewWorkspace();
         try
         {
-            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n)
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _)
                 => Task.FromResult((0,
                     StreamJsonResult("NEEDS_INFO", "need more"), ""));
 

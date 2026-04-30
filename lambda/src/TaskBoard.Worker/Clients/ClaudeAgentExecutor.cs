@@ -36,7 +36,8 @@ public sealed class ClaudeAgentExecutor(
                 _options.TimeoutSeconds, cancellationToken,
                 stdinData: userPrompt,
                 envVarsToRemove: new[] { "CLAUDECODE" },
-                agentName: "Claude agent");
+                agentName: "Claude agent",
+                inactivityTimeoutSeconds: _options.InactivityTimeoutSeconds);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

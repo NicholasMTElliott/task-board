@@ -84,7 +84,8 @@ public sealed class CodexAgentExecutor(
                     envVarsToRemove: _options.EnvVarsToRemove.Count > 0
                         ? _options.EnvVarsToRemove.ToArray()
                         : null,
-                    agentName: "Codex agent");
+                    agentName: "Codex agent",
+                    inactivityTimeoutSeconds: _options.InactivityTimeoutSeconds);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

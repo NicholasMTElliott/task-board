@@ -34,7 +34,7 @@ public class CodexParserCorpusTests
         // real instance — but we don't need ExecuteAsync to actually run, so the
         // delegate is a sentinel that throws if called.
         ProcessRunnerDelegate trapRunner =
-            (_, _, _, _, _, _, _, _) => throw new InvalidOperationException(
+            (_, _, _, _, _, _, _, _, _) => throw new InvalidOperationException(
                 "ProcessRunner should not be invoked from a parser-corpus test.");
 
         _executor = new CodexAgentExecutor(

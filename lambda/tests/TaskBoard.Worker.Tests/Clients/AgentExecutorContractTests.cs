@@ -49,7 +49,7 @@ public abstract class AgentExecutorContractTests
     private static ProcessRunnerDelegate StubRunner(
         int exitCode, string stdout, string stderr)
     {
-        return (exe, args, wd, t, ct, stdin, remove, name)
+        return (exe, args, wd, t, ct, stdin, remove, name, _)
             => Task.FromResult((exitCode, stdout, stderr));
     }
 
@@ -200,7 +200,7 @@ public abstract class AgentExecutorContractTests
         try
         {
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => throw new TimeoutException("fake timeout");
 
             var executor = CreateExecutor(runner);
@@ -218,7 +218,7 @@ public abstract class AgentExecutorContractTests
         try
         {
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => throw new OperationCanceledException("cancelled");
 
             var executor = CreateExecutor(runner);
@@ -257,7 +257,7 @@ public abstract class AgentExecutorContractTests
         {
             string? observedStdin = null;
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name) =>
+                (exe, args, wd, t, ct, stdin, remove, name, _) =>
                 {
                     observedStdin = stdin;
                     return Task.FromResult((0, BuildCompleteStdout("ok"), ""));

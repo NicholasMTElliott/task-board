@@ -99,7 +99,8 @@ public sealed class DockerClaudeAgentExecutor(
                     _options.TimeoutSeconds, cancellationToken,
                     stdinData: userPrompt,
                     envVarsToRemove: new[] { "CLAUDECODE" },
-                    agentName: $"Docker agent ({containerName})");
+                    agentName: $"Docker agent ({containerName})",
+                    inactivityTimeoutSeconds: _options.InactivityTimeoutSeconds);
             }
             catch (TimeoutException)
             {

@@ -108,7 +108,8 @@ public sealed class DockerClaudeQwenAgentExecutor(
                     // Strip CLAUDECODE so the CLI doesn't refuse to run as a subprocess
                     // (same guard as the real-Anthropic Docker executor).
                     envVarsToRemove: new[] { "CLAUDECODE" },
-                    agentName: $"Docker/Claude→Qwen agent ({containerName})");
+                    agentName: $"Docker/Claude→Qwen agent ({containerName})",
+                    inactivityTimeoutSeconds: _options.InactivityTimeoutSeconds);
             }
             catch (TimeoutException)
             {

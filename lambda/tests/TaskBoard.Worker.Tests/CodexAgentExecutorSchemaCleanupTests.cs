@@ -42,7 +42,7 @@ public class CodexAgentExecutorSchemaCleanupTests
         {
             var before = CountCodexSchemaFiles();
 
-            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, remove, name) =>
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, remove, name, _) =>
             {
                 // The executor writes its schema to a temp file and passes the path
                 // via `--output-schema`. Confirm the file exists DURING the subprocess.
@@ -82,7 +82,7 @@ public class CodexAgentExecutorSchemaCleanupTests
             var before = CountCodexSchemaFiles();
             string? observedSchemaPath = null;
 
-            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, remove, name) =>
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, remove, name, _) =>
             {
                 var schemaIdx = Array.IndexOf(args, "--output-schema");
                 observedSchemaPath = args[schemaIdx + 1];
@@ -119,7 +119,7 @@ public class CodexAgentExecutorSchemaCleanupTests
             var before = CountCodexSchemaFiles();
             string? observedSchemaPath = null;
 
-            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, remove, name) =>
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, remove, name, _) =>
             {
                 var schemaIdx = Array.IndexOf(args, "--output-schema");
                 observedSchemaPath = args[schemaIdx + 1];

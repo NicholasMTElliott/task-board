@@ -119,7 +119,8 @@ public sealed class DockerOpenCodeAgentExecutor(
                         _options.TimeoutSeconds, cancellationToken,
                         stdinData: prompt,
                         envVarsToRemove: null,
-                        agentName: $"Docker/OpenCode agent ({containerName})");
+                        agentName: $"Docker/OpenCode agent ({containerName})",
+                        inactivityTimeoutSeconds: _options.InactivityTimeoutSeconds);
                 }
                 catch (TimeoutException)
                 {

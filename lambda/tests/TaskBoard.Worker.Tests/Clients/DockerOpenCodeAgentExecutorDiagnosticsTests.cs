@@ -61,7 +61,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
                 "{\"outcome\":\"COMPLETE\",\"detail\":\"done\"}\n" +
                 "```\n\nHope that helps!";
 
-            var executor = CreateExecutor((exe, args, wd, t, ct, stdin, rm, n)
+            var executor = CreateExecutor((exe, args, wd, t, ct, stdin, rm, n, _)
                 => Task.FromResult((0, stdout, "")));
 
             var result = await executor.ExecuteAsync(
@@ -83,7 +83,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
         {
             var stdout = "{\"outcome\":\"NEEDS_INFO\",\"detail\":\"need more info\"}";
 
-            var executor = CreateExecutor((exe, args, wd, t, ct, stdin, rm, n)
+            var executor = CreateExecutor((exe, args, wd, t, ct, stdin, rm, n, _)
                 => Task.FromResult((0, stdout, "")));
 
             var result = await executor.ExecuteAsync(
@@ -107,7 +107,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
             var stdout = "Here's a quick thought: { \"not_outcome\": 1 } — but my final answer is:\n" +
                          "{\"outcome\":\"COMPLETE\",\"detail\":\"shipped\"}";
 
-            var executor = CreateExecutor((exe, args, wd, t, ct, stdin, rm, n)
+            var executor = CreateExecutor((exe, args, wd, t, ct, stdin, rm, n, _)
                 => Task.FromResult((0, stdout, "")));
 
             var result = await executor.ExecuteAsync(
@@ -128,7 +128,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
         try
         {
             var callCount = 0;
-            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n) =>
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _) =>
             {
                 callCount++;
                 return Task.FromResult((0, "Just some prose, no JSON here.", ""));
@@ -161,7 +161,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
         var (ws, promptFile) = NewWorkspace();
         try
         {
-            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n)
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _)
                 => Task.FromResult((0,
                     "Sorry, I cannot answer right now. Please try again later.",
                     "openai: rate limit reached for model"));
@@ -183,7 +183,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
         try
         {
             var callCount = 0;
-            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n) =>
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _) =>
             {
                 callCount++;
                 if (callCount == 1)
@@ -225,7 +225,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
         var (ws, promptFile) = NewWorkspace();
         try
         {
-            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n)
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _)
                 => Task.FromResult((1, "", stderr));
 
             var executor = CreateExecutor(runner);
@@ -249,7 +249,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
         var (ws, promptFile) = NewWorkspace();
         try
         {
-            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n)
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _)
                 => Task.FromResult((exitCode, "", "docker: something went wrong"));
 
             var executor = CreateExecutor(runner);

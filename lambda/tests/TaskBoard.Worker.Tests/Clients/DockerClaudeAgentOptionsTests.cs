@@ -22,7 +22,8 @@ public class DockerClaudeAgentOptionsTests
         Assert.Equal("aiboard-run", opts.ContainerNamePrefix);
         Assert.Equal("/mnt/aiboard/prompts", opts.PromptMountPoint);
         Assert.Equal(10.00m, opts.MaxBudgetUsd);
-        Assert.Equal(900, opts.TimeoutSeconds);
+        Assert.Equal(7200, opts.TimeoutSeconds);
+        Assert.Equal(1200, opts.InactivityTimeoutSeconds);
         Assert.Empty(opts.AdditionalMounts);
     }
 

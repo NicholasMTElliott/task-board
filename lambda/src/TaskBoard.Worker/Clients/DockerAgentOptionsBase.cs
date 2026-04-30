@@ -22,8 +22,25 @@ public abstract class DockerAgentOptionsBase
     /// <summary>Prefix for auto-generated container names: {prefix}-{tenantHash}-{cardId}-{suffix}.</summary>
     public string ContainerNamePrefix { get; set; } = "aiboard-run";
 
-    /// <summary>Timeout in seconds before the container is killed.</summary>
-    public int TimeoutSeconds { get; set; } = 900;
+    /// <summary>
+    /// Hard wall-clock cap, in seconds, before the container is killed regardless of progress.
+    /// Default 7200 (2h) — designed as the outer bound; <see cref="InactivityTimeoutSeconds"/>
+    /// is the actual "stuck" detector for normal runs. Operators who need a tighter cap
+    /// (e.g. polling environments where a stuck card should free up the queue sooner) can
+    /// override this at the section level.
+    /// </summary>
+    public int TimeoutSeconds { get; set; } = 7200;
+
+    /// <summary>
+    /// Inactivity threshold, in seconds, after which the process is killed if no
+    /// stdout/stderr output has been observed. Default 1200 (20m) — generous enough
+    /// to cover cold prefix-cache loads and long single-turn inferences while still
+    /// catching genuine hangs (e.g. an agent stuck in an explore-subagent loop with
+    /// no output, or a CLI that lost its event stream). Set to <c>null</c> to disable
+    /// inactivity checking entirely (the hard <see cref="TimeoutSeconds"/> cap still
+    /// applies).
+    /// </summary>
+    public int? InactivityTimeoutSeconds { get; set; } = 1200;
 
     /// <summary>User to run as inside the container. Empty = use image default.</summary>
     public string ContainerUser { get; set; } = "";

@@ -36,9 +36,9 @@ public sealed class DockerClaudeQwenAgentOptions : DockerAgentOptionsBase
         // Claude, or OpenCode runs. Still starts with `aiboard-` so the
         // existing prefix filter still catches it.
         ContainerNamePrefix = "aiboard-cq";
-        // Cold prefix-cache on the first request to a 128K-ctx llama.cpp
-        // instance can take 1–2 minutes. Match the OpenCode default.
-        TimeoutSeconds = 600;
+        // TimeoutSeconds / InactivityTimeoutSeconds inherit from the base
+        // (7200 / 1200). Same rationale as DockerOpenCodeAgentOptions — the
+        // inactivity timer catches stuck runs, the hard cap is the outer bound.
     }
 
     /// <summary>

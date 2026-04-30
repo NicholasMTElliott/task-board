@@ -314,6 +314,32 @@ public class CandidateExecutorSlotsTests : IDisposable
     }
 
     [Fact]
+    public async Task InactivityTimeoutException_IsRetried_SameAsTimeoutException()
+    {
+        // InactivityTimeoutException : TimeoutException, so the retry-on-TIMEOUT
+        // catch clause must cover it transparently — operators don't need to
+        // add a new FailureReason value or update RetryOn lists when the
+        // inactivity-timer feature ships.
+        var inactivityThenOk = new InactivityThenSuccess(
+            failuresBeforeSuccess: 1,
+            successOutcome: AgentOutcome.COMPLETE,
+            successDetail: "OK after one inactivity timeout");
+
+        var executor = BuildExecutor(new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["sticky"] = inactivityThenOk,
+        });
+
+        var slot = new SlotConfig(Candidates: [new CandidateOverride("sticky", Retries: 1)]);
+        var request = NewRequestWithSlots([slot], gitBehavior: "discard");
+
+        var result = await executor.ExecuteSlotAsync(slot, slotIndex: 0, totalSlots: 1, request, CancellationToken.None);
+
+        Assert.Equal(SlotOutcome.Won, result.Outcome);
+        Assert.Equal(2, inactivityThenOk.InvocationCount);
+    }
+
+    [Fact]
     public async Task RateLimitException_NotInRetryOn_SlotReturnsFailedAfterFirstAttempt()
     {
         // Retries = 5 but RetryOn = [TIMEOUT] only — rate-limit is NOT retried.
@@ -590,6 +616,22 @@ public class CandidateExecutorSlotsTests : IDisposable
             InvocationCount++;
             if (InvocationCount <= failuresBeforeSuccess)
                 throw new TimeoutException("test timeout");
+            return Task.FromResult(new AgentResult(successOutcome, successDetail));
+        }
+    }
+
+    private sealed class InactivityThenSuccess(
+        int failuresBeforeSuccess,
+        AgentOutcome successOutcome,
+        string successDetail) : IAgentExecutor
+    {
+        public int InvocationCount { get; private set; }
+        public Task<AgentResult> ExecuteAsync(AgentExecutionContext context, CancellationToken cancellationToken)
+        {
+            InvocationCount++;
+            if (InvocationCount <= failuresBeforeSuccess)
+                throw new InactivityTimeoutException(
+                    "no output for 1200s (inactivity timeout)", inactivitySeconds: 1200);
             return Task.FromResult(new AgentResult(successOutcome, successDetail));
         }
     }

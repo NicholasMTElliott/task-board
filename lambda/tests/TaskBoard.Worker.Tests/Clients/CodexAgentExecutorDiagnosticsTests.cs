@@ -53,7 +53,7 @@ public class CodexAgentExecutorDiagnosticsTests
             );
 
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
@@ -81,7 +81,7 @@ public class CodexAgentExecutorDiagnosticsTests
             var stdout = """{"structured_output":{"outcome":"COMPLETE","detail":"ok"}}""";
 
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
@@ -110,7 +110,7 @@ public class CodexAgentExecutorDiagnosticsTests
             var stdout = "Everything looks COMPLETE here, but this is not structured output.";
 
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
@@ -146,7 +146,7 @@ public class CodexAgentExecutorDiagnosticsTests
             var stderr = "WARN: Provider request timed out on telemetry channel; main response succeeded.";
 
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => Task.FromResult((1, stdout, stderr));
 
             var executor = new CodexAgentExecutor(
@@ -175,7 +175,7 @@ public class CodexAgentExecutorDiagnosticsTests
         {
             var stdout = """{"type":"item.completed","item":{"type":"agent_message","text":"{\"outcome\":\"COMPLETE\",\"detail\":\"ok\"}"}}""";
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => Task.FromResult((127, stdout, "command not found"));
 
             var executor = new CodexAgentExecutor(
@@ -199,7 +199,7 @@ public class CodexAgentExecutorDiagnosticsTests
         try
         {
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => Task.FromResult((1, "garbled output not a valid event stream", "fatal error"));
 
             var executor = new CodexAgentExecutor(
@@ -239,7 +239,7 @@ public class CodexAgentExecutorDiagnosticsTests
             );
 
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
@@ -275,7 +275,7 @@ public class CodexAgentExecutorDiagnosticsTests
             );
 
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
@@ -308,7 +308,7 @@ public class CodexAgentExecutorDiagnosticsTests
             );
 
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
@@ -340,7 +340,7 @@ public class CodexAgentExecutorDiagnosticsTests
             );
 
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
@@ -372,7 +372,7 @@ public class CodexAgentExecutorDiagnosticsTests
             );
 
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
@@ -407,7 +407,7 @@ public class CodexAgentExecutorDiagnosticsTests
         try
         {
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => Task.FromResult((1, "", stderr));
 
             var executor = new CodexAgentExecutor(
@@ -435,7 +435,7 @@ public class CodexAgentExecutorDiagnosticsTests
             var longStderr = new string('a', 600) + "REAL_ERROR_MARKER" + new string('b', 1000);
 
             ProcessRunnerDelegate runner =
-                (exe, args, wd, t, ct, stdin, remove, name)
+                (exe, args, wd, t, ct, stdin, remove, name, _)
                     => Task.FromResult((1, "", longStderr));
 
             var executor = new CodexAgentExecutor(
