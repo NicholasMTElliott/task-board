@@ -509,24 +509,41 @@ public sealed class GitWorkspaceManager(
     // ── Diff summary ─────────────────────────────────────────────────
 
     /// <summary>
-    /// Captures a diff summary of all changes in the worktree relative to HEAD.
-    /// Includes both tracked file modifications and new untracked files.
+    /// Captures a diff summary of all changes in the worktree relative to a
+    /// base ref. <paramref name="baseRef"/> defaults to <c>HEAD</c>, which
+    /// captures only uncommitted working-tree changes — appropriate for the
+    /// single-agent flow where the orchestrator hasn't committed yet.
+    ///
+    /// For candidate-evaluation flows, pass the canonical SHA captured before
+    /// the candidates ran: each candidate has already been committed onto its
+    /// own branch by the time the evaluator's prompt is built, so
+    /// <c>git diff HEAD</c> in the candidate worktree returns empty even
+    /// though real work was committed. <c>git diff {canonicalSha}</c>
+    /// captures the candidate's full divergence (committed + uncommitted).
+    ///
+    /// Same logic applies to gate checks running after a candidate-group
+    /// step: post-promotion <c>git reset --hard</c> resets working tree to
+    /// HEAD, so <c>git diff HEAD</c> on canonical returns empty. Pass the
+    /// run-start canonical SHA to see the cumulative work of the run.
     /// </summary>
     public async Task<string> GetDiffSummaryAsync(
-        string repoPath, int maxChars = 50_000, CancellationToken cancellationToken = default)
+        string repoPath, int maxChars = 50_000,
+        CancellationToken cancellationToken = default,
+        string? baseRef = null)
     {
         var sb = new StringBuilder();
+        var effectiveBase = string.IsNullOrWhiteSpace(baseRef) ? "HEAD" : baseRef;
 
-        // 1. Tracked changes (modifications and deletions) relative to HEAD
+        // 1. Tracked changes (modifications and deletions) relative to base ref
         try
         {
-            var (_, diffOutput, _) = await RunGitAsync(repoPath, ["diff", "HEAD"], cancellationToken);
+            var (_, diffOutput, _) = await RunGitAsync(repoPath, ["diff", effectiveBase], cancellationToken);
             if (!string.IsNullOrWhiteSpace(diffOutput))
                 sb.Append(diffOutput);
         }
         catch (GitOperationException ex)
         {
-            logger.LogWarning(ex, "git diff HEAD failed in {Repo}", repoPath);
+            logger.LogWarning(ex, "git diff {BaseRef} failed in {Repo}", effectiveBase, repoPath);
         }
 
         // 2. New untracked files (not captured by git diff HEAD)
@@ -616,6 +633,29 @@ public sealed class GitWorkspaceManager(
     {
         var (_, stdout, _) = await RunGitAsync(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"], cancellationToken);
         return stdout.Trim();
+    }
+
+    /// <summary>
+    /// Returns the full SHA of HEAD in the given repo. Used to capture a
+    /// stable diff base before running candidate groups (so the evaluator
+    /// can show each candidate's divergence) and at run start (so gate
+    /// checks see the run's cumulative work even after candidate
+    /// promotions reset the working tree).
+    /// </summary>
+    public async Task<string?> GetCurrentShaAsync(
+        string repoPath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (_, stdout, _) = await RunGitAsync(repoPath, ["rev-parse", "HEAD"], cancellationToken);
+            var sha = stdout.Trim();
+            return string.IsNullOrEmpty(sha) ? null : sha;
+        }
+        catch (GitOperationException ex)
+        {
+            logger.LogWarning(ex, "git rev-parse HEAD failed in {Repo}", repoPath);
+            return null;
+        }
     }
 
     public async Task<bool> HasStagedChangesAsync(

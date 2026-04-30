@@ -145,6 +145,16 @@ public sealed partial class AgentRunner(
                 }
             }
 
+            // 4b. Capture canonical HEAD SHA after any merge but before any
+            // step runs. This stable base is used as the gate-check diff base
+            // so that, in candidate-evaluation flows, post-promotion `git
+            // reset --hard` doesn't hide the run's committed work behind an
+            // empty `git diff HEAD`. Falls back to null on failure (gate
+            // check then defaults to HEAD — uncommitted-only — same behaviour
+            // as before this change).
+            var runStartCanonicalSha = await gitWorkspaceManager.GetCurrentShaAsync(
+                worktreePath, cancellationToken);
+
             // 5. Fetch comments (used for both cross-references and comments file)
             var comments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
 
@@ -729,7 +739,8 @@ public sealed partial class AgentRunner(
 
             // 7. Run gate check if configured
             var gateCheckResult = await RunGateCheckAsync(
-                session, state, lastResult!, worktreePath, targetCard, cardId, runId, cancellationToken);
+                session, state, lastResult!, worktreePath, targetCard, cardId, runId,
+                runStartCanonicalSha, cancellationToken);
 
             if (gateCheckResult.BlockingResult is not null)
             {
@@ -1103,6 +1114,7 @@ public sealed partial class AgentRunner(
         BoardCard targetCard,
         string cardId,
         string runId,
+        string? runStartCanonicalSha,
         CancellationToken cancellationToken)
     {
         if (state.GateCheck is null)
@@ -1123,8 +1135,16 @@ public sealed partial class AgentRunner(
 
         if (gitBehavior is "commit_and_push" or "commit_only")
         {
+            // Diff against the canonical SHA captured at run start. Without
+            // this base, a candidate-group step's `git reset --hard` promotion
+            // resets the canonical working tree to match HEAD, so a subsequent
+            // `git diff HEAD` returns empty even though real committed work is
+            // present. The captured SHA predates any in-run promotion and so
+            // surfaces the cumulative work for this run. Falls back to HEAD
+            // (uncommitted-only) when the SHA capture failed.
             changes = await gitWorkspaceManager.GetDiffSummaryAsync(
-                worktreePath, gateCheck.MaxDiffChars, cancellationToken);
+                worktreePath, gateCheck.MaxDiffChars, cancellationToken,
+                baseRef: runStartCanonicalSha);
         }
         else
         {

@@ -223,8 +223,11 @@ public class AgentRunnerGateCheckTests : IDisposable
     [Fact]
     public async Task GateCheck_EmptyDiff_SkippedAndProceedsNormally()
     {
-        // For commit stages, empty diff means git diff HEAD returns nothing.
-        // The agent "completes" but makes no file changes in the worktree.
+        // For commit stages, the gate check diffs canonical's working tree
+        // against the run-start canonical SHA. In single-agent flow with
+        // no in-run promotions, that SHA equals the current HEAD, so a
+        // commit_and_push step where the agent writes nothing produces an
+        // empty diff and the gate check is skipped.
         var callIndex = 0;
         var executor = Substitute.For<IAgentExecutor>();
         executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
@@ -235,7 +238,9 @@ public class AgentRunnerGateCheckTests : IDisposable
                 return new AgentResult(AgentOutcome.COMPLETE, "Nothing changed");
             });
 
-        // Use commit_and_push stage where diff is from git diff HEAD (will be empty)
+        // Use commit_and_push stage where the gate-check diff is computed
+        // against the run-start canonical SHA (== HEAD here, no commits)
+        // and so will be empty.
         var runner = CreateRunner(executor, BuildGateCheckConfig("commit_and_push"));
         SetupBoardCards(ImplListId);
 
@@ -330,6 +335,60 @@ public class AgentRunnerGateCheckTests : IDisposable
         // The gate prompt should contain the diff (new-feature.cs content)
         Assert.Contains("new-feature.cs", capturedGateContext!.TaskPrompt);
         Assert.Contains("NewFeature", capturedGateContext.TaskPrompt);
+    }
+
+    // ── Regression guard for v0.0.20 KvA card #3: candidate-flow gate check ──
+
+    [Fact]
+    public async Task GateCheck_CommitStage_SeesDiff_WhenHEADAdvancedDuringStep()
+    {
+        // Simulates the candidate-flow scenario where a candidate group's
+        // `git reset --hard {winner-branch}` advances canonical's HEAD AND
+        // resets the working tree to match HEAD before the gate check runs.
+        // Pre-fix, the gate check called `git diff HEAD` on a clean working
+        // tree and got nothing — the gate then skipped despite real
+        // committed work being present. The fix captures runStartCanonicalSha
+        // before the step loop and uses it as the diff base, so the gate
+        // check still surfaces the work.
+        //
+        // We don't spin up a real candidate group here (that's covered at the
+        // CandidateExecutor level in CandidateExecutorEvaluatorPromptTests).
+        // Instead the substitute agent itself does what the orchestrator+
+        // promotion would have done in the candidate flow: write a tracked
+        // file AND commit it. Post-step the worktree is clean (HEAD ahead of
+        // runStartCanonicalSha by one commit) — the same shape produced by
+        // a candidate promotion.
+        AgentExecutionContext? capturedGateContext = null;
+        var callIndex = 0;
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                callIndex++;
+                var ctx = ci.Arg<AgentExecutionContext>();
+                if (callIndex == 1)
+                {
+                    var newFile = Path.Combine(ctx.WorkspacePath, "promoted-feature.cs");
+                    File.WriteAllText(newFile, "public class PromotedFeature { }");
+                    RunGitSync(ctx.WorkspacePath, "add", "promoted-feature.cs");
+                    RunGitSync(ctx.WorkspacePath, "commit", "-m", "promote winner");
+                    return new AgentResult(AgentOutcome.COMPLETE, "Promoted");
+                }
+                capturedGateContext = ctx;
+                return new AgentResult(AgentOutcome.COMPLETE, "PASS");
+            });
+
+        var runner = CreateRunner(executor, BuildGateCheckConfig("commit_and_push"));
+        SetupBoardCards(ImplListId);
+
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.NotNull(capturedGateContext);
+        // The committed file must appear in the gate prompt's {Diff} slot.
+        // Pre-fix this assertion fails: the diff was empty because the
+        // working tree matched HEAD post-commit.
+        Assert.Contains("promoted-feature.cs", capturedGateContext!.TaskPrompt);
+        Assert.Contains("PromotedFeature", capturedGateContext.TaskPrompt);
     }
 
     // ── Gate check invoked with correct provider params ─────────────

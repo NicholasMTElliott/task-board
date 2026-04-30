@@ -119,6 +119,15 @@ public sealed class CandidateExecutor(
         var canonicalBranch = await gitWorkspaceManager.GetCurrentBranchAsync(
             request.WorktreePath, cancellationToken);
 
+        // Capture the canonical SHA at slot start. Used as the diff base when
+        // building the evaluator's prompt: each candidate's `git diff HEAD`
+        // is empty post-orchestrator-commit, so we diff against this stable
+        // pre-divergence SHA to surface the candidate's actual work.
+        // Discard-mode slots ignore this (they show .aiboard/ file content
+        // instead of git diffs).
+        var slotStartCanonicalSha = await gitWorkspaceManager.GetCurrentShaAsync(
+            request.WorktreePath, cancellationToken);
+
         // ── Phase 1: run candidates with per-provider serialization ─────────
         // Different providers run concurrently (a Codex CLI call can overlap
         // with a docker-claude-cli call without contending). Same-provider
@@ -325,7 +334,8 @@ public sealed class CandidateExecutor(
         // RunEvaluatorAsync may write an inline-system-prompt to a temp file;
         // it returns both the result and the path so we can clean up afterwards.
         var (evaluatorResult, evaluatorTempPromptPath) = await RunEvaluatorAsync(
-            request, evaluatorCfg!, slotIndex, totalSlots, executions, groupId, cancellationToken);
+            request, evaluatorCfg!, slotIndex, totalSlots, executions, groupId,
+            slotStartCanonicalSha, cancellationToken);
 
         // Phases 3–5 are wrapped in try/finally so the evaluator's inline-prompt
         // temp file is always cleaned up even if parsing, persistence, promotion,
@@ -1001,13 +1011,14 @@ public sealed class CandidateExecutor(
         int totalSlots,
         IReadOnlyList<CandidateExecution> executions,
         Guid groupId,
+        string? slotStartCanonicalSha,
         CancellationToken cancellationToken)
     {
         var evaluatorRole = request.WorkflowRoles[evaluatorCfg.Role];
         var evaluatorExecutor = executorResolver.Resolve(evaluatorRole.Provider);
 
         var evaluatorTaskPrompt = await BuildEvaluatorTaskPromptAsync(
-            request, evaluatorCfg, executions, cancellationToken);
+            request, evaluatorCfg, executions, slotStartCanonicalSha, cancellationToken);
 
         var (evaluatorSystemPromptPath, tempPromptPath) = await ResolveEvaluatorSystemPromptAsync(
             request, evaluatorRole, evaluatorCfg, cancellationToken);
@@ -1103,6 +1114,7 @@ public sealed class CandidateExecutor(
         CandidateGroupRequest request,
         EvaluatorConfig evaluatorCfg,
         IReadOnlyList<CandidateExecution> executions,
+        string? slotStartCanonicalSha,
         CancellationToken cancellationToken)
     {
         var sb = new StringBuilder();
@@ -1181,8 +1193,15 @@ public sealed class CandidateExecutor(
                 string diff;
                 try
                 {
+                    // Diff against the canonical SHA captured before candidates
+                    // were spawned. Necessary because the orchestrator already
+                    // committed each candidate's work onto its own branch by
+                    // the time we get here, so `git diff HEAD` in the candidate
+                    // worktree would be empty. Falls back to HEAD if the SHA
+                    // capture failed (logged at slot start).
                     diff = await gitWorkspaceManager.GetDiffSummaryAsync(
-                        e.WorktreePath, maxChars: 10_000, cancellationToken);
+                        e.WorktreePath, maxChars: 10_000, cancellationToken,
+                        baseRef: slotStartCanonicalSha);
                 }
                 catch (Exception ex)
                 {

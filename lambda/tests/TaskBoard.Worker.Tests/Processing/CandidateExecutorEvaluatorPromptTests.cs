@@ -420,6 +420,109 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
     }
 
     [Fact]
+    public async Task CommitMode_EvaluatorPromptContainsEachCandidateDiff_NotEmpty()
+    {
+        // Regression guard for the v0.0.20 KvA card #3 bug. In commit-mode
+        // candidate groups, the orchestrator commits each candidate's work
+        // onto its own branch BEFORE the evaluator runs. So `git diff HEAD`
+        // in the candidate worktree returns empty even though real work was
+        // committed. The fix: diff against the canonical SHA captured before
+        // candidates spawned. Without it the evaluator sees empty diff blocks
+        // and (correctly) concludes "no candidate produced changes".
+        //
+        // Setup: two candidates write distinct tracked files (outside the
+        // gitignored .aiboard/) so the orchestrator's `git add . && git
+        // commit` captures them. Assert each candidate's diff section in the
+        // evaluator's prompt names its unique file and shows non-empty
+        // content.
+        var capturingEvaluator = new CapturingExecutor(AgentOutcome.COMPLETE,
+            """
+            ```json
+            {"outcome":"COMPLETE","winner_index":0,"scores":[
+              {"index":0,"score":7,"reasoning":"works"},
+              {"index":1,"score":7,"reasoning":"also works"}
+            ]}
+            ```
+            """);
+
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = new TrackedFileWriter(
+                AgentOutcome.COMPLETE,
+                "Claude impl",
+                fileName: "claude_impl.txt",
+                fileContent: "MARKER_CLAUDE_DIFF\n"),
+            ["docker-opencode"]   = new TrackedFileWriter(
+                AgentOutcome.COMPLETE,
+                "OpenCode impl",
+                fileName: "opencode_impl.txt",
+                fileContent: "MARKER_OPENCODE_DIFF\n"),
+            ["claude-cli"]        = capturingEvaluator,  // evaluator role default provider
+        };
+
+        var executor = BuildExecutor(byProvider);
+
+        var request = NewRequest(
+            stepName: "implement",
+            providers: ["docker-claude-cli", "docker-opencode"],
+            gitBehavior: "commit_and_push");
+
+        var result = await executor.ExecuteCandidateGroupAsync(request, CancellationToken.None);
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+
+        var prompt = capturingEvaluator.LastContext?.TaskPrompt
+            ?? throw new InvalidOperationException("Evaluator was not invoked.");
+
+        // The diff fence is present (commit-mode evaluator must include git diffs).
+        Assert.Contains("```diff", prompt);
+
+        // Each candidate's tracked file appears in its diff section. The diff
+        // header line `+++ b/{file}` is what `git diff <baseRef>` produces for
+        // a new file vs. that base; if the bug is back, those lines are absent.
+        Assert.Contains("claude_impl.txt", prompt);
+        Assert.Contains("opencode_impl.txt", prompt);
+
+        // Each candidate's actual file content appears in its diff (the
+        // strongest signal that the diff isn't empty). Without the fix, the
+        // diff section between ```diff fences is just whitespace.
+        Assert.Contains("MARKER_CLAUDE_DIFF", prompt);
+        Assert.Contains("MARKER_OPENCODE_DIFF", prompt);
+
+        // Per-candidate partitioning: candidate 0's section must contain
+        // ONLY its own marker, candidate 1's section must contain ONLY its
+        // own. Without partitioning, a regression that diffs every candidate
+        // against the wrong base could leak the OTHER candidate's content
+        // into both sections (e.g. if we accidentally diffed canonical's
+        // worktree instead of the candidate's). We slice the prompt at the
+        // `### Candidate N` headings the prompt builder emits.
+        var cand0Section = ExtractCandidateSection(prompt, candidateIndex: 0);
+        var cand1Section = ExtractCandidateSection(prompt, candidateIndex: 1);
+        Assert.Contains("MARKER_CLAUDE_DIFF", cand0Section);
+        Assert.DoesNotContain("MARKER_OPENCODE_DIFF", cand0Section);
+        Assert.Contains("MARKER_OPENCODE_DIFF", cand1Section);
+        Assert.DoesNotContain("MARKER_CLAUDE_DIFF", cand1Section);
+    }
+
+    private static string ExtractCandidateSection(string prompt, int candidateIndex)
+    {
+        var heading = $"### Candidate {candidateIndex} ";
+        var start = prompt.IndexOf(heading, StringComparison.Ordinal);
+        if (start < 0)
+            throw new InvalidOperationException($"Heading not found: {heading}");
+
+        var nextHeading = $"### Candidate {candidateIndex + 1} ";
+        var end = prompt.IndexOf(nextHeading, start, StringComparison.Ordinal);
+        // If there's no next candidate, slice to the start of the response
+        // contract block (which always trails the candidates).
+        if (end < 0)
+            end = prompt.IndexOf("## Response Contract", start, StringComparison.Ordinal);
+        if (end < 0)
+            end = prompt.Length;
+
+        return prompt[start..end];
+    }
+
+    [Fact]
     public async Task ReRun_EvaluatorPromptCarriesRerunPreamble_WhenPriorMarkerOnCard()
     {
         // Re-run scenario: the canonical agent-step:create_design comment is
@@ -722,6 +825,27 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 File.WriteAllText(target, content);
             }
+            return Task.FromResult(new AgentResult(outcome, detail));
+        }
+    }
+
+    /// <summary>
+    /// Writes a single tracked file (outside the gitignored <c>.aiboard/</c>)
+    /// at the worktree root so commit-mode tests have something the
+    /// orchestrator's <c>git add . &amp;&amp; git commit</c> will actually
+    /// capture and the evaluator's diff query has real material to surface.
+    /// </summary>
+    private sealed class TrackedFileWriter(
+        AgentOutcome outcome,
+        string detail,
+        string fileName,
+        string fileContent) : IAgentExecutor
+    {
+        public Task<AgentResult> ExecuteAsync(
+            AgentExecutionContext context, CancellationToken cancellationToken)
+        {
+            var path = Path.Combine(context.WorkspacePath, fileName);
+            File.WriteAllText(path, fileContent);
             return Task.FromResult(new AgentResult(outcome, detail));
         }
     }
