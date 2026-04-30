@@ -437,7 +437,7 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
     var preHostLogger = preHostLoggerFactory.CreateLogger("Config");
     var findings = StartupConfigValidator.Validate(builder.Configuration);
     if (!StartupConfigValidator.LogAndMaybeExit(findings, preHostLogger))
-        return;
+        Environment.Exit(1);
 }
 
 // Tenant identifier: scopes all DB rows and Docker container names to this
