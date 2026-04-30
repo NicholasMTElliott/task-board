@@ -18,6 +18,14 @@ internal static class CliDefinitions
         ["--config"] = "ConfigPath",
         ["--prompt-root"] = "PromptRoot",
 
+        // Init mode
+        ["--template"] = "Init:Template",
+        ["--force"] = "Init:Force",
+        ["--non-interactive"] = "Init:NonInteractive",
+
+        // Scaffold-board mode
+        ["--apply"] = "Scaffold:Apply",
+
         // General
         ["--board-provider"] = "BoardProvider",
         ["--agent-executor"] = "AgentExecutor",
@@ -80,19 +88,59 @@ internal static class CliDefinitions
         Array.Exists(args, a => a is "--help" or "-h" or "-?");
 
     /// <summary>
+    /// Bare boolean flags supported by the CLI (e.g. <c>--force</c>). When the
+    /// caller supplies one of these without an attached value, we rewrite it to
+    /// <c>--name=true</c> so that <see cref="Microsoft.Extensions.Configuration.CommandLineConfigurationExtensions.AddCommandLine"/>
+    /// (which always expects a value-following or <c>=value</c> form) treats it
+    /// as a true-valued switch.
+    /// </summary>
+    public static readonly IReadOnlyCollection<string> BareBooleanFlags =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "--force",
+            "--non-interactive",
+            "--apply",
+        };
+
+    /// <summary>
+    /// Returns a copy of <paramref name="args"/> with any bare boolean flag
+    /// (per <see cref="BareBooleanFlags"/>) rewritten to <c>--name=true</c>.
+    /// Idempotent: tokens already containing <c>=</c> are passed through. Use
+    /// this immediately before passing args to AddCommandLine and
+    /// ValidateKnownFlags so both see the normalised form.
+    /// </summary>
+    public static string[] NormalizeBareBooleanFlags(string[] args)
+    {
+        var result = new string[args.Length];
+        for (var i = 0; i < args.Length; i++)
+        {
+            var a = args[i];
+            if (a is null) { result[i] = ""; continue; }
+            if (a.Contains('=')) { result[i] = a; continue; }
+            result[i] = BareBooleanFlags.Contains(a) ? $"{a}=true" : a;
+        }
+        return result;
+    }
+
+    /// <summary>
     /// Common typo / wrong-form flags mapped to a hint about the canonical form.
     /// Hits print a "did you mean" line in addition to the generic unknown-flag
     /// rejection. Add new entries when the same shape gets typed often enough.
     /// </summary>
     private static readonly Dictionary<string, string> CommonTypoHints = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["--validate"]   = "--mode validation",
-        ["--validation"] = "--mode validation",
-        ["--metrics"]    = "--mode metrics",
-        ["--polling"]    = "--mode polling",
-        ["--agent"]      = "--mode agent",
-        ["--queue"]      = "--mode queue",
-        ["--help-me"]    = "--help",
+        ["--validate"]    = "--mode validation",
+        ["--validation"]  = "--mode validation",
+        ["--metrics"]     = "--mode metrics",
+        ["--polling"]     = "--mode polling",
+        ["--agent"]       = "--mode agent",
+        ["--queue"]       = "--mode queue",
+        ["--init"]        = "--mode init",
+        ["--diagnose"]    = "--mode diagnose",
+        ["--diagnostic"]  = "--mode diagnose",
+        ["--scaffold"]    = "--mode scaffold-board",
+        ["--scaffold-board"] = "--mode scaffold-board",
+        ["--help-me"]     = "--help",
     };
 
     /// <summary>
@@ -149,10 +197,13 @@ internal static class CliDefinitions
         Console.WriteLine("aiboard - AI Kanban Agent Orchestrator");
         Console.WriteLine();
         Console.WriteLine("Usage:");
+        Console.WriteLine("  aiboard --mode init                          (scaffold ./.aiboard/ for a new project)");
         Console.WriteLine("  aiboard --mode agent --card-id 3 --board-id 1 --workspace .");
         Console.WriteLine("  aiboard --mode polling --board-id 1 --workspace .");
         Console.WriteLine("  aiboard --mode metrics [--card-id 3] [--since 7d]");
         Console.WriteLine("  aiboard --mode validation --board-id 1     (read-only check of workflow vs. board)");
+        Console.WriteLine("  aiboard --mode diagnose --card-id 3        (explain why a card isn't being picked up)");
+        Console.WriteLine("  aiboard --mode scaffold-board --board-id 1 [--apply]   (create missing fields/labels)");
         Console.WriteLine("  aiboard --config project-a.json --mode polling");
         Console.WriteLine("  aiboard                               (uses ./.aiboard/appsettings.json + ./.aiboard/workflow.json)");
         Console.WriteLine();
@@ -174,8 +225,8 @@ internal static class CliDefinitions
         Console.WriteLine();
 
         WriteSection("General", [
-            ("--mode <mode>",             "Execution mode: agent, polling, metrics, validation", null),
-            ("--card-id <id>",            "Card/issue number (required for agent mode)",       null),
+            ("--mode <mode>",             "Execution mode: init, agent, polling, metrics, validation, diagnose, scaffold-board", null),
+            ("--card-id <id>",            "Card/issue number (required for agent + diagnose modes)", null),
             ("--state <stateId>",         "Override state key for agent mode dispatch (bypasses filter-based resolution)", null),
             ("--config <path>",           "Additional JSON config file to layer in",           null),
             ("--prompt-root <path>",      "Base directory for prompt file resolution",         "exe directory"),
@@ -213,6 +264,15 @@ internal static class CliDefinitions
         WriteSection("Database / Metrics", [
             ("--db-connection <conn>",  "PostgreSQL connection string",                         null),
             ("--since <duration>",      "Time window for metrics (e.g. 24h, 7d, 2w)",          "all time"),
+        ], pad);
+
+        WriteSection("Init mode", [
+            ("--template <name>",       "Template: from-scratch-claude | from-scratch-codex | from-scratch-opencode", "from-scratch-claude"),
+            ("--force",                 "Overwrite an existing ./.aiboard/ directory",          "off"),
+            ("--non-interactive",       "Fail rather than prompt; require all values via flags or env", "off"),
+            ("--github-owner <owner>",  "GitHub user/org that owns the project board",          null),
+            ("--github-repo <owner/repo>", "Repo in owner/repo form",                            null),
+            ("--github-project <n>",    "GitHub project number",                                null),
         ], pad);
     }
 

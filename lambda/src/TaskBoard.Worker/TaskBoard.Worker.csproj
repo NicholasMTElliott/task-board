@@ -32,6 +32,8 @@
     <Content Include="..\..\..\workflow.v1.json" CopyToOutputDirectory="PreserveNewest" Link="workflow.v1.json" />
     <Content Include="..\..\..\workflow.github.example.json" CopyToOutputDirectory="PreserveNewest" Link="workflow.github.example.json" />
     <Content Include="..\..\..\prompts\**\*" CopyToOutputDirectory="PreserveNewest" LinkBase="prompts" />
+    <Content Include="..\..\..\templates\**\*" CopyToOutputDirectory="PreserveNewest" LinkBase="templates" />
+    <Content Include="..\..\..\skills\**\*" CopyToOutputDirectory="PreserveNewest" LinkBase="skills" />
     <Content Include="..\..\..\QUICKSTART.md" CopyToOutputDirectory="PreserveNewest" Link="QUICKSTART.md" />
     <Content Include="..\..\..\Agent.md" CopyToOutputDirectory="PreserveNewest" Link="Agent.md" />
     <Content Include="..\..\..\docs\**\*.md" CopyToOutputDirectory="PreserveNewest" LinkBase="docs" />

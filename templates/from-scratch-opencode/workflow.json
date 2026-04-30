@@ -1,0 +1,342 @@
+{
+  "states": {
+    "backlog": {
+      "name": "Backlog",
+      "column": "Backlog",
+      "gateType": "manual_entry",
+      "transitions": {}
+    },
+    "design": {
+      "name": "Design",
+      "column": "Ready",
+      "gateType": "agent_run",
+      "pipelineOrder": 1,
+      "gitBehavior": "discard",
+      "filters": [
+        { "type": "field",    "operator": "equals",  "field": "Activity", "value": "Design" },
+        { "type": "assignee", "operator": "isEmpty" }
+      ],
+      "steps": [
+        {
+          "name": "review_related_tickets",
+          "role": "board_analyst",
+          "taskPromptFile": "prompts/states/steps/review_related_tickets.md"
+        },
+        {
+          "name": "create_design",
+          "role": "senior_engineer",
+          "taskPromptFile": "prompts/states/ready_for_design.md"
+        }
+      ],
+      "optionalSteps": [
+        {
+          "name": "ux_interaction_review",
+          "role": "specialist_reviewer",
+          "taskPromptFile": "prompts/optional-steps/design/ux_interaction_review.md",
+          "description": "Reviews interaction flows, user journeys, state transitions, and usability of proposed design.",
+          "triggers": "New user-facing features, workflow changes, multi-step interactions, or significant UX restructuring."
+        },
+        {
+          "name": "ui_component_review",
+          "role": "specialist_reviewer",
+          "taskPromptFile": "prompts/optional-steps/design/ui_component_review.md",
+          "description": "Reviews visual design patterns, component reuse, layout structure, and design system consistency.",
+          "triggers": "Features with UI components, new pages/views, visual layout changes, or design system extensions."
+        },
+        {
+          "name": "performance_design_review",
+          "role": "specialist_reviewer",
+          "taskPromptFile": "prompts/optional-steps/design/performance_design_review.md",
+          "description": "Reviews performance implications: expected load, latency targets, query patterns, caching strategy, and bottleneck analysis.",
+          "triggers": "High-traffic features, database-heavy operations, real-time requirements, or large data processing."
+        }
+      ],
+      "gateCheck": {
+        "role": "gate_checker",
+        "taskPromptFile": "prompts/gates/post_design.md"
+      },
+      "transitions": {
+        "IN_PROGRESS": [
+          { "type": "assign",       "value": "{{agent}}" },
+          { "type": "moveToColumn", "value": "In progress" }
+        ],
+        "COMPLETE": [
+          { "type": "unassign" },
+          { "type": "setField", "field": "Activity", "value": "Implementation" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ],
+        "NEEDS_INFO": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Questions" }
+        ],
+        "ERROR": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Problems" }
+        ],
+        "GATE_FAIL": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ]
+      }
+    },
+    "implementation": {
+      "name": "Implementation",
+      "column": "Ready",
+      "gateType": "agent_run",
+      "pipelineOrder": 2,
+      "gitBehavior": "commit_and_push",
+      "filters": [
+        { "type": "field",    "operator": "equals",  "field": "Activity", "value": "Implementation" },
+        { "type": "assignee", "operator": "isEmpty" }
+      ],
+      "steps": [
+        {
+          "name": "implement",
+          "role": "implementer",
+          "taskPromptFile": "prompts/states/ready_for_implementation.md"
+        }
+      ],
+      "gateCheck": {
+        "role": "gate_checker",
+        "taskPromptFile": "prompts/gates/post_implementation.md"
+      },
+      "transitions": {
+        "IN_PROGRESS": [
+          { "type": "assign",       "value": "{{agent}}" },
+          { "type": "moveToColumn", "value": "In progress" }
+        ],
+        "COMPLETE": [
+          { "type": "unassign" },
+          { "type": "setField", "field": "Activity", "value": "Review" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ],
+        "NEEDS_INFO": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Questions" }
+        ],
+        "ERROR": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Problems" }
+        ],
+        "GATE_FAIL": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ]
+      }
+    },
+    "review": {
+      "name": "Review",
+      "column": "Ready",
+      "gateType": "agent_run",
+      "pipelineOrder": 3,
+      "gitBehavior": "discard",
+      "filters": [
+        { "type": "field",    "operator": "equals",  "field": "Activity", "value": "Review" },
+        { "type": "assignee", "operator": "isEmpty" }
+      ],
+      "steps": [
+        {
+          "name": "code_review",
+          "role": "code_reviewer",
+          "taskPromptFile": "prompts/states/steps/code_review.md"
+        }
+      ],
+      "transitions": {
+        "IN_PROGRESS": [
+          { "type": "assign",       "value": "{{agent}}" },
+          { "type": "moveToColumn", "value": "In progress" }
+        ],
+        "COMPLETE": [
+          { "type": "unassign" },
+          { "type": "setField", "field": "Activity", "value": "Test" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ],
+        "NEEDS_INFO": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Questions" }
+        ],
+        "ERROR": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Problems" }
+        ],
+        "GATE_FAIL": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ]
+      }
+    },
+    "test": {
+      "name": "Test",
+      "column": "Ready",
+      "gateType": "agent_run",
+      "pipelineOrder": 4,
+      "gitBehavior": "discard",
+      "filters": [
+        { "type": "field",    "operator": "equals",  "field": "Activity", "value": "Test" },
+        { "type": "assignee", "operator": "isEmpty" }
+      ],
+      "steps": [
+        {
+          "name": "qa_validation",
+          "role": "qa",
+          "taskPromptFile": "prompts/states/ready_for_test.md"
+        },
+        {
+          "name": "update_documentation",
+          "role": "implementer",
+          "taskPromptFile": "prompts/states/steps/update_documentation.md"
+        }
+      ],
+      "gateCheck": {
+        "role": "gate_checker",
+        "taskPromptFile": "prompts/gates/post_test.md"
+      },
+      "transitions": {
+        "IN_PROGRESS": [
+          { "type": "assign",       "value": "{{agent}}" },
+          { "type": "moveToColumn", "value": "In progress" }
+        ],
+        "COMPLETE": [
+          { "type": "unassign" },
+          { "type": "setField", "field": "Activity", "value": "Merge" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ],
+        "NEEDS_INFO": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Questions" }
+        ],
+        "ERROR": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Problems" }
+        ],
+        "GATE_FAIL": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ]
+      }
+    },
+    "merge": {
+      "name": "Merge",
+      "column": "Ready",
+      "gateType": "system_merge",
+      "pipelineOrder": 5,
+      "filters": [
+        { "type": "field",    "operator": "equals",  "field": "Activity", "value": "Merge" },
+        { "type": "assignee", "operator": "isEmpty" }
+      ],
+      "transitions": {
+        "IN_PROGRESS": [
+          { "type": "assign",       "value": "{{agent}}" },
+          { "type": "moveToColumn", "value": "In progress" }
+        ],
+        "COMPLETE": [
+          { "type": "unassign" },
+          { "type": "clearField", "field": "Activity" },
+          { "type": "moveToColumn", "value": "Done" }
+        ],
+        "ERROR": [
+          { "type": "unassign" },
+          { "type": "moveToColumn", "value": "Problems" }
+        ],
+        "MERGE_CONFLICT": [
+          { "type": "unassign" },
+          { "type": "setField", "field": "Activity", "value": "Implementation" },
+          { "type": "moveToColumn", "value": "Ready" }
+        ]
+      }
+    },
+    "in_progress": {
+      "name": "In progress",
+      "column": "In progress",
+      "gateType": "in_progress",
+      "transitions": {}
+    },
+    "questions": {
+      "name": "Questions",
+      "column": "Questions",
+      "gateType": "holding",
+      "transitions": {}
+    },
+    "problems": {
+      "name": "Problems",
+      "column": "Problems",
+      "gateType": "holding",
+      "transitions": {}
+    },
+    "done": {
+      "name": "Done",
+      "column": "Done",
+      "gateType": "terminal",
+      "transitions": {}
+    }
+  },
+  "roles": {
+    "board_analyst": {
+      "model": "qwen3.6-35b-a3b",
+      "provider": "docker-opencode",
+      "systemPromptFile": "prompts/board_analyst.md",
+      "sections": []
+    },
+    "senior_engineer": {
+      "model": "qwen3.6-35b-a3b-think",
+      "provider": "docker-opencode",
+      "systemPromptFile": "prompts/senior_engineer.md",
+      "sections": ["Technical Design", "Decisions", "Implementation"]
+    },
+    "implementer": {
+      "model": "qwen3.6-35b-a3b",
+      "provider": "docker-opencode",
+      "systemPromptFile": "prompts/senior_engineer.md",
+      "sections": []
+    },
+    "code_reviewer": {
+      "model": "qwen3.6-35b-a3b-think",
+      "provider": "docker-opencode",
+      "systemPromptFile": "prompts/code_reviewer.md",
+      "sections": []
+    },
+    "qa": {
+      "model": "qwen3.6-35b-a3b-think",
+      "provider": "docker-opencode",
+      "systemPromptFile": "prompts/qa.md",
+      "sections": []
+    },
+    "gate_checker": {
+      "model": "qwen3.6-35b-a3b",
+      "provider": "docker-opencode",
+      "systemPromptFile": "prompts/gate_checker.md",
+      "sections": []
+    },
+    "specialist_reviewer": {
+      "model": "qwen3.6-35b-a3b-think",
+      "provider": "docker-opencode",
+      "systemPromptFile": "prompts/specialist_reviewer.md",
+      "sections": []
+    },
+    "merge_resolver": {
+      "model": "qwen3.6-35b-a3b-think",
+      "provider": "docker-opencode",
+      "systemPromptFile": "prompts/merge_resolver.md",
+      "sections": []
+    }
+  },
+  "mergeResolution": {
+    "role": "merge_resolver"
+  },
+  "polling": {
+    "priorityFieldName": "priority",
+    "priorityOrder": ["Urgent", "Critical", "Important", "Desired"]
+  },
+  "cardTypes": {
+    "story": {
+      "name": "User Story",
+      "labelPrefix": "type",
+      "allowedChildren": ["task"]
+    },
+    "task": {
+      "name": "Task",
+      "labelPrefix": "type",
+      "allowedChildren": []
+    }
+  }
+}

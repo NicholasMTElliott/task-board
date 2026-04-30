@@ -19,9 +19,15 @@ if (CliDefinitions.ShouldShowHelp(args))
     return;
 }
 
+// Normalise bare boolean flags (e.g. --force, --non-interactive) into
+// --name=true form so AddCommandLine binds them. Must happen BEFORE every
+// downstream consumer (AddCommandLine, ValidateKnownFlags). All downstream
+// code uses normalisedArgs instead of args.
+var normalisedArgs = CliDefinitions.NormalizeBareBooleanFlags(args);
+
 // ── 1. Pre-parse values needed before the config pipeline is built ───────────
-var configFilePath = PreParseArg(args, "--config");
-var promptRootArg = PreParseArg(args, "--prompt-root");
+var configFilePath = PreParseArg(normalisedArgs, "--config");
+var promptRootArg = PreParseArg(normalisedArgs, "--prompt-root");
 
 // ── 2. Build host with layered configuration ─────────────────────────────────
 // Precedence (lowest → highest, later wins):
@@ -90,7 +96,7 @@ builder.Configuration.AddEnvironmentVariables();
 configSources.Add("  env    environment variables  [checked]");
 
 // Layer 6 — CLI args (highest precedence)
-builder.Configuration.AddCommandLine(args, CliDefinitions.SwitchMappings);
+builder.Configuration.AddCommandLine(normalisedArgs, CliDefinitions.SwitchMappings);
 configSources.Add($"  cli    command-line arguments  [{(args.Length == 0 ? "none provided" : $"{args.Length} arg(s)")}]");
 
 // Reject unknown CLI flags loudly. AddCommandLine silently ignores anything
@@ -99,7 +105,7 @@ configSources.Add($"  cli    command-line arguments  [{(args.Length == 0 ? "none
 // exactly this on v0.0.15 (typed --validate, ran in polling mode). Bail
 // before doing anything else so the operator sees the typo and can fix it.
 {
-    var report = CliDefinitions.ValidateKnownFlags(args);
+    var report = CliDefinitions.ValidateKnownFlags(normalisedArgs);
     if (report.UnknownFlags.Count > 0)
     {
         Console.Error.WriteLine(
@@ -108,6 +114,29 @@ configSources.Add($"  cli    command-line arguments  [{(args.Length == 0 ? "none
             Console.Error.WriteLine($"  Did you mean '{suggestion}' instead of '{typo}'?");
         Console.Error.WriteLine("Run 'aiboard --help' for the full list of recognised flags.");
         Environment.ExitCode = 1;
+        return;
+    }
+}
+
+// ── Mode: init (early bail-out before host build) ────────────────────────────
+// Init scaffolds .aiboard/ in the cwd and exits. Runs before WorkflowConfig is
+// registered (no workflow.json yet) and before provider/executor probing (no
+// reason to validate Docker/postgres for a scaffold-only run).
+{
+    var initMode = builder.Configuration["Mode"]?.Trim();
+    if (string.Equals(initMode, "init", StringComparison.OrdinalIgnoreCase))
+    {
+        using var initLoggerFactory = LoggerFactory.Create(b => b.AddSimpleConsole(o =>
+        {
+            o.SingleLine = true;
+            o.TimestampFormat = "HH:mm:ss ";
+        }));
+        var initLogger = initLoggerFactory.CreateLogger("Init");
+        var initRunner = new InitRunner(
+            builder.Configuration, initLogger,
+            runExternal: InitRunner.RunProcessAsync);
+        var initExit = await initRunner.RunAsync(CancellationToken.None);
+        Environment.ExitCode = initExit;
         return;
     }
 }
@@ -219,6 +248,7 @@ switch (boardProvider)
         builder.Services.AddSingleton<ITaskBoardClient, GitHubProjectsClient>();
         builder.Services.AddSingleton<ICrossReferenceResolver, GitHubCrossReferenceResolver>();
         builder.Services.AddSingleton<IBoardShapeProbe, GitHubProjectShapeProbe>();
+        builder.Services.AddSingleton<IBoardShapeApplier, GitHubProjectShapeApplier>();
         break;
     default:
         builder.Services.AddSingleton<ITaskBoardClient, StubTaskBoardClient>();
@@ -228,6 +258,7 @@ switch (boardProvider)
 
 // Default probe for providers without a dedicated implementation (stub, trello)
 builder.Services.TryAddSingleton<IBoardShapeProbe, NullBoardShapeProbe>();
+builder.Services.TryAddSingleton<IBoardShapeApplier, NullBoardShapeApplier>();
 
 // Docker image probe — used by ValidationRunner to warn about missing sandbox
 // images. Always registers the real probe; if Docker isn't available it
@@ -925,6 +956,49 @@ if (mode == "validation")
         workflowCfg, probe, dockerImageProbe, boardProvider, boardId, runnerLogger);
 
     var exitCode = await validationRunner.RunAsync(CancellationToken.None);
+    Environment.ExitCode = exitCode;
+    return;
+}
+
+if (mode == "diagnose")
+{
+    var cardId = builder.Configuration["CardId"];
+    if (string.IsNullOrWhiteSpace(cardId))
+    {
+        LogMissingConfig("CardId (or --card-id) — required for diagnose mode");
+        return;
+    }
+
+    using var scope = host.Services.CreateScope();
+    var boardClient = scope.ServiceProvider.GetRequiredService<ITaskBoardClient>();
+    var workflowCfg = scope.ServiceProvider.GetRequiredService<WorkflowConfig>();
+    var diagnoseLogger = scope.ServiceProvider.GetRequiredService<ILogger<DiagnoseRunner>>();
+    var diagnoseRunner = new DiagnoseRunner(boardClient, workflowCfg, diagnoseLogger);
+
+    var exitCode = await diagnoseRunner.RunAsync(cardId, CancellationToken.None);
+    Environment.ExitCode = exitCode;
+    return;
+}
+
+if (mode == "scaffold-board")
+{
+    if (string.IsNullOrWhiteSpace(boardId))
+    {
+        LogMissingConfig("BoardId / GitHubProjects:ProjectNumber (or --board-id) — required for scaffold-board mode");
+        return;
+    }
+
+    var apply = string.Equals(builder.Configuration["Scaffold:Apply"], "true",
+        StringComparison.OrdinalIgnoreCase);
+
+    using var scope = host.Services.CreateScope();
+    var workflowCfg = scope.ServiceProvider.GetRequiredService<WorkflowConfig>();
+    var probe = scope.ServiceProvider.GetRequiredService<IBoardShapeProbe>();
+    var applier = scope.ServiceProvider.GetRequiredService<IBoardShapeApplier>();
+    var scaffoldLogger = scope.ServiceProvider.GetRequiredService<ILogger<ScaffoldBoardRunner>>();
+    var scaffoldRunner = new ScaffoldBoardRunner(workflowCfg, probe, applier, scaffoldLogger);
+
+    var exitCode = await scaffoldRunner.RunAsync(boardId, apply, CancellationToken.None);
     Environment.ExitCode = exitCode;
     return;
 }

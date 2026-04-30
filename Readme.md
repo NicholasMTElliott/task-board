@@ -44,10 +44,16 @@ The orchestrator becomes:
 
 ```
 Execution modes:
-  --mode agent --card-id N           (direct, single card)
-  --mode polling --board-id 1        (automatic, priority-sorted pickup)
-  --mode metrics [--card-id N | --since 7d]  (operational metrics report)
-  --mode validation --board-id N             (read-only workflow vs. board check)
+  --mode init                                 (scaffold ./.aiboard/ for a new project)
+  --mode agent --card-id N                    (direct, single card)
+  --mode polling --board-id 1                 (automatic, priority-sorted pickup)
+  --mode metrics [--card-id N | --since 7d]   (operational metrics report)
+  --mode validation --board-id N              (read-only workflow vs. board check)
+  --mode diagnose --card-id N                 (explain why a card isn't being picked up)
+  --mode scaffold-board --board-id N [--apply] (create missing fields/labels via gh)
+
+Conversational front-end (optional):
+  /aiboard                                    (Claude Code skill bundled in skills/aiboard/)
 
 AgentRunner flow (agent_run states):
   Fetch card → move to IN_PROGRESS column
@@ -255,6 +261,10 @@ See [docs/CardTypesAndGeneration.md](docs/CardTypesAndGeneration.md) for a walkt
 ## For LLM coding agents
 
 If you're an AI coding agent setting this system up for the first time, read **[Agent.md](Agent.md)** before anything else. It's a single-file guide written specifically for LLM consumption that covers the architecture, the JSON schemas for `appsettings.json` and `workflow.*.json`, every available agent executor and model with pros/cons + when-to-use guidance, the role catalog, multi-agent candidate evaluation, and a step-by-step setup flow for a new project. The file ships in the release distribution alongside `aiboard.exe`.
+
+A Claude Code skill (`skills/aiboard/SKILL.md`) is bundled with the distribution. After installing it under `~/.claude/skills/aiboard/`, you can drive aiboard through `/aiboard` in any Claude Code conversation — the skill detects your project state and routes you through the right `aiboard --mode ...` invocation. See [skills/README.md](skills/README.md) for install steps.
+
+For a narrative human-targeted walkthrough of the onboarding lifecycle (`init` → `validation` → `scaffold-board` → `polling`, plus `diagnose` for stuck cards), see [docs/Onboarding.md](docs/Onboarding.md).
 
 ---
 
