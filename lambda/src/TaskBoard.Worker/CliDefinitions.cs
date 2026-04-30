@@ -26,6 +26,11 @@ internal static class CliDefinitions
         // Scaffold-board mode
         ["--apply"] = "Scaffold:Apply",
 
+        // Unsafe mode: opt in to host-CLI executors (claude-cli, codex) that
+        // bypass the Docker filesystem sandbox. Without this flag, only
+        // docker-* providers are usable.
+        ["--unsafe"] = "Unsafe",
+
         // General
         ["--board-provider"] = "BoardProvider",
         ["--agent-executor"] = "AgentExecutor",
@@ -100,6 +105,7 @@ internal static class CliDefinitions
             "--force",
             "--non-interactive",
             "--apply",
+            "--unsafe",
         };
 
     /// <summary>
@@ -231,12 +237,13 @@ internal static class CliDefinitions
             ("--config <path>",           "Additional JSON config file to layer in",           null),
             ("--prompt-root <path>",      "Base directory for prompt file resolution",         "exe directory"),
             ("--board-provider <name>",   "Board provider: stub, trello, github",              "stub"),
-            ("--agent-executor <name>",   "Agent executor: stub, claude-cli",                  "stub"),
+            ("--agent-executor <name>",   "Agent executor: stub, docker-claude-cli, docker-codex, docker-opencode, docker-claude-qwen", "stub"),
             ("--workflow-config <path>",  "Path to workflow JSON file",                        "workflow.v1.json (exe dir)"),
             ("--board-id <id>",           "Board identifier / project number",                 null),
             ("--workspace <path>",        "Agent workspace / repository path",                 null),
             ("--worktree-base <path>",    "Base path for git worktrees",                       null),
             ("--poll-interval <secs>",    "Base polling interval in seconds (adaptive backoff scales up on idle/error)", "120"),
+            ("--unsafe",                  "Allow host CLI agents (claude-cli, codex) which bypass the Docker sandbox. Off by default — sandboxed (docker-*) agents only.", "off"),
         ], pad);
 
         WriteSection("GitHub Projects", [

@@ -247,12 +247,10 @@ See [docs/CardTypesAndGeneration.md](docs/CardTypesAndGeneration.md) for a walkt
 | Board provider | GitHub Projects v2 (via `gh` CLI) or Trello (REST API) |
 | Board abstraction | `ITaskBoardClient` interface |
 | Orchestrator | C# / .NET 10 |
-| Agent executor (host) | Claude CLI subprocess (`ClaudeAgentExecutor`, `--output-format stream-json` + `--json-schema`) |
-| Agent executor (container) | `DockerClaudeAgentExecutor` — Claude CLI inside `docker run -i --rm`; provider key `docker-claude-cli`; select via `AGENT_EXECUTOR=docker-claude-cli` |
-| Agent executor (local LLM, OpenCode) | `DockerOpenCodeAgentExecutor` — OpenCode CLI inside `docker run -i --rm`, targeting a local llama.cpp server on the `llm-net` bridge network (e.g. Qwen3.6 via the `local-llm` project); provider key `docker-opencode`; select via `AGENT_EXECUTOR=docker-opencode`. Schema: prompt-engineered + client-side parser + retry. See [docs/OpenCodeSandbox.md](docs/OpenCodeSandbox.md) |
-| Agent executor (local LLM, Claude CLI) | `DockerClaudeQwenAgentExecutor` — Claude CLI inside `docker run -i --rm`, redirected to the same local llama.cpp server via `ANTHROPIC_BASE_URL`; provider key `docker-claude-qwen`; select via `AGENT_EXECUTOR=docker-claude-qwen`. Schema: server-side enforcement via `--json-schema` → tool-call mechanism. Sits alongside `docker-opencode` for A/B comparison through candidate evaluation. See [docs/ClaudeQwenSandbox.md](docs/ClaudeQwenSandbox.md) |
+| Agent executors | Six implementations behind `IAgentExecutor` — sandboxed by default (`docker-claude-cli`, `docker-codex`, `docker-opencode`, `docker-claude-qwen`) plus host CLI variants (`claude-cli`, `codex`) gated behind `--unsafe`. See [Agent.md §7](Agent.md) for the full provider table, or per-sandbox how-tos: [docs/DockerSandbox.md](docs/DockerSandbox.md), [docs/CodexSandbox.md](docs/CodexSandbox.md), [docs/OpenCodeSandbox.md](docs/OpenCodeSandbox.md), [docs/ClaudeQwenSandbox.md](docs/ClaudeQwenSandbox.md) |
 | Multi-agent candidate evaluation | `CandidateExecutor` — opt-in per step. Runs N agents in parallel against the same task, an evaluator picks a winner, the winner's branch is promoted, and per-(role, provider) win-rate + quality-score metrics accumulate. See [docs/CandidateEvaluation.md](docs/CandidateEvaluation.md) |
-| Agent sandbox image | `docker/agent-sandbox/Dockerfile` — node:22-slim + Claude CLI + git + ripgrep; `aiboard-agent-sandbox:latest` |
+| Agent sandbox image (Claude) | `docker/agent-sandbox/Dockerfile` — node:22-slim + Claude CLI + git + ripgrep; `aiboard-agent-sandbox:latest` |
+| Agent sandbox image (Codex) | `docker/codex-sandbox/Dockerfile` — node:22-slim + Codex CLI + git + ripgrep; `aiboard-codex-sandbox:latest` |
 | Git isolation | Git worktrees (`GitWorkspaceManager`) |
 | Task files | `.aiboard/tasks/{id}.md` (ephemeral, gitignored) |
 
@@ -303,6 +301,16 @@ docker compose --profile build up agent-sandbox
 Build args: `-BaseImage`, `-AgentUid`, `-AgentGid`, `-ClaudeCliVersion`, `-Tag`, `-NoCache`.
 
 To enable the sandbox at runtime, set `AGENT_EXECUTOR=docker-claude-cli`. It is off by default.
+
+### Build the Codex sandbox image (recommended, for sandboxed Codex)
+
+A separate sandbox wraps the OpenAI Codex CLI for sandboxed use against a real codebase. Filesystem isolation is provided by Docker, so the agent runs with `--yolo` by default — fast, autonomous, and contained. See [docs/CodexSandbox.md](docs/CodexSandbox.md) for the full setup.
+
+```powershell
+.\scripts\build-codex-sandbox.ps1
+```
+
+Auto-registered when Docker is detected. Provider key `docker-codex`. Migrate workflow roles from `codex` (host) to `docker-codex` to keep them usable without `--unsafe`.
 
 ### Build the OpenCode sandbox image (optional, for local-LLM roles)
 
@@ -371,6 +379,8 @@ dotnet run --project lambda/src/TaskBoard.Worker -- --mode metrics --card-id 3
 
 ## Safety Model
 
+- **Sandboxed by default.** Only Docker-based providers (`docker-claude-cli`, `docker-codex`, `docker-opencode`, `docker-claude-qwen`) are usable out of the box. The agent runs inside a container with a read-only base `.git` and no host filesystem access beyond the worktree.
+- **Host CLI agents require `--unsafe`.** The `claude-cli` and `codex` providers run on the host with full credentials and filesystem access; workflows that reference them refuse to start unless you pass `--unsafe` (or set `Unsafe: true` in config). Migrate to `docker-claude-cli` / `docker-codex` to keep working without the flag.
 - Agents cannot transition state directly -- the orchestrator validates all transitions.
 - Manual approval gates block progression until a human moves the card.
 - Automated gate checks (Haiku) validate agent output before state transitions.

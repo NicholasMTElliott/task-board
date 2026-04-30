@@ -279,11 +279,25 @@ builder.Services.AddSingleton<IDockerImageProbe, DockerImageProbe>();
 //                                    "docker-claude-qwen". Distinct from docker-opencode
 //                                    so both Qwen-target executors can be A/B'd via
 //                                    candidate evaluation. Fails if Docker unavailable.
+// AGENT_EXECUTOR=docker-codex      → Codex-CLI-in-Docker registered under
+//                                    "docker-codex" (sandboxed Codex with --yolo;
+//                                    container is the security boundary). Fails
+//                                    if Docker unavailable.
 // Any other value (or unset)       → production mode: real providers are auto-detected
 var agentExecutorMode = builder.Configuration["AgentExecutor"]?.ToLowerInvariant() ?? "stub";
 var dockerModeRequested = agentExecutorMode == "docker-claude-cli";
 var openCodeModeRequested = agentExecutorMode == "docker-opencode";
 var claudeQwenModeRequested = agentExecutorMode == "docker-claude-qwen";
+var codexDockerModeRequested = agentExecutorMode == "docker-codex";
+
+// --unsafe gating: by default, host CLI executors (claude-cli, codex) are NOT
+// registered. Only the sandboxed (docker-*) executors are available.
+// Operators must opt in via --unsafe (or "Unsafe": true in config) to permit
+// host-CLI execution, which runs the agent with full filesystem and credential
+// access on the host. Workflows referencing claude-cli or codex without
+// --unsafe fail at startup with a clear migration message.
+var unsafeMode = string.Equals(
+    builder.Configuration["Unsafe"], "true", StringComparison.OrdinalIgnoreCase);
 
 // Always register StubAgentExecutor (used in stub mode and tests)
 builder.Services.AddSingleton<StubAgentExecutor>();
@@ -292,15 +306,26 @@ HashSet<string> detectedProviders;
 if (agentExecutorMode == "stub")
 {
     // Stub mode: all providers map to stub, all considered available
-    detectedProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli", "codex", "stub", "docker-claude-cli", "docker-opencode", "docker-claude-qwen" };
+    detectedProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "claude-cli", "codex", "stub", "docker-claude-cli", "docker-codex", "docker-opencode", "docker-claude-qwen" };
 }
 else
 {
     detectedProviders = await PrerequisiteValidator.DetectAvailableProvidersAsync();
 
+    // Host CLI executors (claude-cli, codex) require --unsafe. Without it,
+    // they're filtered out of detectedProviders here so the workflow-vs-providers
+    // cross-check below produces a clear error if the workflow references them.
+    // Docker-wrapped executors are always available (when Docker itself is detected).
+    if (!unsafeMode)
+    {
+        detectedProviders.Remove("claude-cli");
+        detectedProviders.Remove("codex");
+    }
+
     // In docker-claude-cli mode, claude-cli is intentionally routed through Docker —
     // do not register ClaudeAgentExecutor for direct (non-Docker) use.
-    if (detectedProviders.Contains("claude-cli") && !dockerModeRequested)
+    // Also requires --unsafe (host CLI execution).
+    if (detectedProviders.Contains("claude-cli") && !dockerModeRequested && unsafeMode)
     {
         builder.Services.Configure<ClaudeCliLlmOptions>(builder.Configuration.GetSection(ClaudeCliLlmOptions.SectionName));
         builder.Services.PostConfigure<ClaudeCliLlmOptions>(opts =>
@@ -310,7 +335,7 @@ else
         builder.Services.AddSingleton<ClaudeAgentExecutor>();
     }
 
-    if (detectedProviders.Contains("codex"))
+    if (detectedProviders.Contains("codex") && unsafeMode)
     {
         builder.Services.Configure<CodexCliLlmOptions>(builder.Configuration.GetSection(CodexCliLlmOptions.SectionName));
         builder.Services.PostConfigure<CodexCliLlmOptions>(opts =>
@@ -383,6 +408,31 @@ else
         if (detectedProviders.Contains("docker"))
             detectedProviders.Add("docker-claude-qwen");
     }
+
+    // Codex-CLI-in-Docker executor (provider key: docker-codex). Sandboxed
+    // Codex with --yolo by default — the container itself provides the
+    // filesystem isolation that --yolo would normally bypass. Auth comes from
+    // the host's ~/.codex/ directory copied into a per-run staging dir.
+    if (detectedProviders.Contains("docker") || codexDockerModeRequested)
+    {
+        builder.Services.Configure<DockerCodexAgentOptions>(
+            builder.Configuration.GetSection(DockerCodexAgentOptions.SectionName));
+        builder.Services.PostConfigure<DockerCodexAgentOptions>(opts =>
+        {
+            if (string.IsNullOrEmpty(opts.CredentialPath))
+            {
+                var credPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
+                if (Directory.Exists(credPath))
+                    opts.CredentialPath = credPath;
+            }
+        });
+        builder.Services.AddSingleton<DockerCodexMountBuilder>();
+        builder.Services.AddSingleton<DockerCodexAgentExecutor>();
+
+        if (detectedProviders.Contains("docker"))
+            detectedProviders.Add("docker-codex");
+    }
 }
 
 builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
@@ -395,10 +445,10 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
 
     var executors = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase);
 
-    if (detectedProviders.Contains("claude-cli") && !dockerModeRequested)
+    if (detectedProviders.Contains("claude-cli") && !dockerModeRequested && unsafeMode)
         executors["claude-cli"] = sp.GetRequiredService<ClaudeAgentExecutor>();
 
-    if (detectedProviders.Contains("codex"))
+    if (detectedProviders.Contains("codex") && unsafeMode)
         executors["codex"] = sp.GetRequiredService<CodexAgentExecutor>();
 
     if (detectedProviders.Contains("docker") || detectedProviders.Contains("docker-claude-cli"))
@@ -420,6 +470,11 @@ builder.Services.AddSingleton<IAgentExecutorResolver>(sp =>
     if (detectedProviders.Contains("docker") || detectedProviders.Contains("docker-claude-qwen"))
     {
         executors["docker-claude-qwen"] = sp.GetRequiredService<DockerClaudeQwenAgentExecutor>();
+    }
+
+    if (detectedProviders.Contains("docker") || detectedProviders.Contains("docker-codex"))
+    {
+        executors["docker-codex"] = sp.GetRequiredService<DockerCodexAgentExecutor>();
     }
 
     return new AgentExecutorResolver(executors);
@@ -570,12 +625,13 @@ void LogMissingConfig(string requiredKeys)
         && !string.Equals(rawAgentExec, "stub", StringComparison.OrdinalIgnoreCase)
         && !string.Equals(rawAgentExec, "docker-claude-cli", StringComparison.OrdinalIgnoreCase)
         && !string.Equals(rawAgentExec, "docker-opencode", StringComparison.OrdinalIgnoreCase)
-        && !string.Equals(rawAgentExec, "docker-claude-qwen", StringComparison.OrdinalIgnoreCase))
+        && !string.Equals(rawAgentExec, "docker-claude-qwen", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(rawAgentExec, "docker-codex", StringComparison.OrdinalIgnoreCase))
     {
         // Warn if AGENT_EXECUTOR is set to a real provider name (now deprecated for provider selection)
         logger.LogWarning(
             "AGENT_EXECUTOR is set to '{Value}' but this value is no longer used for provider selection — " +
-            "real providers are now auto-detected. Only 'stub', 'docker-claude-cli', 'docker-opencode', and 'docker-claude-qwen' retain special meaning.",
+            "real providers are now auto-detected. Only 'stub', 'docker-claude-cli', 'docker-codex', 'docker-opencode', and 'docker-claude-qwen' retain special meaning.",
             rawAgentExec);
     }
 
@@ -608,7 +664,39 @@ void LogMissingConfig(string requiredKeys)
         return;
     }
 
+    // Fail fast when docker-codex is explicitly requested but Docker is unavailable
+    if (codexDockerModeRequested && !detectedProviders.Contains("docker-codex"))
+    {
+        logger.LogError(
+            "AGENT_EXECUTOR=docker-codex is configured but Docker is not available. " +
+            "Ensure the Docker CLI is installed and the Docker daemon is running ('docker info' must succeed), " +
+            "and that the aiboard-codex-sandbox image has been built (scripts/build-codex-sandbox.ps1).");
+        return;
+    }
+
     var config = host.Services.GetRequiredService<WorkflowConfig>();
+
+    // ── --unsafe gating ──────────────────────────────────────────────────────
+    // Host CLI executors (claude-cli, codex) bypass the Docker filesystem
+    // sandbox. The gate is centralized in UnsafeGate.Evaluate so its logic
+    // (stub-mode and docker-claude-cli-mode carve-outs) is unit-tested. See
+    // UnsafeGateTests for the full scenario coverage.
+    {
+        var gateResult = UnsafeGate.Evaluate(config, unsafeMode, agentExecutorMode);
+        if (!gateResult.Allow)
+        {
+            logger.LogError("{ErrorMessage}", gateResult.ErrorMessage);
+            return;
+        }
+
+        if (unsafeMode)
+        {
+            logger.LogWarning(
+                "**UNSAFE MODE ENABLED** — host CLI agents (claude-cli, codex) may run with " +
+                "full filesystem and credential access. The container sandbox is bypassed. " +
+                "Use only in trusted, isolated environments.");
+        }
+    }
 
     GitHubProjectsOptions? ghOpts = boardProvider == "github"
         ? host.Services.GetRequiredService<IOptions<GitHubProjectsOptions>>().Value

@@ -227,4 +227,45 @@ public class CliDefinitionsTests
             ["--mode", "agent", "some-positional-word"]);
         Assert.Empty(report.UnknownFlags);
     }
+
+    // ── --unsafe flag ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SwitchMappings_UnsafeFlag_MapsToUnsafeKey()
+    {
+        Assert.True(CliDefinitions.SwitchMappings.ContainsKey("--unsafe"));
+        Assert.Equal("Unsafe", CliDefinitions.SwitchMappings["--unsafe"]);
+    }
+
+    [Fact]
+    public void BareBooleanFlags_IncludesUnsafe()
+    {
+        Assert.Contains("--unsafe", CliDefinitions.BareBooleanFlags);
+    }
+
+    [Fact]
+    public void NormalizeBareBooleanFlags_BareUnsafe_RewrittenToTrue()
+    {
+        var input = new[] { "--mode", "polling", "--unsafe" };
+        var result = CliDefinitions.NormalizeBareBooleanFlags(input);
+
+        Assert.Equal("--mode", result[0]);
+        Assert.Equal("polling", result[1]);
+        Assert.Equal("--unsafe=true", result[2]);
+    }
+
+    [Fact]
+    public void ValidateKnownFlags_BareUnsafe_NotRejected()
+    {
+        // Bare --unsafe must validate before normalisation.
+        var report = CliDefinitions.ValidateKnownFlags(["--mode", "polling", "--unsafe"]);
+        Assert.Empty(report.UnknownFlags);
+    }
+
+    [Fact]
+    public void ValidateKnownFlags_UnsafeEqualsTrue_NotRejected()
+    {
+        var report = CliDefinitions.ValidateKnownFlags(["--mode", "polling", "--unsafe=true"]);
+        Assert.Empty(report.UnknownFlags);
+    }
 }

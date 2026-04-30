@@ -43,11 +43,12 @@ PollingRunner / AgentRunner (the orchestrator)
         ├─► CrossReferenceResolver / ImageDownloader        (fill the workspace)
         ├─► TaskFileManager                                 (write .aiboard/tasks/{id}.md)
         ├─► AgentExecutorResolver.Resolve(role.Provider)    (pick the right executor)
-        │   ├─► ClaudeAgentExecutor                         (claude-cli, host)
         │   ├─► DockerClaudeAgentExecutor                   (docker-claude-cli)
+        │   ├─► DockerCodexAgentExecutor                    (docker-codex)
         │   ├─► DockerOpenCodeAgentExecutor                 (docker-opencode → local Qwen)
         │   ├─► DockerClaudeQwenAgentExecutor               (docker-claude-qwen → local Qwen)
-        │   ├─► CodexAgentExecutor                          (codex)
+        │   ├─► ClaudeAgentExecutor                         (claude-cli, host — REQUIRES --unsafe)
+        │   ├─► CodexAgentExecutor                          (codex, host — REQUIRES --unsafe)
         │   └─► StubAgentExecutor                           (testing)
         ├─► CandidateExecutor                               (optional: parallel A/B + evaluator)
         ├─► HandleGitBehaviorAsync                          (commit / push / discard)
@@ -474,24 +475,30 @@ In `--mode polling`, the runner scans every "Ready for" column, picks the highes
 
 ## 7. Agent executors — what's available and when to use which
 
-There are **five real executors** plus a stub. All implement `IAgentExecutor`; some additionally implement `ISessionableAgentExecutor` for container reuse across steps. Provider keys are matched case-insensitively.
+There are **six real executors** plus a stub. All implement `IAgentExecutor`; some additionally implement `ISessionableAgentExecutor` for container reuse across steps. Provider keys are matched case-insensitively.
 
-| Provider key | Class | Backend | Schema enforcement | Cost | When to use |
-|---|---|---|---|---|---|
-| `claude-cli` | `ClaudeAgentExecutor` | Claude CLI subprocess on the host | Server-side via `--json-schema` | Anthropic pricing | Default for development on a workstation that already has Claude CLI authenticated. No Docker required. |
-| `docker-claude-cli` | `DockerClaudeAgentExecutor` | Claude CLI inside Docker | Server-side via `--json-schema` | Anthropic pricing | Production / shared environments. Sandboxed (`.git` mounted RO so agents can't push). Supports session reuse across steps for a card. |
-| `docker-opencode` | `DockerOpenCodeAgentExecutor` | OpenCode CLI in Docker → local llama.cpp proxy | Prompt-engineered + client-side parser + bounded retry | $0 (local) | Free, low-stakes roles on a local Qwen3.6 server. Best for tool-call loops where output reliability matters less than wall-time / cost. |
-| `docker-claude-qwen` | `DockerClaudeQwenAgentExecutor` | Claude CLI in Docker → same local llama.cpp proxy | Server-side via `--json-schema` → tool-call → llama.cpp grammar | $0 (local) | Free with **wire-enforced** schema. Uses the same llama-server as `docker-opencode` but via Anthropic Messages format, so structured-output reliability matches the real-Anthropic path. Best when you want local + reliable. |
-| `codex` | `CodexAgentExecutor` | OpenAI Codex CLI subprocess on the host | Server-side via `--output-schema` | OpenAI pricing | Secondary / legacy. Defensive diagnostics are extensive (loud-failure mode), but the path sees less real-world use than the Claude paths. |
-| `stub` | `StubAgentExecutor` | Fake responses | n/a | $0 | Tests / dev. Set `AgentExecutor=stub` to map every provider key to the stub. |
+**Sandboxed by default.** As of this version, the Docker-wrapped executors are the default. The host CLI executors (`claude-cli`, `codex`) are gated behind a `--unsafe` CLI flag (or `Unsafe: true` in config) because they bypass the container filesystem boundary and run with full host credentials. Workflows referencing them refuse to start without `--unsafe`. Migrate `claude-cli` → `docker-claude-cli` and `codex` → `docker-codex` to keep working without the flag.
+
+| Provider key | Class | Backend | Schema enforcement | Cost | Sandboxed | When to use |
+|---|---|---|---|---|---|---|
+| `docker-claude-cli` | `DockerClaudeAgentExecutor` | Claude CLI inside Docker | Server-side via `--json-schema` | Anthropic pricing | yes | Default Claude path. `.git` mounted RO so agents can't push. Supports session reuse across steps for a card. |
+| `docker-codex` | `DockerCodexAgentExecutor` | OpenAI Codex CLI inside Docker | Server-side via `--output-schema` | OpenAI pricing | yes | Default Codex path. Defaults to `--yolo` since Docker provides the filesystem sandbox — fast and autonomous. See [docs/CodexSandbox.md](docs/CodexSandbox.md). |
+| `docker-opencode` | `DockerOpenCodeAgentExecutor` | OpenCode CLI in Docker → local llama.cpp proxy | Prompt-engineered + client-side parser + bounded retry | $0 (local) | yes | Free, low-stakes roles on a local Qwen3.6 server. |
+| `docker-claude-qwen` | `DockerClaudeQwenAgentExecutor` | Claude CLI in Docker → same local llama.cpp proxy | Server-side via `--json-schema` → tool-call → llama.cpp grammar | $0 (local) | yes | Free with **wire-enforced** schema. Same llama-server as `docker-opencode` but via Anthropic Messages format. |
+| `claude-cli` | `ClaudeAgentExecutor` | Claude CLI subprocess on the host | Server-side via `--json-schema` | Anthropic pricing | **NO — requires `--unsafe`** | Single-machine ad-hoc dev where you trust the agent and don't want a Docker dependency. |
+| `codex` | `CodexAgentExecutor` | OpenAI Codex CLI subprocess on the host | Server-side via `--output-schema` | OpenAI pricing | **NO — requires `--unsafe`** | Single-machine ad-hoc dev. The defensive diagnostics path is shared with `docker-codex`, so prefer the Docker variant for sandbox parity. |
+| `stub` | `StubAgentExecutor` | Fake responses | n/a | $0 | yes (no agent runs) | Tests / dev. Set `AgentExecutor=stub` to map every provider key to the stub. |
 
 **Auto-detection vs. explicit selection:**
 
-- `AgentExecutor` env var = `stub` → all keys map to stub
-- `AgentExecutor` = `docker-claude-cli` → fail-fast if Docker isn't running; transparently routes `claude-cli` workflow roles through Docker
+- `AgentExecutor` env var = `stub` → all keys map to stub. The `--unsafe` gate is bypassed in stub mode (no real CLI runs, so there's nothing to sandbox), so existing test workflows referencing `claude-cli` or `codex` keep working without `--unsafe`.
+- `AgentExecutor` = `docker-claude-cli` → fail-fast if Docker isn't running; transparently routes `claude-cli` workflow roles through Docker. Workflows referencing `claude-cli` in this mode do NOT need `--unsafe` because the actual execution is sandboxed via the redirect. (Workflows referencing `codex` still need `--unsafe` — there's no `docker-claude-cli` redirect for codex.)
+- `AgentExecutor` = `docker-codex` → fail-fast if Docker isn't running; **distinct** key, no aliasing
 - `AgentExecutor` = `docker-opencode` → fail-fast if Docker isn't running; **distinct** key, no aliasing
 - `AgentExecutor` = `docker-claude-qwen` → fail-fast if Docker isn't running; **distinct** key, no aliasing
-- `AgentExecutor` unset (or any other value) → production auto-detect: every executor whose CLI is available is registered
+- `AgentExecutor` unset (or any other value) → production auto-detect: every Docker-wrapped executor whose CLI is available is registered. Host CLIs (`claude-cli`, `codex`) are auto-registered only when `--unsafe` is also passed.
+
+The full unsafe-gate logic lives in `UnsafeGate.Evaluate` (see [`UnsafeGateTests`](lambda/tests/TaskBoard.Worker.Tests/Configuration/UnsafeGateTests.cs) for the exhaustive scenario matrix).
 
 **Per-role provider override** (the recommended pattern in production): leave `AgentExecutor` unset, then set each role's `provider` field in `workflow.json`:
 

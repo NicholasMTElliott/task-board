@@ -148,6 +148,9 @@ public class StartupConfigValidatorTests
     [InlineData("stub")]
     [InlineData("claude-cli")]
     [InlineData("docker-claude-cli")]
+    [InlineData("docker-codex")]
+    [InlineData("docker-opencode")]
+    [InlineData("docker-claude-qwen")]
     [InlineData("codex")]
     public void KnownAgentExecutorValues_DoNotWarn(string executor)
     {

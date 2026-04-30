@@ -10,7 +10,8 @@ namespace TaskBoard.Worker.Validation;
 public sealed class DockerImageProbe(
     IOptions<DockerClaudeAgentOptions> claudeOpts,
     IOptions<DockerOpenCodeAgentOptions> openCodeOpts,
-    IOptions<DockerClaudeQwenAgentOptions> claudeQwenOpts) : IDockerImageProbe
+    IOptions<DockerClaudeQwenAgentOptions> claudeQwenOpts,
+    IOptions<DockerCodexAgentOptions> codexOpts) : IDockerImageProbe
 {
     public async Task<IReadOnlyList<DockerImageCheck>> CheckAsync(
         IReadOnlySet<string> providerKeys, CancellationToken ct)
@@ -22,6 +23,7 @@ public sealed class DockerImageProbe(
             ["docker-claude-cli"]  = claudeOpts.Value.ImageName,
             ["docker-opencode"]    = openCodeOpts.Value.ImageName,
             ["docker-claude-qwen"] = claudeQwenOpts.Value.ImageName,
+            ["docker-codex"]       = codexOpts.Value.ImageName,
         };
 
         var results = new List<DockerImageCheck>();
