@@ -81,25 +81,26 @@ public class StartupConfigValidatorTests
         Assert.Contains("Trello:BoardId", error.Message);
     }
 
-    // ── Warning: section populated but provider doesn't match ───────────────
+    // ── Error: section populated but provider doesn't match ────────────────
 
     [Fact]
-    public void GithubSectionPopulated_WithoutProviderSet_ProducesWarning()
+    public void GithubSectionPopulated_WithoutProviderSet_ProducesError()
     {
-        // Reproduces the user's exact bug: they set GitHubProjects:* but forgot
-        // BoardProvider=github, so the section silently becomes dead weight.
+        // KvA-class footgun: GitHubProjects:* set without BoardProvider=github
+        // would silently become dead weight. Promoted to Error so operator must
+        // explicitly resolve the contradiction at startup.
         var findings = StartupConfigValidator.Validate(Build(
             ("GitHubProjects:Owner", "octo"),
             ("GitHubProjects:Repo", "widgets"),
             ("GitHubProjects:ProjectNumber", "4")));
 
-        var warning = Assert.Single(findings, f =>
-            f.Severity == StartupConfigValidator.Severity.Warning && f.Key == "GitHubProjects");
-        Assert.Contains("BoardProvider", warning.Message);
+        var error = Assert.Single(findings, f =>
+            f.Severity == StartupConfigValidator.Severity.Error && f.Key == "GitHubProjects");
+        Assert.Contains("BoardProvider", error.Message);
     }
 
     [Fact]
-    public void TrelloSectionPopulated_ButGithubSelected_ProducesWarning()
+    public void TrelloSectionPopulated_ButGithubSelected_ProducesError()
     {
         var findings = StartupConfigValidator.Validate(Build(
             ("BoardProvider", "github"),
@@ -111,11 +112,11 @@ public class StartupConfigValidatorTests
             ("Trello:BoardId", "abc")));
 
         Assert.Contains(findings, f =>
-            f.Severity == StartupConfigValidator.Severity.Warning && f.Key == "Trello");
+            f.Severity == StartupConfigValidator.Severity.Error && f.Key == "Trello");
     }
 
     [Fact]
-    public void BothSectionsPopulated_ProducesAmbiguityWarning()
+    public void BothSectionsPopulated_ProducesAmbiguityError()
     {
         var findings = StartupConfigValidator.Validate(Build(
             ("BoardProvider", "github"),
@@ -127,20 +128,20 @@ public class StartupConfigValidatorTests
             ("Trello:BoardId", "abc")));
 
         Assert.Contains(findings, f =>
-            f.Severity == StartupConfigValidator.Severity.Warning && f.Key == "BoardProvider");
+            f.Severity == StartupConfigValidator.Severity.Error && f.Key == "BoardProvider");
     }
 
-    // ── Warning: unknown AgentExecutor ──────────────────────────────────────
+    // ── Error: unknown AgentExecutor ────────────────────────────────────────
 
     [Fact]
-    public void UnknownAgentExecutor_ProducesWarning()
+    public void UnknownAgentExecutor_ProducesError()
     {
         var findings = StartupConfigValidator.Validate(Build(
             ("BoardProvider", "stub"),
             ("AgentExecutor", "codexx")));
 
         Assert.Contains(findings, f =>
-            f.Severity == StartupConfigValidator.Severity.Warning && f.Key == "AgentExecutor");
+            f.Severity == StartupConfigValidator.Severity.Error && f.Key == "AgentExecutor");
     }
 
     [Theory]
@@ -215,59 +216,64 @@ public class StartupConfigValidatorTests
             findings, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance));
     }
 
-    // ── Warning 9: legacy Docker section is deprecated ───────────────────────
+    // ── Error 9: legacy Docker section is deprecated ─────────────────────────
 
     [Fact]
-    public void LegacyDockerSection_Populated_ProducesWarning()
+    public void LegacyDockerSection_Populated_ProducesError()
     {
+        // KvA-class footgun: legacy Docker section ONLY binds to Claude executor.
+        // An operator who sets Docker:ImageName expecting it to apply to all
+        // Docker executors gets a silently-partial result. Force migration.
         var findings = StartupConfigValidator.Validate(Build(
             ("Docker:ImageName", "custom:1.0")));
 
-        Assert.Contains(findings, f =>
-            f.Severity == StartupConfigValidator.Severity.Warning
-            && f.Key == "Docker"
-            && f.Message.Contains("deprecated"));
+        var error = Assert.Single(findings, f =>
+            f.Severity == StartupConfigValidator.Severity.Error
+            && f.Key == "Docker");
+        Assert.Contains("deprecated", error.Message);
+        // Hint must call out the per-executor split for OpenCode/ClaudeQwen.
+        Assert.Contains("docker-opencode", error.Message);
+        Assert.Contains("docker-claude-qwen", error.Message);
     }
 
     [Fact]
-    public void LegacyDockerSection_AlsoWarns_WhenNewSectionIsAlsoSet()
+    public void LegacyDockerSection_AlsoErrors_WhenNewSectionIsAlsoSet()
     {
-        // Regression guard: warning must fire even when both sections exist,
-        // so operators are always nudged to clean up legacy config.
+        // Regression guard: error must fire even when both sections exist,
+        // so operators always clean up legacy config (no silent precedence).
         var findings = StartupConfigValidator.Validate(Build(
             ("Docker:ImageName", "legacy:1.0"),
             ("DockerAgents:Claude:ImageName", "new:1.0")));
 
         Assert.Contains(findings, f =>
-            f.Severity == StartupConfigValidator.Severity.Warning
+            f.Severity == StartupConfigValidator.Severity.Error
             && f.Key == "Docker");
     }
 
     [Fact]
-    public void LegacyDockerSection_Absent_NoWarning()
+    public void LegacyDockerSection_Absent_NoFinding()
     {
         var findings = StartupConfigValidator.Validate(Build(
             ("DockerAgents:Claude:ImageName", "custom:1.0")));
 
-        Assert.DoesNotContain(findings, f =>
-            f.Key == "Docker" && f.Message.Contains("deprecated"));
+        Assert.DoesNotContain(findings, f => f.Key == "Docker");
     }
 
-    // ── Warning 10: CodexCli:MaxBudgetUsd is unsupported ─────────────────────
+    // ── Error 10: CodexCli:MaxBudgetUsd is unsupported ───────────────────────
 
     [Fact]
-    public void CodexCliMaxBudgetUsd_Set_ProducesWarning()
+    public void CodexCliMaxBudgetUsd_Set_ProducesError()
     {
         var findings = StartupConfigValidator.Validate(Build(
             ("CodexCli:MaxBudgetUsd", "5.00")));
 
         Assert.Contains(findings, f =>
-            f.Severity == StartupConfigValidator.Severity.Warning
+            f.Severity == StartupConfigValidator.Severity.Error
             && f.Key == "CodexCli:MaxBudgetUsd");
     }
 
     [Fact]
-    public void CodexCliMaxBudgetUsd_Absent_NoWarning()
+    public void CodexCliMaxBudgetUsd_Absent_NoFinding()
     {
         var findings = StartupConfigValidator.Validate(Build(
             ("CodexCli:TimeoutSeconds", "600")));
@@ -276,11 +282,38 @@ public class StartupConfigValidatorTests
     }
 
     [Fact]
-    public void CodexCliMaxBudgetUsd_Empty_NoWarning()
+    public void CodexCliMaxBudgetUsd_Empty_NoFinding()
     {
         var findings = StartupConfigValidator.Validate(Build(
             ("CodexCli:MaxBudgetUsd", "")));
 
         Assert.DoesNotContain(findings, f => f.Key == "CodexCli:MaxBudgetUsd");
+    }
+
+    // ── Cross-cutting: KvA exact reproduction ────────────────────────────────
+
+    [Fact]
+    public void KvAExactConfig_LegacyDockerWithDockerAgents_FailsStartup()
+    {
+        // The exact KvA setup that was the trigger for promoting these to errors:
+        // legacy Docker.ImageName + DockerAgents:Claude/OpenCode/ClaudeQwen all set,
+        // BoardProvider=github, AgentExecutor=docker-claude-cli.
+        // Pre-fix: one warning that scrolled away in polling startup.
+        // Post-fix: blocking error with migration hint covering all three executors.
+        var findings = StartupConfigValidator.Validate(Build(
+            ("BoardProvider", "github"),
+            ("AgentExecutor", "docker-claude-cli"),
+            ("Docker:ImageName", "aiboard-agent-sandbox:godot"),
+            ("DockerAgents:Claude:TimeoutSeconds", "1800"),
+            ("DockerAgents:OpenCode:TimeoutSeconds", "3600"),
+            ("DockerAgents:ClaudeQwen:TimeoutSeconds", "3600"),
+            ("GitHubProjects:Owner", "NicholasMTElliott"),
+            ("GitHubProjects:Repo", "NicholasMTElliott/kva"),
+            ("GitHubProjects:ProjectNumber", "4")));
+
+        Assert.False(StartupConfigValidator.LogAndMaybeExit(
+            findings, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance));
+        Assert.Contains(findings, f =>
+            f.Severity == StartupConfigValidator.Severity.Error && f.Key == "Docker");
     }
 }

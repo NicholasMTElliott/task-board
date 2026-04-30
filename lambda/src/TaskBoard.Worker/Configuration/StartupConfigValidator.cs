@@ -74,65 +74,75 @@ public static class StartupConfigValidator
             }
         }
 
-        // ── Warning 5: GitHubProjects populated but BoardProvider != github ──
+        // ── Error 5: GitHubProjects populated but BoardProvider != github ────
+        // Silently dead config is worse than a missing field — promote to error
+        // so operators must explicitly resolve the contradiction.
         if (githubPresent && boardProvider != "github")
         {
-            findings.Add(new Finding(Severity.Warning, "GitHubProjects",
+            findings.Add(new Finding(Severity.Error, "GitHubProjects",
                 $"GitHubProjects config is present but BoardProvider='{boardProvider}'. " +
-                "These fields will be ignored. Set BoardProvider=github to use them."));
+                "These fields would be ignored at runtime. " +
+                "Set BoardProvider=github to use them, or remove the GitHubProjects section."));
         }
 
-        // ── Warning 6: Trello populated but BoardProvider != trello ──────────
+        // ── Error 6: Trello populated but BoardProvider != trello ────────────
         if (trelloPresent && boardProvider is not ("trello" or "live"))
         {
-            findings.Add(new Finding(Severity.Warning, "Trello",
+            findings.Add(new Finding(Severity.Error, "Trello",
                 $"Trello config is present but BoardProvider='{boardProvider}'. " +
-                "These fields will be ignored. Set BoardProvider=trello to use them."));
+                "These fields would be ignored at runtime. " +
+                "Set BoardProvider=trello to use them, or remove the Trello section."));
         }
 
-        // ── Warning 7: both GitHubProjects and Trello populated ──────────────
+        // ── Error 7: both GitHubProjects and Trello populated ────────────────
+        // Two board providers in one config is always a mistake — one is silently
+        // dead weight. Force operator to delete the unused section.
         if (githubPresent && trelloPresent)
         {
-            var winner = boardProvider is "trello" or "live" ? "Trello" : "GitHubProjects";
-            var loser = winner == "Trello" ? "GitHubProjects" : "Trello";
-            findings.Add(new Finding(Severity.Warning, "BoardProvider",
-                $"Both GitHubProjects and Trello config sections are populated. " +
-                $"BoardProvider='{boardProvider}' — {winner} will be used, {loser} ignored."));
+            findings.Add(new Finding(Severity.Error, "BoardProvider",
+                "Both GitHubProjects and Trello config sections are populated. " +
+                $"BoardProvider='{boardProvider}' — only one of these sections can be active at runtime. " +
+                "Remove the section that does not match BoardProvider."));
         }
 
-        // ── Warning 8: unknown AgentExecutor value ───────────────────────────
+        // ── Error 8: unknown AgentExecutor value ─────────────────────────────
+        // Silently falling back to auto-detect on a typo is the exact misbehavior
+        // pattern that hides config bugs.
         var rawExecutor = config["AgentExecutor"];
         if (!string.IsNullOrWhiteSpace(rawExecutor) &&
             !KnownAgentExecutors.Contains(rawExecutor.Trim().ToLowerInvariant()))
         {
-            findings.Add(new Finding(Severity.Warning, "AgentExecutor",
+            findings.Add(new Finding(Severity.Error, "AgentExecutor",
                 $"AgentExecutor='{rawExecutor}' is not recognized. " +
-                $"Accepted values: {string.Join(", ", KnownAgentExecutors)}. " +
-                "Falling back to auto-detect."));
+                $"Accepted values: {string.Join(", ", KnownAgentExecutors)}."));
         }
 
-        // ── Warning 9: legacy `Docker` section is deprecated ─────────────────
-        // Fires whenever the legacy section has any values, regardless of whether
-        // the new section is also set — operators should always be told to migrate.
+        // ── Error 9: legacy `Docker` section is deprecated ───────────────────
+        // The legacy `Docker` section only binds to DockerClaudeAgentOptions —
+        // it does NOT affect docker-opencode or docker-claude-qwen. Operators
+        // who set Docker:ImageName expecting it to apply to all Docker executors
+        // get a silently-partial result. Force migration so each executor's image
+        // is set explicitly in its own section.
         var legacyDockerPresent = SectionHasValues(config.GetSection(DockerClaudeAgentOptions.LegacySectionName));
         if (legacyDockerPresent)
         {
-            findings.Add(new Finding(Severity.Warning, DockerClaudeAgentOptions.LegacySectionName,
+            findings.Add(new Finding(Severity.Error, DockerClaudeAgentOptions.LegacySectionName,
                 $"Config section '{DockerClaudeAgentOptions.LegacySectionName}' is populated. " +
                 $"This section is deprecated — migrate to '{DockerClaudeAgentOptions.SectionName}'. " +
-                "The legacy section is still honoured for backward compatibility; " +
-                "values in the new section override the legacy section on conflict."));
+                "Note: the legacy section ONLY affected docker-claude-cli; if you also use " +
+                "docker-opencode or docker-claude-qwen, set their image / timeout / etc. " +
+                "explicitly under DockerAgents:OpenCode and DockerAgents:ClaudeQwen respectively."));
         }
 
-        // ── Warning 10: CodexCli:MaxBudgetUsd is not supported ───────────────
-        // Codex CLI has no budget-cap flag. Setting this value silently no-ops
-        // today; the warning makes the misconfiguration visible.
+        // ── Error 10: CodexCli:MaxBudgetUsd is not supported ─────────────────
+        // Codex CLI has no budget-cap flag; the value is silently ignored.
         if (!string.IsNullOrWhiteSpace(config["CodexCli:MaxBudgetUsd"]))
         {
-            findings.Add(new Finding(Severity.Warning, "CodexCli:MaxBudgetUsd",
+            findings.Add(new Finding(Severity.Error, "CodexCli:MaxBudgetUsd",
                 "CodexCli:MaxBudgetUsd is set but Codex CLI has no budget-cap flag; " +
-                "the value is ignored. Use CodexCli:TimeoutSeconds to bound run cost " +
-                "by wall-clock time, or remove the setting."));
+                "the value would be silently ignored. " +
+                "Use CodexCli:TimeoutSeconds to bound run cost by wall-clock time, " +
+                "or remove the setting."));
         }
 
         return findings;
