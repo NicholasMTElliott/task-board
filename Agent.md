@@ -55,7 +55,7 @@ PollingRunner / AgentRunner (the orchestrator)
         └─► IRunStore.SaveStepResultAsync                   (PostgreSQL row per step)
 ```
 
-For a deeper drill-down see `memory-bank/systemPatterns.md` (architecture-as-data, terse) and `docs/*.md` (narrative explanations).
+For a deeper drill-down see the `docs/` folder (narrative explanations of each subsystem).
 
 ---
 
@@ -498,7 +498,7 @@ There are **six real executors** plus a stub. All implement `IAgentExecutor`; so
 - `AgentExecutor` = `docker-claude-qwen` → fail-fast if Docker isn't running; **distinct** key, no aliasing
 - `AgentExecutor` unset (or any other value) → production auto-detect: every Docker-wrapped executor whose CLI is available is registered. Host CLIs (`claude-cli`, `codex`) are auto-registered only when `--unsafe` is also passed.
 
-The full unsafe-gate logic lives in `UnsafeGate.Evaluate` (see [`UnsafeGateTests`](lambda/tests/TaskBoard.Worker.Tests/Configuration/UnsafeGateTests.cs) for the exhaustive scenario matrix).
+The full unsafe-gate logic lives in `UnsafeGate.Evaluate`; the source repo's `UnsafeGateTests` covers the exhaustive scenario matrix.
 
 **Per-role provider override** (the recommended pattern in production): leave `AgentExecutor` unset, then set each role's `provider` field in `workflow.json`:
 
@@ -919,7 +919,7 @@ Use the per-(role, provider) data to refine routing. If a role's win rate drops,
 
 - **Failure classification.** `agent_run.failure_reason` enum: `RATE_LIMIT` (CLI rate-limit detected → card restored to trigger column for retry), `INFRASTRUCTURE` (CLI shell-level launch failure or Docker daemon error), `TIMEOUT`, `AGENT_ERROR` (everything else).
 
-- **Codex defensive diagnostics.** When a role uses `provider=codex`, the executor runs in loud-failure mode: startup `codex --version` probe, per-invocation Info logs of prompt size + schema SHA + effective sandbox policy, stderr signature detection, no silent text-keyword fallback. See `memory-bank/systemPatterns.md` → "Codex Executor Defensive Diagnostics" for the full inventory.
+- **Codex defensive diagnostics.** When a role uses `provider=codex`, the executor runs in loud-failure mode: startup `codex --version` probe, per-invocation Info logs of prompt size + schema SHA + effective sandbox policy, stderr signature detection, no silent text-keyword fallback.
 
 - **Schema migrations.** Flyway in `docker-compose.yml`. Latest migration is V19 (partial UNIQUE index on candidate slot). When adding a new migration, prefer `DROP VIEW IF EXISTS` before `CREATE VIEW` in any view that adds/reorders columns — Postgres rejects column reorders in `CREATE OR REPLACE VIEW`.
 
@@ -952,10 +952,4 @@ The `docs/` folder ships in the release. After reading this file, target reads b
 - `docs/CardTypesAndGeneration.md` — label-based vs field-based card type discrimination + `setFields`
 - `QUICKSTART.md` — operator-friendly first-run walkthrough (less LLM-targeted than this file)
 
-Memory-bank files (in source repo, not necessarily in releases):
-
-- `memory-bank/systemPatterns.md` — architecture-as-data, terse, every component's role
-- `memory-bank/techContext.md` — every architectural decision, Decided / Open lists
-- `memory-bank/projectBrief.md` + `productContext.md` — vision and scope
-
-When in doubt, prefer the `memory-bank/` files for architectural truth; they're maintained in lockstep with code changes.
+The source repository additionally maintains a `memory-bank/` directory (architecture-as-data notes, decision lists) that's kept in lockstep with code changes. Those files are not bundled with the release; if you have access to the source tree, prefer them for the most authoritative architectural detail.

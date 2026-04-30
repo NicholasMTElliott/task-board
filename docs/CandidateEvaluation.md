@@ -186,7 +186,7 @@ Rule of thumb: if your step's `gitBehavior` is `discard`, don't point at `code_r
 
 ## Reading the metrics
 
-`dotnet run --project lambda/src/TaskBoard.Worker -- --mode metrics` adds two new sections when candidate-group data exists:
+`aiboard --mode metrics` adds two new sections when candidate-group data exists:
 
 ```
 ── Provider × Role Metrics (candidate runs) ─────────────

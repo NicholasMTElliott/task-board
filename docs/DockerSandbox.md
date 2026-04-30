@@ -130,7 +130,7 @@ docker ps -a --filter name=aiboard-    # expect empty
 Session-mode runs populate two columns that are `NULL` for host `claude-cli` runs:
 
 ```powershell
-dotnet run --project lambda/src/TaskBoard.Worker -- --mode metrics --card-id 3
+aiboard --mode metrics --card-id 3
 ```
 
 - `agent_run.session_startup_ms` — time to create + start the container
