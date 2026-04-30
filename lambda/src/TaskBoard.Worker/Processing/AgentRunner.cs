@@ -1581,6 +1581,10 @@ public sealed partial class AgentRunner(
         string runId,
         CancellationToken cancellationToken)
     {
+        // Mirror CLAUDE.md ↔ AGENTS.md so this provider has the project init
+        // file regardless of which name the repo committed. Idempotent.
+        AgentInitFileResolver.EnsureInitFile(context.WorkspacePath, providerKey, logger);
+
         // Provider mismatch: step uses a different provider than the session
         if (session is not null
             && !string.Equals(session.ProviderKey, providerKey, StringComparison.OrdinalIgnoreCase))

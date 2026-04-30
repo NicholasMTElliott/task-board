@@ -734,6 +734,10 @@ public sealed class CandidateExecutor(
             ProviderParams: providerParams,
             CommentsFilePath: candidateCommentsFilePath);
 
+        // Mirror CLAUDE.md ↔ AGENTS.md so this candidate's provider has the
+        // project init file regardless of which name the repo committed.
+        AgentInitFileResolver.EnsureInitFile(candidateWorktreePath, candidate.Provider, logger);
+
         var (result, rateLimited) = await ExecuteCandidateWithRetriesAsync(
             executor, context, candidate, slotIndex, index, cancellationToken);
 
@@ -1035,6 +1039,10 @@ public sealed class CandidateExecutor(
             ProviderParams: request.StateProviderParams,
             CommentsFilePath: request.CommentsFilePath,
             SchemaOverride: schemaOverride);
+
+        // Mirror CLAUDE.md ↔ AGENTS.md so the evaluator's provider has the
+        // project init file regardless of which name the repo committed.
+        AgentInitFileResolver.EnsureInitFile(request.WorktreePath, evaluatorRole.Provider, logger);
 
         AgentResult evaluatorResult;
         try

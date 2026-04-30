@@ -485,6 +485,167 @@ public class CandidateExecutorFlowTests : IDisposable
         Assert.Null(capturedSnapshots[0].Context.CommentsFilePath);
     }
 
+    // ── Cross-provider init-file mirroring (AgentInitFileResolver) ─────────
+
+    [Fact]
+    public async Task Candidate_OpenCodeProvider_AgentsMirroredFromClaude_ExistsAtCallTime()
+    {
+        // Project repo has CLAUDE.md only. An OpenCode candidate runs against
+        // a worktree branched off canonical HEAD; AgentInitFileResolver should
+        // surface AGENTS.md (link or copy) in the candidate worktree before
+        // the executor runs.
+        File.WriteAllText(Path.Combine(_canonicalWorktree, "CLAUDE.md"), "# Project context\nClaude rules.\n");
+        RunGitSync(_canonicalWorktree, "add", "CLAUDE.md");
+        RunGitSync(_canonicalWorktree, "commit", "-m", "add CLAUDE.md");
+
+        var snapshots = new List<(AgentExecutionContext Context, bool AgentsExistedAtCallTime)>();
+        var capturingExecutor = new InitFileCapturingExecutor(snapshots);
+
+        // Evaluator default provider is claude-cli (WorkflowRole record default);
+        // wire a scripted COMPLETE so the candidate-group flow can complete.
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-opencode"] = capturingExecutor,
+            ["claude-cli"] = new ScriptedExecutor(AgentOutcome.COMPLETE,
+                "OK.\n```json\n{\"outcome\":\"COMPLETE\",\"winner_index\":0," +
+                "\"scores\":[{\"index\":0,\"score\":8,\"reasoning\":\"\"}]}\n```"),
+        };
+        var executor = new CandidateExecutor(
+            _git, new MapResolver(byProvider),
+            _runStore, _boardClient, NullLogger<CandidateExecutor>.Instance);
+
+        var request = NewRequest("implement", ["docker-opencode"]);
+        await executor.ExecuteCandidateGroupAsync(request, CancellationToken.None);
+
+        var snap = Assert.Single(snapshots);
+        Assert.True(snap.AgentsExistedAtCallTime,
+            $"AGENTS.md should exist at {snap.Context.WorkspacePath} when the OpenCode candidate runs");
+    }
+
+    [Fact]
+    public async Task Evaluator_OpenCodeProvider_AgentsMirroredFromClaude_ExistsAtCallTime()
+    {
+        // Canonical worktree has CLAUDE.md only. An evaluator wired to
+        // docker-opencode should see AGENTS.md mirrored at the canonical
+        // worktree by the time RunEvaluatorAsync calls the executor.
+        File.WriteAllText(Path.Combine(_canonicalWorktree, "CLAUDE.md"), "# Project context\nClaude rules.\n");
+        RunGitSync(_canonicalWorktree, "add", "CLAUDE.md");
+        RunGitSync(_canonicalWorktree, "commit", "-m", "add CLAUDE.md");
+
+        var canonicalAgentsPath = Path.Combine(_canonicalWorktree, "AGENTS.md");
+        var evaluatorSnapshots = new List<(AgentExecutionContext Context, bool AgentsExistedAtCallTime)>();
+
+        // Two providers in the candidate group so we get to the evaluator
+        // (single candidate skips evaluator entirely). Candidate executor is
+        // a benign scripted complete; the evaluator's executor is our capture.
+        var candidateExecutor = new ScriptedExecutor(AgentOutcome.COMPLETE, "ok");
+        var evaluatorExecutor = new EvaluatorInitFileCapturingExecutor(
+            canonicalAgentsPath, evaluatorSnapshots,
+            verdictDetail: "OK\n```json\n{\"outcome\":\"COMPLETE\",\"winner_index\":0,\"scores\":[" +
+                "{\"index\":0,\"score\":8,\"reasoning\":\"\"}," +
+                "{\"index\":1,\"score\":7,\"reasoning\":\"\"}]}\n```");
+
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = candidateExecutor,
+            ["docker-opencode"]   = evaluatorExecutor,
+        };
+        var executor = new CandidateExecutor(
+            _git, new MapResolver(byProvider),
+            _runStore, _boardClient, NullLogger<CandidateExecutor>.Instance);
+
+        // Two-candidate group with an evaluator wired to docker-opencode.
+        var systemPromptFile = Path.Combine(_repoRoot, "system.md");
+        File.WriteAllText(systemPromptFile, "# eval prompt");
+        var request = new CandidateGroupRequest(
+            RunId: "run-eval-init-1",
+            CardId: TestCardId,
+            CardTitle: TestCardTitle,
+            StateName: "Implementing",
+            StepIndex: 0,
+            Step: new WorkflowStep(
+                Name: "implement",
+                Role: "implementer",
+                TaskPromptFile: null,
+                TaskPrompt: "Do it.",
+                Candidates: [
+                    new CandidateOverride("docker-claude-cli"),
+                    new CandidateOverride("docker-claude-cli"),
+                ],
+                Evaluator: new EvaluatorConfig(
+                    Role: "evaluator",
+                    TaskPrompt: "Evaluate.")),
+            Role: new WorkflowRole(
+                Model: "claude-sonnet-4-6",
+                SystemPrompt: "you are an implementer",
+                Sections: []),
+            WorkflowRoles: new Dictionary<string, WorkflowRole>
+            {
+                ["implementer"] = new("claude-sonnet-4-6", "sys", []),
+                ["evaluator"]   = new(
+                    Model: "qwen3.6-35b-a3b-think",
+                    SystemPrompt: "you are an evaluator",
+                    Sections: [],
+                    SystemPromptFile: null,
+                    Provider: "docker-opencode"),
+            },
+            StateProviderParams: null,
+            TaskPrompt: "Do it.",
+            SystemPromptFilePath: systemPromptFile,
+            WorktreePath: _canonicalWorktree,
+            RepoPath: _repoRoot,
+            GitBehavior: "discard",
+            CommentsFilePath: null,
+            PromptBaseDirectory: null);
+
+        await executor.ExecuteCandidateGroupAsync(request, CancellationToken.None);
+
+        var snap = Assert.Single(evaluatorSnapshots);
+        Assert.True(snap.AgentsExistedAtCallTime,
+            $"AGENTS.md should exist at {canonicalAgentsPath} when the OpenCode evaluator runs");
+    }
+
+    /// <summary>
+    /// Executor that records the candidate's AgentExecutionContext along with
+    /// whether AGENTS.md (the OpenCode-expected init file) existed in the
+    /// candidate's workspace at the moment of the call.
+    /// </summary>
+    private sealed class InitFileCapturingExecutor(
+        List<(AgentExecutionContext Context, bool AgentsExistedAtCallTime)> snapshots) : IAgentExecutor
+    {
+        private readonly object _lock = new();
+        public Task<AgentResult> ExecuteAsync(
+            AgentExecutionContext context, CancellationToken cancellationToken)
+        {
+            var agentsPath = Path.Combine(context.WorkspacePath, "AGENTS.md");
+            var existed = File.Exists(agentsPath);
+            lock (_lock) { snapshots.Add((context, existed)); }
+            // Touch a marker so commit-mode promotion would have something to commit.
+            File.WriteAllText(Path.Combine(context.WorkspacePath, "candidate-output.txt"), "ok\n");
+            return Task.FromResult(new AgentResult(AgentOutcome.COMPLETE, "ok"));
+        }
+    }
+
+    /// <summary>
+    /// Same as <see cref="InitFileCapturingExecutor"/> but checks a fixed path
+    /// (the canonical worktree) where the evaluator runs, and returns a
+    /// scripted verdict so the candidate group flow completes.
+    /// </summary>
+    private sealed class EvaluatorInitFileCapturingExecutor(
+        string agentsPath,
+        List<(AgentExecutionContext Context, bool AgentsExistedAtCallTime)> snapshots,
+        string verdictDetail) : IAgentExecutor
+    {
+        private readonly object _lock = new();
+        public Task<AgentResult> ExecuteAsync(
+            AgentExecutionContext context, CancellationToken cancellationToken)
+        {
+            var existed = File.Exists(agentsPath);
+            lock (_lock) { snapshots.Add((context, existed)); }
+            return Task.FromResult(new AgentResult(AgentOutcome.COMPLETE, verdictDetail));
+        }
+    }
+
     /// <summary>
     /// Executor that records every <see cref="AgentExecutionContext"/> it sees so
     /// tests can assert on what the context looked like at the executor boundary.
