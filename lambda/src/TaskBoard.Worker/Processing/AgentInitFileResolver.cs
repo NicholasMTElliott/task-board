@@ -58,17 +58,23 @@ public static class AgentInitFileResolver
 
         var expectedPath = Path.Combine(workspacePath, expectedName);
 
-        // File.Exists follows symlinks and returns true only when the link
-        // target actually resolves. A broken symlink left behind by a prior
-        // run looks "missing" by File.Exists but would still cause
-        // CreateSymbolicLink to throw, so reach for FileInfo.LinkTarget to
-        // detect and clean up reparse-point stubs.
-        if (File.Exists(expectedPath))
-            return null;
-
+        // Detect symlink-ness BEFORE the simple existence check. On Linux .NET 10,
+        // `File.Exists` may return true for a broken symlink (the link entry
+        // exists even though the target doesn't), which would short-circuit
+        // past the cleanup path and leave a stale broken link in place — then
+        // CreateSymbolicLink below would throw EEXIST. Resolve the link target
+        // manually to distinguish working from broken.
         var info = new FileInfo(expectedPath);
         if (info.LinkTarget is not null)
         {
+            // Resolve relative link targets against the link's parent directory.
+            var resolvedTarget = Path.IsPathRooted(info.LinkTarget)
+                ? info.LinkTarget
+                : Path.Combine(workspacePath, info.LinkTarget);
+            if (File.Exists(resolvedTarget))
+                return null; // working symlink (operator-managed or our own from a prior run)
+
+            // Broken symlink — clean it up so CreateSymbolicLink doesn't throw.
             try
             {
                 File.Delete(expectedPath);
@@ -80,6 +86,12 @@ public static class AgentInitFileResolver
                     expectedPath);
                 return null;
             }
+        }
+        else if (File.Exists(expectedPath))
+        {
+            // Real file at the expected name — operator's own copy or
+            // committed file. Leave it alone.
+            return null;
         }
 
         foreach (var siblingName in AllKnownInitFiles)
