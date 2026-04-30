@@ -746,10 +746,24 @@ public sealed class CandidateExecutor(
 
         // Mirror CLAUDE.md ↔ AGENTS.md so this candidate's provider has the
         // project init file regardless of which name the repo committed.
-        AgentInitFileResolver.EnsureInitFile(candidateWorktreePath, candidate.Provider, logger);
+        // Cleanup must run BEFORE the orchestrator's git commit below — if the
+        // mirror is left around, `git add .` captures it and the file shows up
+        // in the evaluator's diff prompt as a spurious change, which biases
+        // the verdict against this candidate.
+        var initMirror = AgentInitFileResolver.EnsureInitFile(
+            candidateWorktreePath, candidate.Provider, logger);
 
-        var (result, rateLimited) = await ExecuteCandidateWithRetriesAsync(
-            executor, context, candidate, slotIndex, index, cancellationToken);
+        AgentResult result;
+        bool rateLimited;
+        try
+        {
+            (result, rateLimited) = await ExecuteCandidateWithRetriesAsync(
+                executor, context, candidate, slotIndex, index, cancellationToken);
+        }
+        finally
+        {
+            AgentInitFileResolver.CleanupInitFile(initMirror, logger);
+        }
 
         var completedAt = DateTimeOffset.UtcNow;
 
@@ -1053,7 +1067,11 @@ public sealed class CandidateExecutor(
 
         // Mirror CLAUDE.md ↔ AGENTS.md so the evaluator's provider has the
         // project init file regardless of which name the repo committed.
-        AgentInitFileResolver.EnsureInitFile(request.WorktreePath, evaluatorRole.Provider, logger);
+        // Cleanup runs in the finally so the mirror doesn't survive into
+        // post-evaluator-step git operations or get re-discovered by a
+        // subsequent step in the same run.
+        var initMirror = AgentInitFileResolver.EnsureInitFile(
+            request.WorktreePath, evaluatorRole.Provider, logger);
 
         AgentResult evaluatorResult;
         try
@@ -1068,6 +1086,10 @@ public sealed class CandidateExecutor(
             evaluatorResult = new AgentResult(
                 AgentOutcome.ERROR,
                 $"Evaluator threw {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            AgentInitFileResolver.CleanupInitFile(initMirror, logger);
         }
 
         var completedAt = DateTimeOffset.UtcNow;

@@ -603,6 +603,15 @@ public class CandidateExecutorFlowTests : IDisposable
         var snap = Assert.Single(evaluatorSnapshots);
         Assert.True(snap.AgentsExistedAtCallTime,
             $"AGENTS.md should exist at {canonicalAgentsPath} when the OpenCode evaluator runs");
+
+        // Regression: the mirror must NOT survive past the evaluator's
+        // execution. If it does, the orchestrator's `git add . && git commit`
+        // (in commit modes) catches it as a tracked change and the next
+        // step's evaluator sees a spurious file in its diff prompt — the
+        // exact bug the user reported in v0.0.21+ field runs.
+        Assert.False(File.Exists(canonicalAgentsPath),
+            "AGENTS.md should be cleaned up after the evaluator returns; " +
+            "if it survives, downstream git operations capture it as a tracked change");
     }
 
     /// <summary>

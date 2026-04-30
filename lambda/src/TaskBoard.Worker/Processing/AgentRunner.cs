@@ -1602,53 +1602,63 @@ public sealed partial class AgentRunner(
         CancellationToken cancellationToken)
     {
         // Mirror CLAUDE.md ↔ AGENTS.md so this provider has the project init
-        // file regardless of which name the repo committed. Idempotent.
-        AgentInitFileResolver.EnsureInitFile(context.WorkspacePath, providerKey, logger);
+        // file regardless of which name the repo committed. Cleaned up after
+        // the agent returns so the mirror doesn't leak into post-step git
+        // commits or the evaluator's diff prompt.
+        var initMirror = AgentInitFileResolver.EnsureInitFile(
+            context.WorkspacePath, providerKey, logger);
 
-        // Provider mismatch: step uses a different provider than the session
-        if (session is not null
-            && !string.Equals(session.ProviderKey, providerKey, StringComparison.OrdinalIgnoreCase))
+        try
         {
-            logger.LogDebug(
-                "Step '{StepName}' provider '{Provider}' does not match session provider '{SessionProvider}', " +
-                "using direct execution",
-                stepName, providerKey, session.ProviderKey);
-        }
-        else if (session is not null && session.IsAlive)
-        {
-            // Session is alive and provider matches — execute via container
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            try
+            // Provider mismatch: step uses a different provider than the session
+            if (session is not null
+                && !string.Equals(session.ProviderKey, providerKey, StringComparison.OrdinalIgnoreCase))
             {
-                var sessionResult = await session.ExecuteInSessionAsync(context, cancellationToken);
-                sw.Stop();
                 logger.LogDebug(
-                    "Step '{StepName}' executed via session {SessionId} run {RunId} in {ExecMs}ms",
-                    stepName, session.SessionId, runId, sw.ElapsedMilliseconds);
-                return (sessionResult, (int)sw.ElapsedMilliseconds);
+                    "Step '{StepName}' provider '{Provider}' does not match session provider '{SessionProvider}', " +
+                    "using direct execution",
+                    stepName, providerKey, session.ProviderKey);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            else if (session is not null && session.IsAlive)
             {
-                sw.Stop();
-                logger.LogWarning(ex,
-                    "Session {SessionId} execution failed for step '{StepName}' run {RunId}, " +
+                // Session is alive and provider matches — execute via container
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    var sessionResult = await session.ExecuteInSessionAsync(context, cancellationToken);
+                    sw.Stop();
+                    logger.LogDebug(
+                        "Step '{StepName}' executed via session {SessionId} run {RunId} in {ExecMs}ms",
+                        stepName, session.SessionId, runId, sw.ElapsedMilliseconds);
+                    return (sessionResult, (int)sw.ElapsedMilliseconds);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    sw.Stop();
+                    logger.LogWarning(ex,
+                        "Session {SessionId} execution failed for step '{StepName}' run {RunId}, " +
+                        "falling back to direct execution",
+                        session.SessionId, stepName, runId);
+                    // Fall through to direct execution
+                }
+            }
+            else if (session is not null && !session.IsAlive)
+            {
+                logger.LogWarning(
+                    "Session {SessionId} is no longer alive for step '{StepName}' run {RunId}, " +
                     "falling back to direct execution",
                     session.SessionId, stepName, runId);
-                // Fall through to direct execution
             }
-        }
-        else if (session is not null && !session.IsAlive)
-        {
-            logger.LogWarning(
-                "Session {SessionId} is no longer alive for step '{StepName}' run {RunId}, " +
-                "falling back to direct execution",
-                session.SessionId, stepName, runId);
-        }
 
-        // Direct execution (no session, provider mismatch, or session dead/failed)
-        var directExecutor = executorResolver.Resolve(providerKey);
-        var directResult = await directExecutor.ExecuteAsync(context, cancellationToken);
-        return (directResult, null);
+            // Direct execution (no session, provider mismatch, or session dead/failed)
+            var directExecutor = executorResolver.Resolve(providerKey);
+            var directResult = await directExecutor.ExecuteAsync(context, cancellationToken);
+            return (directResult, null);
+        }
+        finally
+        {
+            AgentInitFileResolver.CleanupInitFile(initMirror, logger);
+        }
     }
 
     /// <summary>

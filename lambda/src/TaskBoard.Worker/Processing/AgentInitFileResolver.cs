@@ -14,6 +14,12 @@ namespace TaskBoard.Worker.Processing;
 ///
 /// Operates on the host worktree; the existing bind mount makes the result
 /// visible inside Docker containers without any image or entrypoint change.
+///
+/// Callers are expected to <see cref="CleanupInitFile"/> the returned
+/// <see cref="InitFileMirror"/> after the agent invocation so the mirror
+/// doesn't get caught in the orchestrator's <c>git add . &amp;&amp; git commit</c>
+/// (which would commit it to the work branch and surface it in the
+/// evaluator's diff prompt as a spurious change).
 /// </remarks>
 public static class AgentInitFileResolver
 {
@@ -37,15 +43,18 @@ public static class AgentInitFileResolver
     /// If the provider's expected init file is missing in
     /// <paramref name="workspacePath"/> but a sibling provider's init file is
     /// present, create a relative symlink (or copy on Windows non-Developer-Mode)
-    /// at the expected name pointing at the sibling.
+    /// at the expected name pointing at the sibling. Returns a token describing
+    /// the mirror so the caller can clean it up after the agent run; returns
+    /// <c>null</c> when no mirror was created (unknown provider, expected file
+    /// already present, no sibling found, or creation failed).
     /// </summary>
-    public static void EnsureInitFile(
+    public static InitFileMirror? EnsureInitFile(
         string workspacePath,
         string providerKey,
         ILogger logger)
     {
         if (!ProviderInitFiles.TryGetValue(providerKey, out var expectedName))
-            return;
+            return null;
 
         var expectedPath = Path.Combine(workspacePath, expectedName);
 
@@ -55,7 +64,7 @@ public static class AgentInitFileResolver
         // CreateSymbolicLink to throw, so reach for FileInfo.LinkTarget to
         // detect and clean up reparse-point stubs.
         if (File.Exists(expectedPath))
-            return;
+            return null;
 
         var info = new FileInfo(expectedPath);
         if (info.LinkTarget is not null)
@@ -69,7 +78,7 @@ public static class AgentInitFileResolver
                 logger.LogWarning(ex,
                     "Could not clean up broken symlink at {Path}; skipping init-file resolution",
                     expectedPath);
-                return;
+                return null;
             }
         }
 
@@ -90,7 +99,7 @@ public static class AgentInitFileResolver
                 logger.LogInformation(
                     "Symlinked {Expected} → {Sibling} in {Workspace} for provider {Provider}",
                     expectedName, siblingName, workspacePath, providerKey);
-                return;
+                return new InitFileMirror(expectedPath, siblingPath, InitFileMirrorKind.Symlink);
             }
             catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
             {
@@ -100,15 +109,117 @@ public static class AgentInitFileResolver
                     logger.LogDebug(ex,
                         "Symlink not permitted; copied {Sibling} → {Expected} in {Workspace} for provider {Provider}",
                         siblingName, expectedName, workspacePath, providerKey);
+                    return new InitFileMirror(expectedPath, siblingPath, InitFileMirrorKind.Copy);
                 }
                 catch (Exception copyEx)
                 {
                     logger.LogWarning(copyEx,
                         "Failed to mirror {Sibling} → {Expected} in {Workspace}; provider {Provider} will run without project init context",
                         siblingName, expectedName, workspacePath, providerKey);
+                    return null;
                 }
-                return;
             }
         }
+
+        return null;
     }
+
+    /// <summary>
+    /// Removes the mirror file created by <see cref="EnsureInitFile"/> so it
+    /// doesn't get picked up by the orchestrator's <c>git add . &amp;&amp; git commit</c>
+    /// or surface as a spurious entry in the evaluator's diff. Symlinks are
+    /// always safe to delete (the link, not its target). Copies are deleted
+    /// only when their content still matches the sibling — if the agent
+    /// modified the file during its run, the modified copy is preserved and
+    /// the operator is warned.
+    /// </summary>
+    public static void CleanupInitFile(InitFileMirror? mirror, ILogger logger)
+    {
+        if (mirror is null) return;
+
+        try
+        {
+            var info = new FileInfo(mirror.MirrorPath);
+            if (!info.Exists && info.LinkTarget is null)
+            {
+                // Already gone (agent or another caller cleaned up first).
+                return;
+            }
+
+            if (mirror.Kind == InitFileMirrorKind.Symlink)
+            {
+                if (info.LinkTarget is null)
+                {
+                    // Was a symlink at create time, now isn't — the agent
+                    // replaced it with a real file. Don't delete arbitrary
+                    // content; leave it for the operator to inspect.
+                    logger.LogDebug(
+                        "Init file mirror at {Path} is no longer a symlink; leaving as-is",
+                        mirror.MirrorPath);
+                    return;
+                }
+                File.Delete(mirror.MirrorPath);
+                logger.LogDebug("Cleaned up init file symlink at {Path}", mirror.MirrorPath);
+                return;
+            }
+
+            // Copy fallback: only delete when the mirror is still byte-equal
+            // to the sibling. Anything else means the agent edited the
+            // mirror in place, and dropping its work would be surprising.
+            if (!File.Exists(mirror.SiblingPath)
+                || !FilesAreIdentical(mirror.MirrorPath, mirror.SiblingPath))
+            {
+                logger.LogWarning(
+                    "Init file mirror at {Path} differs from sibling {Sibling}; " +
+                    "leaving as-is so any agent-authored changes aren't lost",
+                    mirror.MirrorPath, mirror.SiblingPath);
+                return;
+            }
+            File.Delete(mirror.MirrorPath);
+            logger.LogDebug("Cleaned up init file copy at {Path}", mirror.MirrorPath);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Failed to clean up init file mirror at {Path}",
+                mirror.MirrorPath);
+        }
+    }
+
+    private static bool FilesAreIdentical(string a, string b)
+    {
+        var ai = new FileInfo(a);
+        var bi = new FileInfo(b);
+        if (ai.Length != bi.Length) return false;
+
+        using var sa = ai.OpenRead();
+        using var sb = bi.OpenRead();
+        Span<byte> ba = stackalloc byte[4096];
+        Span<byte> bb = stackalloc byte[4096];
+        while (true)
+        {
+            var ra = sa.Read(ba);
+            var rb = sb.Read(bb);
+            if (ra != rb) return false;
+            if (ra == 0) return true;
+            if (!ba[..ra].SequenceEqual(bb[..rb])) return false;
+        }
+    }
+}
+
+/// <summary>
+/// Token returned by <see cref="AgentInitFileResolver.EnsureInitFile"/>
+/// describing a mirror file the resolver created. Pass back to
+/// <see cref="AgentInitFileResolver.CleanupInitFile"/> after the agent run
+/// to remove the mirror.
+/// </summary>
+public sealed record InitFileMirror(
+    string MirrorPath,
+    string SiblingPath,
+    InitFileMirrorKind Kind);
+
+public enum InitFileMirrorKind
+{
+    Symlink,
+    Copy,
 }

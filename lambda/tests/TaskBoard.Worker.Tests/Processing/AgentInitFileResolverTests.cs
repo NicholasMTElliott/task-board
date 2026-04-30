@@ -29,9 +29,12 @@ public class AgentInitFileResolverTests : IDisposable
     private void WriteFile(string filename, string content)
         => File.WriteAllText(Path_(filename), content);
 
-    private static void Run(string workspace, string provider)
+    private static InitFileMirror? Run(string workspace, string provider)
         => AgentInitFileResolver.EnsureInitFile(
             workspace, provider, NullLogger.Instance);
+
+    private static void Cleanup(InitFileMirror? mirror)
+        => AgentInitFileResolver.CleanupInitFile(mirror, NullLogger.Instance);
 
     [Fact]
     public void ExpectedFileExists_NoOp()
@@ -228,5 +231,124 @@ public class AgentInitFileResolverTests : IDisposable
         var ex = Record.Exception(() => Run(fakeWorkspace, "claude-cli"));
 
         Assert.Null(ex);
+    }
+
+    // ── Cleanup ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void EnsureInitFile_ReturnsNullWhenNothingCreated()
+    {
+        // Pre-existing expected file → no mirror created → returns null so
+        // CleanupInitFile is a no-op for the operator's committed file.
+        WriteFile("CLAUDE.md", "claude content");
+
+        var mirror = Run(_tempDir, "claude-cli");
+
+        Assert.Null(mirror);
+    }
+
+    [Fact]
+    public void EnsureInitFile_ReturnsTokenWhenMirrorCreated()
+    {
+        WriteFile("CLAUDE.md", "claude content");
+
+        var mirror = Run(_tempDir, "docker-opencode");
+
+        Assert.NotNull(mirror);
+        Assert.Equal(Path_("AGENTS.md"), mirror!.MirrorPath);
+        Assert.Equal(Path_("CLAUDE.md"), mirror.SiblingPath);
+    }
+
+    [Fact]
+    public void Cleanup_RemovesMirrorAfterRun()
+    {
+        // Headline case: mirror is created so the agent has its expected
+        // init file, then removed so it doesn't get caught in a later
+        // git add . && git commit and surface in the evaluator's diff.
+        WriteFile("CLAUDE.md", "claude content");
+
+        var mirror = Run(_tempDir, "docker-opencode");
+        Assert.True(File.Exists(Path_("AGENTS.md")));
+
+        Cleanup(mirror);
+
+        Assert.False(File.Exists(Path_("AGENTS.md")));
+        // Sibling untouched.
+        Assert.Equal("claude content", File.ReadAllText(Path_("CLAUDE.md")));
+    }
+
+    [Fact]
+    public void Cleanup_NullMirror_NoOp()
+    {
+        // When there was nothing to mirror (file already there, or no
+        // sibling), EnsureInitFile returns null. Cleanup must safely accept
+        // that without throwing or touching disk.
+        WriteFile("CLAUDE.md", "claude content");
+        WriteFile("AGENTS.md", "operator-managed");
+
+        var mirror = Run(_tempDir, "docker-opencode");
+        Assert.Null(mirror);
+
+        Cleanup(mirror);
+
+        // Both files still present — operator's intent preserved.
+        Assert.Equal("claude content", File.ReadAllText(Path_("CLAUDE.md")));
+        Assert.Equal("operator-managed", File.ReadAllText(Path_("AGENTS.md")));
+    }
+
+    [Fact]
+    public void Cleanup_PreservesAgentEditedCopy()
+    {
+        // Copy fallback path: if the agent edited the mirror in place
+        // (Windows non-Developer-Mode where we copied the file), cleanup
+        // must NOT delete it — that would silently drop the agent's work.
+        // Simulate by directly creating a file with a divergent content so
+        // we don't depend on the platform's symlink permission state.
+        WriteFile("CLAUDE.md", "claude content");
+        WriteFile("AGENTS.md", "claude content");
+        var mirror = new InitFileMirror(
+            Path_("AGENTS.md"), Path_("CLAUDE.md"), InitFileMirrorKind.Copy);
+
+        // Agent edits the mirror (e.g. the agent thought it was the source).
+        File.WriteAllText(Path_("AGENTS.md"), "claude content with extra agent notes");
+
+        Cleanup(mirror);
+
+        // Modified mirror preserved so the operator can decide what to do.
+        Assert.True(File.Exists(Path_("AGENTS.md")));
+        Assert.Equal("claude content with extra agent notes",
+            File.ReadAllText(Path_("AGENTS.md")));
+    }
+
+    [Fact]
+    public void Cleanup_RepeatedCalls_IsIdempotent()
+    {
+        // A defensive caller might call cleanup more than once on the same
+        // mirror token. The second call must be a silent no-op.
+        WriteFile("CLAUDE.md", "claude content");
+        var mirror = Run(_tempDir, "docker-opencode");
+
+        Cleanup(mirror);
+        var ex = Record.Exception(() => Cleanup(mirror));
+
+        Assert.Null(ex);
+        Assert.False(File.Exists(Path_("AGENTS.md")));
+    }
+
+    [Fact]
+    public void EnsureAndCleanup_LeavesNoMirrorOnDisk_RegressionGuard()
+    {
+        // End-to-end: the evaluator-confusion bug was caused by the mirror
+        // being left around so that the orchestrator's `git add .` captured
+        // it. After EnsureInitFile + CleanupInitFile, the workspace must be
+        // byte-equal to its starting state.
+        WriteFile("CLAUDE.md", "project orientation");
+        var beforeFiles = Directory.GetFiles(_tempDir).OrderBy(x => x).ToArray();
+
+        var mirror = Run(_tempDir, "docker-opencode");
+        Cleanup(mirror);
+
+        var afterFiles = Directory.GetFiles(_tempDir).OrderBy(x => x).ToArray();
+        Assert.Equal(beforeFiles, afterFiles);
     }
 }
