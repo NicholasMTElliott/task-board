@@ -111,6 +111,64 @@ public class CandidateExecutorFlowTests : IDisposable
         Assert.Equal(2, _boardClient.Comments.Count(c => c.Marker.Contains(":cand-")));
     }
 
+    // ── Cleanup pinning ──────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task HappyPath_AfterPromotion_NoLeftoverBranchesOrWorktrees()
+    {
+        // Same shape as HappyPath_TwoCandidates, focused only on cleanup
+        // post-conditions. Pre-v0.0.23 the winner's branch was preserved
+        // under a "post-flight git diagnostics" rationale that nothing
+        // actually used; over many runs this accumulated hundreds of
+        // aiboard-cand/... branches in the operator's repo (the v0.0.22
+        // KvA field-report symptom). Splitting this from HappyPath keeps
+        // the failure-to-pinpoint clean: a break here means cleanup
+        // regressed; a break in HappyPath means promotion regressed.
+        var candidateExecutor = BuildExecutor(
+            ("docker-claude-cli", AgentOutcome.COMPLETE, "Claude impl"),
+            ("docker-opencode",   AgentOutcome.COMPLETE, "Qwen impl"),
+            evaluatorOutcome: AgentOutcome.COMPLETE,
+            evaluatorDetail: """
+                ```json
+                {"outcome":"COMPLETE","winner_index":1,"scores":[
+                  {"index":0,"score":7,"reasoning":"works"},
+                  {"index":1,"score":8.5,"reasoning":"cleaner"}
+                ]}
+                ```
+                """);
+
+        var request = NewRequest(
+            stepName: "implement",
+            providers: ["docker-claude-cli", "docker-opencode"]);
+
+        var result = await candidateExecutor.ExecuteCandidateGroupAsync(
+            request, CancellationToken.None);
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);  // pre-condition
+
+        // (a) No candidate branches survive — winner included.
+        var leftoverBranches = RunGitSyncWithOutput(_repoRoot, "branch", "--list", "aiboard-cand/*");
+        Assert.True(string.IsNullOrWhiteSpace(leftoverBranches),
+            $"Expected no surviving candidate branches; got: '{leftoverBranches}'");
+
+        // (b) No non-empty candidate worktree directories on disk. Empty
+        //     parent dirs (the `aiboard-cand/` root itself) are tolerated —
+        //     git typically removes leaf dirs during `worktree remove --force`
+        //     but may leave the parent.
+        var candidateWorktreeRoot = Path.Combine(_repoRoot + "-worktrees", "aiboard-cand");
+        if (Directory.Exists(candidateWorktreeRoot))
+        {
+            var leftoverDirs = Directory.EnumerateDirectories(candidateWorktreeRoot, "*", SearchOption.AllDirectories)
+                .Where(d => Directory.EnumerateFileSystemEntries(d).Any())
+                .ToArray();
+            Assert.True(leftoverDirs.Length == 0,
+                $"Expected no surviving candidate worktree directories; got: {string.Join(", ", leftoverDirs)}");
+        }
+
+        // (c) No stale `git worktree list` registrations.
+        var registeredWorktrees = RunGitSyncWithOutput(_repoRoot, "worktree", "list", "--porcelain");
+        Assert.DoesNotContain("aiboard-cand", registeredWorktrees);
+    }
+
     // ── All candidates fail ──────────────────────────────────────────────────
 
     [Fact]

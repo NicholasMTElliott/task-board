@@ -119,6 +119,73 @@ public class GitWorkspaceManagerTests : IDisposable
         await _manager.RemoveWorktreeAsync(_tempDir, "aiboard/never-created", deleteBranch: false, CancellationToken.None);
     }
 
+    [Fact]
+    public async Task RemoveWorktreeAsync_NonExistentWithDeleteBranch_DoesNotThrow()
+    {
+        // Cleanup paths in CandidateExecutor pass deleteBranch: true even when
+        // the candidate-creation step failed (no worktree, no branch). Must
+        // still not throw — the cleanup loop relies on this.
+        await _manager.RemoveWorktreeAsync(
+            _tempDir, "aiboard-cand/1-deadbeef-0-docker-claude-cli",
+            deleteBranch: true, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task RemoveWorktreeAsync_DirectoryExistsButNotRegistered_StillCleansUp()
+    {
+        // Simulates a partially-cleaned-up state from a prior crash: directory
+        // is on disk but git has no worktree registration for it. The git
+        // worktree remove will fail (unknown working tree) but the fallback
+        // Directory.Delete + worktree prune should still clean up.
+        var orphanPath = Path.Combine(_worktreeBase, "aiboard-cand", "orphan-leftover");
+        Directory.CreateDirectory(orphanPath);
+        File.WriteAllText(Path.Combine(orphanPath, "leftover.txt"), "stale");
+        Assert.True(Directory.Exists(orphanPath));
+
+        await _manager.RemoveWorktreeAsync(
+            _tempDir, "aiboard-cand/orphan-leftover",
+            deleteBranch: true, CancellationToken.None);
+
+        Assert.False(Directory.Exists(orphanPath));
+    }
+
+    [Fact]
+    public async Task RemoveWorktreeAsync_HandDeletedDirectory_NoStaleRegistration()
+    {
+        // Sanity check for the partially-cleaned state where a worktree's
+        // directory was hand-deleted (or removed by another process) without
+        // git's involvement. The cleanup chain — git worktree remove (may
+        // fail), Directory.Delete fallback (no-op), git worktree prune —
+        // should leave no leftover entry in `git worktree list`. We don't
+        // pin which step does the work; only the post-condition matters.
+        var path = await _manager.CreateWorktreeAsync(
+            _tempDir, "aiboard-cand/prune-test", CancellationToken.None);
+        Directory.Delete(path, recursive: true);
+
+        await _manager.RemoveWorktreeAsync(
+            _tempDir, "aiboard-cand/prune-test",
+            deleteBranch: true, CancellationToken.None);
+
+        var registrations = RunGitSyncWithOutput(_tempDir, "worktree", "list", "--porcelain");
+        Assert.DoesNotContain("aiboard-cand/prune-test", registrations);
+    }
+
+    [Fact]
+    public async Task RemoveWorktreeAsync_NeitherWorktreeNorBranchExist_DoesNotThrow()
+    {
+        // Independent-step regression guard: even when EVERY git sub-step
+        // fails (no worktree to remove, no directory to delete, no branch to
+        // delete), the method must complete cleanly. This is what the
+        // candidate-cleanup loop relies on — a single bad teardown can't
+        // stop the loop from completing the remaining candidates.
+        await _manager.RemoveWorktreeAsync(
+            _tempDir, "aiboard-cand/no-such-branch-here",
+            deleteBranch: true, CancellationToken.None);
+
+        // No side-effect assertion: the only requirement is that it didn't
+        // throw. The other tests pin the success-path side effects.
+    }
+
     // ── Commit tests (inside worktree) ────────────────────────────────
 
     [Fact]

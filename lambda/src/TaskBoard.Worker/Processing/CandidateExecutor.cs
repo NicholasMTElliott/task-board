@@ -152,6 +152,19 @@ public sealed class CandidateExecutor(
             groupedByProvider.Count,
             string.Join(", ", groupedByProvider.Select(g => $"{g.Key}×{g.Count()}")));
 
+        // Pre-compute the deterministic branch name for every candidate. Used
+        // by the slot-throw catch block to sweep candidates whose tasks were
+        // still in flight (or faulted) when Task.WhenAll threw — those don't
+        // produce a CandidateExecution, so the post-success cleanup path can't
+        // see them. Without this sweep their worktrees + branches leak.
+        var predictedBranches = candidates
+            .Select((candidate, index) => (
+                Index: index,
+                BranchName: BuildCandidateBranchName(
+                    request.CardId, groupId, slotIndex, totalSlots, index,
+                    SlugifyProvider(candidate.Provider))))
+            .ToList();
+
         var groupTasks = groupedByProvider.Select(async providerGroup =>
         {
             // Sequential per provider. Materialise the group up-front so the
@@ -183,27 +196,25 @@ public sealed class CandidateExecutor(
         }
         catch
         {
-            var siblingCompleted = groupTasks
-                .Where(t => t.Status == TaskStatus.RanToCompletion)
-                .SelectMany(t => t.Result.Select(r => r.Execution))
-                .ToList();
-            if (siblingCompleted.Count > 0)
+            // Sweep the FULL predicted branch list, not just RanToCompletion.
+            // RemoveWorktreeAsync is non-throwing for branches/worktrees that
+            // never got created (the underlying git commands fail; warnings
+            // logged), so passing in-flight predictions is safe — and catches
+            // candidates whose worktree got created but whose CandidateExecution
+            // was never returned.
+            try
             {
-                try
-                {
-                    // Use CancellationToken.None — the original token may be
-                    // cancelled (shutdown path), but disk state still needs
-                    // cleaning. Cleanup is itself best-effort; failures log.
-                    await CleanupCandidateWorktreesAsync(
-                        request.RepoPath, siblingCompleted,
-                        deleteWinnerBranch: true, CancellationToken.None);
-                }
-                catch (Exception cleanupEx)
-                {
-                    logger.LogWarning(cleanupEx,
-                        "Failed to clean up {Count} sibling-group candidate worktree(s) after slot {SlotIndex} threw",
-                        siblingCompleted.Count, slotIndex);
-                }
+                // Use CancellationToken.None — the original token may be
+                // cancelled (shutdown path), but disk state still needs
+                // cleaning. Cleanup is itself best-effort; failures log.
+                await CleanupAllCandidateWorktreesAsync(
+                    request.RepoPath, predictedBranches, CancellationToken.None);
+            }
+            catch (Exception cleanupEx)
+            {
+                logger.LogWarning(cleanupEx,
+                    "Failed to clean up {Count} predicted candidate worktree(s) after slot {SlotIndex} threw",
+                    predictedBranches.Count, slotIndex);
             }
             throw;
         }
@@ -233,7 +244,7 @@ public sealed class CandidateExecutor(
             if (soleCandidate.AgentResult.Outcome != AgentOutcome.COMPLETE)
             {
                 await CleanupCandidateWorktreesAsync(
-                    request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
+                    request.RepoPath, executions, cancellationToken);
 
                 try
                 {
@@ -285,7 +296,7 @@ public sealed class CandidateExecutor(
                 executions.Count, step.Name, slotIndex);
 
             await CleanupCandidateWorktreesAsync(
-                request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
+                request.RepoPath, executions, cancellationToken);
 
             // Pick the merged outcome by recoverability rather than candidate
             // declaration order: NEEDS_INFO is recoverable by a human (card moves
@@ -390,7 +401,7 @@ public sealed class CandidateExecutor(
                 "Evaluator did not select a winner for slot {SlotIndex} of step '{StepName}' (outcome={Outcome}); cleaning up all {Count} candidate worktrees",
                 slotIndex, step.Name, evaluatorResult.Outcome, executions.Count);
             await CleanupCandidateWorktreesAsync(
-                request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
+                request.RepoPath, executions, cancellationToken);
 
             // Phase 5: post per-candidate audit comments
             await PostCandidateCommentsAsync(
@@ -463,7 +474,7 @@ public sealed class CandidateExecutor(
                 "Failed to promote candidate {Index} ({Mode} promotion, branch={Branch}) for step '{StepName}' slot {SlotIndex}",
                 winnerIdx, promotionMode, winner.BranchName, step.Name, slotIndex);
             await CleanupCandidateWorktreesAsync(
-                request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
+                request.RepoPath, executions, cancellationToken);
             return new SlotResult(
                 SlotOutcome.Failed,
                 new AgentResult(
@@ -471,16 +482,14 @@ public sealed class CandidateExecutor(
                     $"Evaluator selected candidate {winnerIdx} but {promotionMode} promotion failed: {ex.Message}"));
         }
 
-        if (IsDiscardMode(request.GitBehavior))
-        {
-            await CleanupCandidateWorktreesAsync(
-                request.RepoPath, executions, deleteWinnerBranch: true, cancellationToken);
-        }
-        else
-        {
-            await CleanupLoserWorktreesAsync(
-                request.RepoPath, executions, winnerIdx, cancellationToken);
-        }
+        // Tear down ALL candidate worktrees AND branches (winner included).
+        // Commit-mode winners had their commits promoted to canonical via
+        // git reset --hard; discard-mode winners had their .aiboard/ artifacts
+        // copied via PromoteDiscardWinnerArtifacts. Either way, the candidate's
+        // branch ref no longer carries unique state, and preserving it would
+        // accumulate aiboard-cand/... branches across runs.
+        await CleanupCandidateWorktreesAsync(
+            request.RepoPath, executions, cancellationToken);
 
         // Phase 5: post per-candidate audit comments
         await PostCandidateCommentsAsync(
@@ -662,14 +671,8 @@ public sealed class CandidateExecutor(
     {
         var step = request.Step;
         var providerSlug = SlugifyProvider(candidate.Provider);
-        // Use a SEPARATE top-level prefix so the candidate worktree is not
-        // nested inside the canonical worktree's directory (which would put one
-        // git worktree inside another and fail). Multi-slot steps include the
-        // slot index in the branch name so retried slots don't collide with
-        // their predecessors' branches if those happen to linger.
-        var groupShort = groupId.ToString("N")[..8];
-        var slotBranchInfix = totalSlots > 1 ? $"-s{slotIndex}" : string.Empty;
-        var candidateBranch = $"aiboard-cand/{request.CardId}-{groupShort}{slotBranchInfix}-{index}-{providerSlug}".ToLowerInvariant();
+        var candidateBranch = BuildCandidateBranchName(
+            request.CardId, groupId, slotIndex, totalSlots, index, providerSlug);
 
         var executor = executorResolver.Resolve(candidate.Provider);
 
@@ -860,6 +863,30 @@ public sealed class CandidateExecutor(
 
     private static string SlugifyProvider(string provider) =>
         provider.Replace(':', '-').Replace('/', '-').Replace('_', '-');
+
+    /// <summary>
+    /// Deterministic candidate branch-name builder. Used both at candidate-
+    /// spawn time and pre-computed up-front so the slot-throw cleanup path
+    /// can sweep candidates whose tasks were still in flight (or had faulted)
+    /// when the slot's <c>Task.WhenAll</c> threw — those branches/worktrees
+    /// aren't reachable through the returned <see cref="CandidateExecution"/>
+    /// list because the task never produced one.
+    /// </summary>
+    /// <remarks>
+    /// Format: <c>aiboard-cand/{cardId}-{groupShort}[-s{slotIndex}]-{index}-{providerSlug}</c>,
+    /// lowercased. The slot infix is omitted in single-slot steps for
+    /// backwards compatibility with v0.0.19-and-earlier branch names. The
+    /// SEPARATE top-level <c>aiboard-cand/</c> prefix keeps candidate
+    /// worktrees as siblings (not nested under) the canonical worktree —
+    /// nested git worktrees fail.
+    /// </remarks>
+    internal static string BuildCandidateBranchName(
+        string cardId, Guid groupId, int slotIndex, int totalSlots, int index, string providerSlug)
+    {
+        var groupShort = groupId.ToString("N")[..8];
+        var slotBranchInfix = totalSlots > 1 ? $"-s{slotIndex}" : string.Empty;
+        return $"aiboard-cand/{cardId}-{groupShort}{slotBranchInfix}-{index}-{providerSlug}".ToLowerInvariant();
+    }
 
     private static void CopyAiboardArtifactsToCandidate(
         string canonicalWorktree, string candidateWorktree)
@@ -1666,70 +1693,55 @@ public sealed class CandidateExecutor(
         }
     }
 
-    private async Task CleanupLoserWorktreesAsync(
+    /// <summary>
+    /// Tears down every candidate's worktree AND branch — including the winner
+    /// after promotion. Best-effort: <see cref="GitWorkspaceManager.RemoveWorktreeAsync"/>
+    /// is itself non-throwing (logs Warning on each failed sub-step), and we
+    /// additionally wrap each candidate so a single bad teardown cannot stop
+    /// the loop from completing the remaining ones.
+    /// </summary>
+    /// <remarks>
+    /// In commit modes the winner's commits have already been promoted to the
+    /// canonical worktree via <c>git reset --hard</c>; the candidate branch
+    /// pointer is therefore redundant (it points at the same commits canonical
+    /// now references). Preserving it would just accumulate
+    /// <c>aiboard-cand/...</c> branches in the operator's repo across runs —
+    /// hundreds over time on busy boards. In discard modes the winner's branch
+    /// is doubly redundant (file-based promotion didn't even use it).
+    /// </remarks>
+    private async Task CleanupAllCandidateWorktreesAsync(
         string repoPath,
-        IReadOnlyList<CandidateExecution> executions,
-        int winnerIndex,
+        IEnumerable<(int Index, string BranchName)> candidates,
         CancellationToken cancellationToken)
     {
-        for (var i = 0; i < executions.Count; i++)
-        {
-            if (i == winnerIndex) continue;
-            var loser = executions[i];
-            try
-            {
-                await gitWorkspaceManager.RemoveWorktreeAsync(
-                    repoPath, loser.BranchName, deleteBranch: true, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex,
-                    "Failed to remove loser candidate {Index} (branch={Branch})",
-                    i, loser.BranchName);
-            }
-        }
-
-        // Also remove the winner's worktree (we already promoted its commits to
-        // canonical via ResetWorktreeToBranchAsync; the candidate worktree itself
-        // is no longer needed). Keep the winner's BRANCH pointer intact so post-
-        // flight git diagnostics can still reference it.
-        var winner = executions[winnerIndex];
-        try
-        {
-            await gitWorkspaceManager.RemoveWorktreeAsync(
-                repoPath, winner.BranchName, deleteBranch: false, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex,
-                "Failed to remove winner candidate worktree (branch={Branch}) after promotion",
-                winner.BranchName);
-        }
-    }
-
-    private async Task CleanupCandidateWorktreesAsync(
-        string repoPath,
-        IReadOnlyList<CandidateExecution> executions,
-        bool deleteWinnerBranch,
-        CancellationToken cancellationToken)
-    {
-        foreach (var exec in executions)
+        foreach (var (index, branchName) in candidates)
         {
             try
             {
                 await gitWorkspaceManager.RemoveWorktreeAsync(
-                    repoPath, exec.BranchName,
-                    deleteBranch: deleteWinnerBranch,
-                    cancellationToken);
+                    repoPath, branchName, deleteBranch: true, cancellationToken);
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
+                // RemoveWorktreeAsync is itself non-throwing for non-cancellation
+                // failures (it logs internally), so reaching this branch indicates
+                // an unexpected exception class. Still non-fatal.
                 logger.LogWarning(ex,
-                    "Failed to remove candidate worktree (branch={Branch}) during cleanup",
-                    exec.BranchName);
+                    "Unexpected exception removing candidate {Index} (branch={Branch}) during cleanup; continuing with the rest",
+                    index, branchName);
             }
         }
     }
+
+    private Task CleanupCandidateWorktreesAsync(
+        string repoPath,
+        IReadOnlyList<CandidateExecution> executions,
+        CancellationToken cancellationToken) =>
+        CleanupAllCandidateWorktreesAsync(
+            repoPath,
+            executions.Select(e => (e.Index, e.BranchName)),
+            cancellationToken);
 
     private async Task PostCandidateCommentsAsync(
         CandidateGroupRequest request,

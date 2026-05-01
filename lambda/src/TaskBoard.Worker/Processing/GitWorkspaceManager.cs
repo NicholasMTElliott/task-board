@@ -151,6 +151,32 @@ public sealed class GitWorkspaceManager(
         await RunGitAsync(worktreePath, ["reset", "--hard", sourceBranch], cancellationToken);
     }
 
+    /// <summary>
+    /// Best-effort cleanup of a worktree and (optionally) its branch.
+    /// Never throws — every failure is logged at Warning and the next step is
+    /// still attempted. Used by the candidate-evaluation cleanup paths where
+    /// leaving a stale branch or worktree behind is preferable to aborting the
+    /// run, but we want to do everything we can to remove leftover state.
+    /// </summary>
+    /// <remarks>
+    /// Order of operations (each step independent, all best-effort):
+    /// <list type="number">
+    ///   <item><c>git worktree remove --force</c> the registered worktree.</item>
+    ///   <item>If the directory still exists on disk (Windows file lock,
+    ///         antivirus, container handle held briefly post-exit), try to
+    ///         <c>Directory.Delete(recursive: true)</c> it. This may fail with
+    ///         <c>IOException</c>/<c>UnauthorizedAccessException</c>; logged.</item>
+    ///   <item><c>git worktree prune</c> to drop any stale registration left by
+    ///         a partial removal — runs unconditionally so a registered-but-
+    ///         orphaned worktree gets cleared even when (1) and (2) couldn't
+    ///         delete the directory.</item>
+    ///   <item>If <paramref name="deleteBranch"/> is true,
+    ///         <c>git branch -D</c> the branch. Independent of worktree-removal
+    ///         success; failure is logged but does not propagate.</item>
+    /// </list>
+    /// <see cref="OperationCanceledException"/> still propagates so Ctrl+C
+    /// shutdown is honoured.
+    /// </remarks>
     public async Task RemoveWorktreeAsync(
         string repoPath, string branchName, bool deleteBranch, CancellationToken cancellationToken)
     {
@@ -158,29 +184,64 @@ public sealed class GitWorkspaceManager(
 
         logger.LogInformation("Removing worktree at {Path}", worktreePath);
 
+        // (1) git worktree remove --force.
+        // Logged at Debug rather than Warning: the candidate-cleanup loop
+        // routinely calls this for predicted branches whose worktrees were
+        // never created (slot threw mid-flight), so a "not a working tree"
+        // failure here is expected noise. The directory-delete + prune
+        // fallbacks below cover the genuinely-stale cases, and step (3)
+        // unconditional prune surfaces the registration list correctly
+        // either way.
         try
         {
             await RunGitAsync(repoPath, ["worktree", "remove", worktreePath, "--force"], cancellationToken);
         }
-        catch (GitOperationException ex)
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
         {
-            logger.LogWarning(ex, "Failed to remove worktree at {Path} — may not exist", worktreePath);
-            // If directory still exists, force-remove it and prune
-            if (Directory.Exists(worktreePath))
+            logger.LogDebug(ex, "git worktree remove failed for {Path} — may not exist; continuing with directory + prune fallbacks", worktreePath);
+        }
+
+        // (2) Directory.Delete fallback if the dir is still on disk
+        if (Directory.Exists(worktreePath))
+        {
+            try
             {
                 Directory.Delete(worktreePath, recursive: true);
-                try { await RunGitAsync(repoPath, ["worktree", "prune"], cancellationToken); }
-                catch (GitOperationException) { /* best effort */ }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Directory.Delete failed for {Path} (file may be locked by container, antivirus, or another process) — leaving on disk; will retry prune",
+                    worktreePath);
             }
         }
 
+        // (3) git worktree prune — always runs, even if (1) and (2) failed.
+        // Clears stale worktree registrations so subsequent runs don't trip
+        // over "directory exists" / "branch in use" errors.
+        try
+        {
+            await RunGitAsync(repoPath, ["worktree", "prune"], cancellationToken);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "git worktree prune failed for {Repo}", repoPath);
+        }
+
+        // (4) Branch deletion is independent of worktree removal. A worktree
+        // that couldn't be removed still has its branch checked out, so
+        // git branch -D will fail; that's logged and we move on.
         if (deleteBranch)
         {
             try
             {
                 await RunGitAsync(repoPath, ["branch", "-D", branchName], cancellationToken);
             }
-            catch (GitOperationException ex)
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
             {
                 logger.LogWarning(ex, "Failed to delete branch {Branch}", branchName);
             }
