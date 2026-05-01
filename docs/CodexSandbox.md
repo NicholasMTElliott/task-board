@@ -15,7 +15,9 @@ This is the recommended way to run Codex against your codebase. The host-CLI var
 | Codex authenticated on the host | `codex login` (creates `~/.codex/auth.json`) |
 | Built `.NET` worker | `dotnet build` succeeds |
 
-The container reads `~/.codex/` from the host via a per-run staged copy (mounted RW so Codex can refresh tokens, but the host directory is never mutated — your login session is read, not written).
+The container reads `~/.codex/` from the host via a per-run staged copy. Each top-level credential file (`auth.json`, `config.toml`, `instructions.md`, etc.) is mounted **read-only** under the agent-owned `/home/agent/.codex/` directory inside the container; the directory itself is image-baked and writable by the agent user, so Codex's runtime `mkdir sessions/` succeeds. The host's `~/.codex/` is never mutated — your login session is read, not written. Token refreshes during the run land on the staged RO file (silent no-op) and don't persist; to pick up a refreshed token, run `codex login` on the host again.
+
+> **Why per-file RO and not a dir-level RW mount?** On Docker Desktop Windows + WSL2 the bind-mounted Windows-temp directory's effective permissions inside the container don't allow the non-root `agent` user to `mkdir sessions/` inside it (EPERM via gRPC FUSE / virtiofs). Mounting individual files into the agent-owned image-baked directory keeps the directory writable and avoids the permission-translation issue. Subdirectories that survive the staging copy (only top-level files of `~/.codex/` are typically present after the `sessions`/`log`/`screenshots` exclusions) are intentionally NOT mounted, since a subdir mount would re-introduce the issue.
 
 ---
 
@@ -145,7 +147,7 @@ Both patterns above support per-step `providerParams` to override the executor's
 | `FullAuto` | `false` | Only relevant when `Yolo=false` |
 | `Sandbox` | `null` | `read-only` / `workspace-write` / `danger-full-access` — only when `Yolo=false` |
 | `CredentialPath` | auto-detect `~/.codex` | Override if Codex auth lives elsewhere |
-| `CredentialMountPoint` | `/home/agent/.codex` | Container-side mount point |
+| `CredentialMountPoint` | `/home/agent/.codex` | Container-side parent dir for per-file credential mounts (each top-level file is mounted RO at `{CredentialMountPoint}/{filename}`) |
 
 ---
 
@@ -204,3 +206,5 @@ Migrate workflow roles from `codex` → `docker-codex` to keep working without `
 **Containers piling up under `docker ps -a`** — `docker run --rm` should clean up on normal exit. If you see persistent `aiboard-cdx-*` containers, the host process was killed mid-run; clean up with `docker rm -f $(docker ps -aq --filter name=aiboard-cdx-)`. The startup orphaned-container detector logs a warning when it sees them.
 
 **Agent runs but seems to ignore the workspace** — check that `WorkspacePath` points at a real git worktree (Codex expects `.git` to be reachable). The host log warns when the workspace has no `.git`.
+
+**Codex stderr: `Operation not permitted (os error 1)` / `Codex cannot access session files at /home/agent/.codex/sessions`** — your sandbox image is from before v0.0.23, when credentials were mounted as a single dir-level RW mount. On Docker Desktop Windows + WSL2 the bind-mounted Windows-temp directory's effective permissions inside the container don't allow the non-root `agent` user to `mkdir sessions/` inside it. **Fix**: rebuild the sandbox image (`.\scripts\build-codex-sandbox.ps1`); the Dockerfile now pre-creates `/home/agent/.codex` agent-owned, and the mount builder switched to per-file RO mounts, sidestepping the bind-mount permissions issue. If you see this error AFTER rebuilding, file an issue — it likely means a new credential file shape is reaching the container.

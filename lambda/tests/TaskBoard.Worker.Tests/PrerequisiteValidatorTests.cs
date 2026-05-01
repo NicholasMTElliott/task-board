@@ -530,6 +530,94 @@ public class PrerequisiteValidatorTests
         Assert.True(failFastTriggered);
     }
 
+    // ── Orphaned-container filter (run-prefix narrowing) ────────────────────
+
+    [Fact]
+    public void FilterOrphanContainerNames_FiltersOutComposeStackContainers()
+    {
+        // aiboard-grafana / aiboard-postgres are docker-compose service containers,
+        // NOT crashed-run leftovers. Suggesting `docker rm -f` on them would
+        // destroy the operator's monitoring stack.
+        const string rawOutput = "aiboard-grafana\naiboard-postgres\n";
+
+        var result = PrerequisiteValidator.FilterOrphanContainerNames(rawOutput);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void FilterOrphanContainerNames_IncludesAllRunSessionPrefixes()
+    {
+        // The four agent-run session-container prefixes per
+        // DockerClaudeAgentOptions / DockerCodexAgentOptions /
+        // DockerClaudeQwenAgentOptions / DockerOpenCodeAgentOptions.
+        const string rawOutput =
+            "aiboard-run-fc50577a-4-abc\n" +
+            "aiboard-cdx-fc50577a-4-def\n" +
+            "aiboard-cq-fc50577a-4-ghi\n" +
+            "aiboard-oc-fc50577a-4-jkl\n";
+
+        var result = PrerequisiteValidator.FilterOrphanContainerNames(rawOutput);
+
+        Assert.Equal(4, result.Count);
+        Assert.Contains("aiboard-run-fc50577a-4-abc", result);
+        Assert.Contains("aiboard-cdx-fc50577a-4-def", result);
+        Assert.Contains("aiboard-cq-fc50577a-4-ghi", result);
+        Assert.Contains("aiboard-oc-fc50577a-4-jkl", result);
+    }
+
+    [Fact]
+    public void FilterOrphanContainerNames_MixedListPartitionsCorrectly()
+    {
+        // Real-world shape: support containers and a crashed run mixed together.
+        // Only the run container should be flagged as orphan.
+        const string rawOutput =
+            "aiboard-grafana\n" +
+            "aiboard-postgres\n" +
+            "aiboard-run-fc50577a-4-abc\n";
+
+        var result = PrerequisiteValidator.FilterOrphanContainerNames(rawOutput);
+
+        Assert.Single(result);
+        Assert.Contains("aiboard-run-fc50577a-4-abc", result);
+    }
+
+    [Fact]
+    public void FilterOrphanContainerNames_EmptyInput_ReturnsEmpty()
+    {
+        Assert.Empty(PrerequisiteValidator.FilterOrphanContainerNames(""));
+        Assert.Empty(PrerequisiteValidator.FilterOrphanContainerNames("   "));
+        Assert.Empty(PrerequisiteValidator.FilterOrphanContainerNames("\n\n"));
+    }
+
+    [Fact]
+    public void FilterOrphanContainerNames_UnknownAiboardPrefix_Excluded()
+    {
+        // Future operator-managed aiboard-* containers (or typos) must NOT be
+        // treated as orphans. This is the regression guard for the v0.0.22
+        // KvA bug: aiboard-grafana / aiboard-postgres flagged as orphans.
+        const string rawOutput =
+            "aiboard-prometheus\n" +
+            "aiboard-some-future-service\n";
+
+        var result = PrerequisiteValidator.FilterOrphanContainerNames(rawOutput);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void FilterOrphanContainerNames_PrefixIsCaseSensitive()
+    {
+        // Docker container names are lowercase by convention; we use ordinal
+        // (case-sensitive) StartsWith to keep the filter strict. A name like
+        // "AIBOARD-RUN-..." should NOT match — it's not a real run container.
+        const string rawOutput = "AIBOARD-RUN-fc50577a-4-abc\n";
+
+        var result = PrerequisiteValidator.FilterOrphanContainerNames(rawOutput);
+
+        Assert.Empty(result);
+    }
+
     // ── Helper ──────────────────────────────────────────────────────────────
 
     /// <summary>Minimal config with no prompt files to validate.</summary>

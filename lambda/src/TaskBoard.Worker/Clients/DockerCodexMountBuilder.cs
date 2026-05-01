@@ -6,18 +6,30 @@ namespace TaskBoard.Worker.Clients;
 /// Codex-specific credential staging.
 /// </summary>
 /// <remarks>
-/// Produces up to four bind mounts per run (see base class for the shared set):
-/// <list type="number">
-///   <item>Worktree (RW) — from the base class.</item>
-///   <item>Base <c>.git</c> directory (RO) — from the base class.</item>
-///   <item><c>.git</c> file override (RO) — from the base class.</item>
-///   <item>Codex credentials — a per-run staged RW copy of <c>~/.codex/</c>.
-///         Codex CLI may refresh tokens during exec and writes session-state
-///         files, so a read-only mount is insufficient. The host's
-///         <c>~/.codex/</c> is never mutated; the staged copy is deleted on
-///         <see cref="DockerMountContext.DisposeAsync"/>. Heavy subdirectories
-///         (sessions, log, screenshots) are excluded from the copy.</item>
-/// </list>
+/// Produces three shared bind mounts (worktree RW, base <c>.git</c> RO, <c>.git</c>
+/// file override RO) plus one read-only file mount per top-level credential file
+/// in the staged copy of <c>~/.codex/</c>.
+/// <para>
+/// Per-file mounts (rather than a single dir-level mount at <c>/home/agent/.codex</c>)
+/// are required for compatibility with Docker Desktop on Windows + WSL2. A bind-mounted
+/// Windows-temp directory's effective permissions inside the container don't allow
+/// the non-root <c>agent</c> user (UID 1000) to <c>mkdir sessions/</c> inside it
+/// (EPERM via gRPC FUSE / virtiofs). Mounting individual files into the agent-owned
+/// image-baked <c>/home/agent/.codex/</c> directory (created in the Dockerfile)
+/// keeps the directory itself writable by the agent user, so Codex CLI's runtime
+/// creation of <c>sessions/</c> and <c>log/</c> succeeds.
+/// </para>
+/// <para>
+/// Trade-off: Codex's runtime token refresh writes to <c>auth.json</c> are silently
+/// no-op'd by the read-only mount. Functionally equivalent to the prior dir-level
+/// behaviour, since the staged copy was destroyed on <see cref="DockerMountContext.DisposeAsync"/>
+/// regardless — refreshed tokens never reached the host's <c>~/.codex/auth.json</c>.
+/// Operators re-authenticate via <c>codex login</c> on the host as before.
+/// </para>
+/// <para>Heavy subdirectories (<c>sessions</c>, <c>log</c>, <c>screenshots</c>)
+/// are excluded from the copy. Subdirs that survive the copy are NOT mounted —
+/// only top-level files are mounted, by design, so we never re-introduce the
+/// dir-level permissions issue.</para>
 /// </remarks>
 public sealed class DockerCodexMountBuilder(ILogger<DockerCodexMountBuilder> logger)
     : DockerMountBuilderBase
@@ -91,16 +103,39 @@ public sealed class DockerCodexMountBuilder(ILogger<DockerCodexMountBuilder> log
         CopyDirectoryRecursive(credPath, stagedCredDir, CredentialCopyExcludes);
         tempDirs.Add(stagedCredDir);
 
-        mounts.Add(new DockerMount
+        // Mount each top-level file from the staged copy as a read-only file
+        // mount into the agent-owned credential directory. The directory
+        // itself is image-baked (Dockerfile mkdir + chown agent:agent), so
+        // file-level mounts overlay on it without changing its permissions.
+        // Subdirs are intentionally NOT mounted — re-introducing a dir-level
+        // mount would re-trigger the bind-mount perms issue this design avoids.
+        var fileCount = 0;
+        foreach (var file in Directory.EnumerateFiles(stagedCredDir))
         {
-            HostPath = NormalizeHostPath(stagedCredDir),
-            ContainerPath = credMountPoint,
-            ReadOnly = false,
-        });
+            var name = Path.GetFileName(file);
+            // Use forward slash for the container path even on Windows hosts;
+            // ContainerPath is a Linux path and Path.Combine would emit backslashes.
+            mounts.Add(new DockerMount
+            {
+                HostPath = NormalizeHostPath(file),
+                ContainerPath = $"{credMountPoint}/{name}",
+                ReadOnly = true,
+            });
+            fileCount++;
+        }
+
+        if (fileCount == 0)
+        {
+            logger.LogWarning(
+                "Codex credential staging produced no files (staged from '{CredPath}'). " +
+                "Codex CLI may not authenticate inside the container.",
+                credPath);
+            return;
+        }
 
         logger.LogDebug(
-            "Codex credential mount (staged RW copy): {CredPath} → {Staged} → {MountPoint}",
-            credPath, stagedCredDir, credMountPoint);
+            "Codex credential mounts (per-file RO): {CredPath} → {Staged} → {MountPoint} ({FileCount} file(s))",
+            credPath, stagedCredDir, credMountPoint, fileCount);
     }
 
     private static readonly HashSet<string> CredentialCopyExcludes = new(StringComparer.OrdinalIgnoreCase)

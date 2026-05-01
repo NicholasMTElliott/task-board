@@ -19,9 +19,12 @@ namespace TaskBoard.Worker.Clients;
 /// The image is <c>aiboard-codex-sandbox:latest</c> (see
 /// <c>docker/codex-sandbox/Dockerfile</c>). Authentication comes from the
 /// host's <c>~/.codex/</c> directory copied into a per-run staging dir by
-/// <see cref="DockerCodexMountBuilder"/> and mounted RW at
-/// <c>/home/agent/.codex</c> inside the container; the host directory is
-/// never mutated.
+/// <see cref="DockerCodexMountBuilder"/> and mounted as per-file read-only
+/// mounts under the agent-owned <c>/home/agent/.codex</c> directory inside
+/// the container. The directory itself is image-baked (Dockerfile pre-creates
+/// it owned by <c>agent:agent</c>), so Codex CLI's runtime <c>mkdir sessions/</c>
+/// succeeds on Docker Desktop Windows. The host's <c>~/.codex/</c> is never
+/// mutated.
 /// </para>
 /// </remarks>
 public sealed class DockerCodexAgentExecutor(

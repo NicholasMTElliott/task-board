@@ -42,6 +42,35 @@ public sealed class DockerOpenCodeAgentExecutor(
     internal const int StopCommandTimeoutSeconds = StopGracePeriodSeconds + 5;
     internal const int RemoveCommandTimeoutSeconds = 10;
 
+    /// <summary>
+    /// Hint categories that indicate the upstream cannot serve this run as
+    /// configured. Re-prompting cannot fix any of these — bail the retry loop
+    /// early instead of burning the full retry budget on a doomed re-prompt.
+    /// </summary>
+    /// <remarks>
+    /// <list type="bullet">
+    ///   <item><c>Network</c>: 502, connection refused, no route to host,
+    ///         <c>llm-net</c> not found, request timeouts.</item>
+    ///   <item><c>Auth</c>: token rejected. llama.cpp accepts any non-empty
+    ///         token, so surfacing this means the env var isn't reaching the
+    ///         container — re-prompting won't fix that.</item>
+    ///   <item><c>Config</c>: OpenCode config references an unknown provider
+    ///         key. A baked image config doesn't change between attempts.</item>
+    ///   <item><c>Path</c>: 404 from llama-server. Wire-path mismatch between
+    ///         OpenCode's adapter and the proxy's exposed routes.</item>
+    /// </list>
+    /// <c>Model</c> is intentionally NOT fatal — a model could be loaded
+    /// mid-run on the local llama-server (rare but theoretically recoverable),
+    /// so retries continue.
+    /// </remarks>
+    internal static readonly HashSet<string> FatalHintCategories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Network",
+        "Auth",
+        "Config",
+        "Path",
+    };
+
     public async Task<AgentResult> ExecuteAsync(
         AgentExecutionContext context, CancellationToken cancellationToken)
     {
@@ -154,6 +183,33 @@ public sealed class DockerOpenCodeAgentExecutor(
                     logger.LogError(
                         "OpenCode stderr matches known failure signature: {Category}. Hint: {Hint}",
                         hint.Category, hint.Hint);
+                }
+
+                // Fatal-hint short-circuit: when stderr indicates an unrecoverable
+                // upstream problem (Network 502, Auth, Config, wire-Path), the
+                // retry-on-malformed-output loop is doomed — re-prompting cannot
+                // fix an unreachable server. Bail immediately as INFRASTRUCTURE
+                // failure so AgentRunner restores the card to its trigger column
+                // and the operator (or a fallback slot) gets a fast signal.
+                // Without this, the original v0.0.22 KvA failure mode burns
+                // 3 × inactivity-timer (~60 min) before surfacing the same error.
+                if (hint is not null && FatalHintCategories.Contains(hint.Category))
+                {
+                    var fatalStderrSnippet = Truncate(stderr, 4000).Trim();
+                    var fatalDetail = new StringBuilder(
+                        $"OpenCode upstream unrecoverable ({hint.Category}). [Hint] {hint.Hint}");
+                    if (!string.IsNullOrEmpty(fatalStderrSnippet))
+                        fatalDetail.Append($"\nStderr: {fatalStderrSnippet}");
+
+                    logger.LogError(
+                        "Docker/OpenCode bailing retry loop on attempt {Attempt} due to fatal hint category {Category}",
+                        attempt + 1, hint.Category);
+
+                    AgentOutputParser.LogReproductionInfo(
+                        logger, "Docker/OpenCode", DockerExecutable, dockerArgs,
+                        prompt, context.WorkspacePath);
+
+                    throw new CliInfrastructureException(fatalDetail.ToString());
                 }
 
                 if (exitCode != 0)

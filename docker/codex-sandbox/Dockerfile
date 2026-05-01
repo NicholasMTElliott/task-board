@@ -54,6 +54,14 @@ RUN EXISTING_USER=$(getent passwd "${AGENT_UID}" | cut -d: -f1) \
 RUN groupadd -g "${AGENT_GID}" agent \
     && useradd -m -u "${AGENT_UID}" -g agent -s /bin/bash agent
 
+# Pre-create the agent-owned ~/.codex directory so the runtime can write
+# sessions/, log/, etc. into it. The DockerCodexMountBuilder mounts staged
+# credential files (auth.json, config.toml, instructions.md) into this dir
+# as read-only files — the dir itself stays writable by the agent user, so
+# Codex's session-init `mkdir -p ~/.codex/sessions` succeeds without hitting
+# bind-mount permission issues on Docker Desktop Windows.
+RUN mkdir -p /home/agent/.codex && chown -R agent:agent /home/agent/.codex
+
 # Install Codex CLI globally as root so it lands in /usr/local/bin
 # and is accessible to the agent user.
 RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}"

@@ -95,7 +95,7 @@ Having the executor registered is not the same as using it — nothing routes to
 | `AuthToken` | `local` | Dummy token — llama.cpp validates nothing. Any non-empty string works. |
 | `ModelName` | `qwen3.6-35b-a3b` | **Default** model alias when a workflow role doesn't pin one. Both Qwen3.6 variants (`qwen3.6-35b-a3b` and `qwen3.6-35b-a3b-think`) are registered in the sandbox image; per-role `model` overrides this default. |
 | `TimeoutSeconds` | `600` | Cold prefix cache on first request can take 1–2 min. Keep the timeout generous. |
-| `MaxRetriesOnMalformedOutput` | `2` | Retry budget when the model response doesn't parse as Agent Contract JSON. After the final attempt, the executor returns `outcome: ERROR` with raw output in detail rather than throwing. |
+| `MaxRetriesOnMalformedOutput` | `2` | Retry budget when the model response doesn't parse as Agent Contract JSON. After the final attempt, the executor returns `outcome: ERROR` with raw output in detail rather than throwing. **Bypassed for fatal stderr hints** — see "Fatal-hint short-circuit" below. |
 | `ContainerNamePrefix` | `aiboard-oc` | Prefix for generated container names (shape: `aiboard-oc-{tenantHash}-{cardId}-{rand}`). Keep the `aiboard-` prefix so orphaned-container detection still matches. |
 | `RateLimitPatterns` | `[]` | Additional stderr substrings that should be treated as rate-limit signals, merged with the built-in Anthropic patterns. |
 
@@ -205,6 +205,16 @@ This is guidance, not enforcement — the executor will run any role you point a
 - Network errors fire a stderr hint (category `Network`) pointing to likely fixes (`llm-net` absent, `could not resolve host`, etc.).
 - Model errors fire a stderr hint (category `Model`) when the requested alias isn't loaded on llama-server.
 - The executor logs the resolved `ProviderBaseUrl` and `ModelName` at Info on every run — verify the expected values appear in logs.
+
+### Fatal-hint short-circuit (v0.0.23+)
+
+When the stderr signature detector fires with one of the **fatal categories** — `Network`, `Auth`, `Config`, `Path` — the retry-on-malformed-output loop is bypassed. The executor immediately throws `CliInfrastructureException` (recorded as `INFRASTRUCTURE` failure-reason in `agent_run.failure_reason`).
+
+Why: re-prompting cannot recover an unreachable upstream, a rejected token, a missing provider key, or a wire-path mismatch. Without this, a single 502 from llama-server during a polling run could burn 3 × the inactivity timer (~60 min on default settings) before surfacing — a real cost observed in the v0.0.22 KvA run that prompted this fix.
+
+`Model` (e.g. "model not found") is intentionally NOT in the fatal list, since a model could be loaded mid-run on a slow-starting llama-server. Retries continue for that case.
+
+If you see a fatal-hint bail in your logs, the operator-actionable fix is in the hint text itself (e.g. "Docker network 'llm-net' does not exist. Start the local-llm compose project first") — not "give the model another try."
 
 ---
 

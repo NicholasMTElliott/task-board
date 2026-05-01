@@ -150,8 +150,27 @@ public static class PrerequisiteValidator
     }
 
     /// <summary>
-    /// Checks for orphaned aiboard-* containers left by prior runs that crashed mid-cleanup.
-    /// Returns the names of any running containers that match the aiboard- prefix.
+    /// The four agent-run session-container prefixes used by the Docker
+    /// executors (per <c>DockerClaudeAgentOptions</c>, <c>DockerCodexAgentOptions</c>,
+    /// <c>DockerClaudeQwenAgentOptions</c>, <c>DockerOpenCodeAgentOptions</c>'s
+    /// <c>ContainerNamePrefix</c>). Operator-managed support containers
+    /// (<c>aiboard-grafana</c>, <c>aiboard-postgres</c> from docker-compose, any
+    /// future <c>aiboard-*</c> services) are intentionally excluded — they are
+    /// NOT orphans, and <c>docker rm -f</c> on them would break the operator's
+    /// stack. Update this list when adding a new Docker-backed executor.
+    /// </summary>
+    private static readonly string[] OrphanRunPrefixes =
+    [
+        "aiboard-run-", // Claude / DockerClaude
+        "aiboard-cdx-", // DockerCodex
+        "aiboard-cq-",  // DockerClaudeQwen
+        "aiboard-oc-",  // DockerOpenCode
+    ];
+
+    /// <summary>
+    /// Checks for orphaned agent-run containers left by prior runs that crashed mid-cleanup.
+    /// Returns the names of any running containers whose names match one of the four
+    /// session-container prefixes (<see cref="OrphanRunPrefixes"/>).
     /// Callers should log a warning if the result is non-empty.
     /// Safe to call before host build (no DI dependencies).
     /// </summary>
@@ -166,9 +185,25 @@ public static class PrerequisiteValidator
         if (!success || string.IsNullOrWhiteSpace(output))
             return [];
 
-        return output
+        return FilterOrphanContainerNames(output);
+    }
+
+    /// <summary>
+    /// Pure helper: filters raw <c>docker ps</c> output (newline-separated container names)
+    /// to only those matching one of the agent-run session-container prefixes
+    /// (<see cref="OrphanRunPrefixes"/>). Operator-managed support containers
+    /// (<c>aiboard-grafana</c>, <c>aiboard-postgres</c>, etc.) are excluded.
+    /// Exposed internal for unit testing.
+    /// </summary>
+    internal static IReadOnlyList<string> FilterOrphanContainerNames(string rawDockerPsOutput)
+    {
+        if (string.IsNullOrWhiteSpace(rawDockerPsOutput))
+            return [];
+
+        return rawDockerPsOutput
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Where(name => !string.IsNullOrWhiteSpace(name)
+                && OrphanRunPrefixes.Any(p => name.StartsWith(p, StringComparison.Ordinal)))
             .ToList();
     }
 
