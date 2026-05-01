@@ -1,5 +1,20 @@
 # AI Board — Quick Start
 
+## Install
+
+Download the latest release for your platform from the [Releases page](https://github.com/NicholasMTElliott/task-board/releases/latest).
+
+Each release ships **two flavors per platform** — pick whichever suits your machine:
+
+| Asset name | When to pick it | Size | Requires |
+|---|---|---|---|
+| `aiboard-{platform}.zip` / `.tar.gz` | **Default — pick this if you're not sure.** Self-contained single-file binary; runs without any .NET install. | ~33 MB compressed | Nothing |
+| `aiboard-{platform}-fdd.zip` / `.tar.gz` | Smaller download, faster cold start. For users who already have .NET 10. | ~5–10 MB compressed | [.NET 10 runtime](https://dotnet.microsoft.com/download/dotnet/10.0) on `PATH` |
+
+`{platform}` is one of `win-x64`, `linux-x64`, `osx-x64`, or `osx-arm64`.
+
+Extract anywhere; the resulting directory is the **install directory** (referenced as such throughout these docs). Add it to `PATH` if you want to run `aiboard` without a full path.
+
 ## Prerequisites
 
 - **Docker** — installed and running (for local PostgreSQL via `docker compose`)

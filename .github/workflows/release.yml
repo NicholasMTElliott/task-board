@@ -27,35 +27,77 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Self-contained — bundles the .NET runtime; runs on any host without
+          # a separate .NET install. Single-file. Larger (~33 MB compressed).
+          # Asset names: aiboard-{rid}.{ext} (no suffix, backward-compat with
+          # release pages prior to v0.0.23).
           - rid: win-x64
             ext: zip
+            deployment: sc
           - rid: linux-x64
             ext: tar.gz
+            deployment: sc
           - rid: osx-x64
             ext: tar.gz
+            deployment: sc
           - rid: osx-arm64
             ext: tar.gz
+            deployment: sc
+          # Framework-dependent — requires .NET 10 runtime to be installed on
+          # the host. Smaller (~5–10 MB compressed). For users who already
+          # have .NET 10 and want a faster cold start / smaller download.
+          # Asset names: aiboard-{rid}-fdd.{ext}.
+          - rid: win-x64
+            ext: zip
+            deployment: fdd
+          - rid: linux-x64
+            ext: tar.gz
+            deployment: fdd
+          - rid: osx-x64
+            ext: tar.gz
+            deployment: fdd
+          - rid: osx-arm64
+            ext: tar.gz
+            deployment: fdd
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
       - name: Publish
+        shell: bash
         run: |
+          # Self-contained → single-file with bundled runtime.
+          # Framework-dependent → multi-file, expects .NET 10 on host.
+          if [ "${{ matrix.deployment }}" = "sc" ]; then
+            EXTRA_FLAGS="--self-contained -p:PublishSingleFile=true"
+          else
+            EXTRA_FLAGS="--no-self-contained"
+          fi
           dotnet publish lambda/src/TaskBoard.Worker/TaskBoard.Worker.csproj \
             --configuration Release \
             --runtime ${{ matrix.rid }} \
-            --self-contained \
-            -p:PublishSingleFile=true \
+            $EXTRA_FLAGS \
             -p:Version=${GITHUB_REF_NAME#v} \
-            --output dist/${{ matrix.rid }}
+            --output dist/${{ matrix.rid }}-${{ matrix.deployment }}
+      - name: Compute artifact name
+        id: name
+        shell: bash
+        run: |
+          # SC keeps the unsuffixed name (backward-compat). FDD adds -fdd suffix.
+          if [ "${{ matrix.deployment }}" = "sc" ]; then
+            SUFFIX=""
+          else
+            SUFFIX="-fdd"
+          fi
+          echo "file=aiboard-${{ matrix.rid }}${SUFFIX}.${{ matrix.ext }}" >> "$GITHUB_OUTPUT"
       - name: Package
         shell: bash
         run: |
           if [ "${{ matrix.ext }}" = "zip" ]; then
-            cd dist/${{ matrix.rid }} && zip -r ../../aiboard-${{ matrix.rid }}.zip .
+            cd dist/${{ matrix.rid }}-${{ matrix.deployment }} && zip -r "../../${{ steps.name.outputs.file }}" .
           else
-            cd dist/${{ matrix.rid }} && tar czf ../../aiboard-${{ matrix.rid }}.tar.gz .
+            cd dist/${{ matrix.rid }}-${{ matrix.deployment }} && tar czf "../../${{ steps.name.outputs.file }}" .
           fi
       # Upload directly to the release — no intermediate artifact handoff.
       # action-gh-release is idempotent: the first matrix job to finish creates
@@ -64,5 +106,5 @@ jobs:
       # account's quota and silently breaking v0.0.11/12/13 — see commit history).
       - uses: softprops/action-gh-release@v2
         with:
-          files: aiboard-${{ matrix.rid }}.${{ matrix.ext }}
+          files: ${{ steps.name.outputs.file }}
           generate_release_notes: true

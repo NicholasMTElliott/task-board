@@ -37,10 +37,12 @@
     <Content Include="..\..\..\QUICKSTART.md" CopyToOutputDirectory="PreserveNewest" Link="QUICKSTART.md" />
     <Content Include="..\..\..\Agent.md" CopyToOutputDirectory="PreserveNewest" Link="Agent.md" />
     <!-- Ship end-user docs only. Legacy/dev-only docs (CliVersionTesting,
-         Deployment, local-webhook-smoke, prototype-config, pgmq-neon-spike-results)
-         reference scripts/ and lambda/src/ that aren't in the install. -->
+         Deployment, local-webhook-smoke, prototype-config, pgmq-neon-spike-results,
+         PublishTrimmedSpike) reference scripts/ and lambda/src/ that aren't in
+         the install, or document forward-looking spikes intended for repo
+         readers only. -->
     <Content Include="..\..\..\docs\**\*.md" CopyToOutputDirectory="PreserveNewest" LinkBase="docs"
-             Exclude="..\..\..\docs\CliVersionTesting.md;..\..\..\docs\Deployment.md;..\..\..\docs\local-webhook-smoke.md;..\..\..\docs\prototype-config.md;..\..\..\docs\pgmq-neon-spike-results.md" />
+             Exclude="..\..\..\docs\CliVersionTesting.md;..\..\..\docs\Deployment.md;..\..\..\docs\local-webhook-smoke.md;..\..\..\docs\prototype-config.md;..\..\..\docs\pgmq-neon-spike-results.md;..\..\..\docs\PublishTrimmedSpike.md" />
     <Content Include="..\..\..\appsettings.user.example.json" CopyToOutputDirectory="PreserveNewest" Link="appsettings.user.example.json" />
     <Content Include="..\..\..\docker-compose.yml" CopyToOutputDirectory="PreserveNewest" Link="docker-compose.yml" />
     <Content Include="..\..\..\db\migrations\*.sql" CopyToOutputDirectory="PreserveNewest" LinkBase="db\migrations" />

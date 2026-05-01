@@ -268,7 +268,18 @@ For a narrative human-targeted walkthrough of the onboarding lifecycle (`init` �
 
 ## Quick Start
 
-### Prerequisites
+### Install (released binary — recommended for non-developers)
+
+Each release on the [Releases page](https://github.com/NicholasMTElliott/task-board/releases/latest) ships two flavors per platform:
+
+- `aiboard-{rid}.zip` / `.tar.gz` — **self-contained single-file** (default). Bundles the .NET runtime; runs on any host without a separate install. ~33 MB compressed.
+- `aiboard-{rid}-fdd.zip` / `.tar.gz` — **framework-dependent**. Requires the [.NET 10 runtime](https://dotnet.microsoft.com/download/dotnet/10.0) on `PATH`. ~5–10 MB compressed.
+
+Where `{rid}` is one of `win-x64`, `linux-x64`, `osx-x64`, `osx-arm64`. **If you don't know which to pick, use self-contained** — it's the path most users want.
+
+See [QUICKSTART.md](QUICKSTART.md) for what to do after extracting.
+
+### Prerequisites (when building from source)
 
 - .NET 10 SDK
 - Docker (for local PostgreSQL)
