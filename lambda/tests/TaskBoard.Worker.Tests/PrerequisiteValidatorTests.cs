@@ -594,7 +594,7 @@ public class PrerequisiteValidatorTests
     public void FilterOrphanContainerNames_UnknownAiboardPrefix_Excluded()
     {
         // Future operator-managed aiboard-* containers (or typos) must NOT be
-        // treated as orphans. This is the regression guard for the v0.0.22
+        // treated as orphans. This is the regression guard for the original
         // KvA bug: aiboard-grafana / aiboard-postgres flagged as orphans.
         const string rawOutput =
             "aiboard-prometheus\n" +

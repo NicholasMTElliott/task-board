@@ -111,7 +111,7 @@ public sealed class DockerOpenCodeAgentOptions : DockerAgentOptionsBase
     /// attempt; on failure it falls through to the existing retry loop unchanged.
     /// </summary>
     /// <remarks>
-    /// Default <c>true</c>. Disabling reverts to the v0.0.23 behaviour:
+    /// Default <c>true</c>. Disabling reverts to the pre-structurer behaviour:
     /// re-prompt the same model with a stricter instruction block. The
     /// structurer addresses a specific failure shape — correct work narrated
     /// in prose without the JSON envelope — that simply re-prompting the

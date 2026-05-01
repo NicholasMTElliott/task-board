@@ -9,7 +9,7 @@ namespace TaskBoard.Worker.Tests;
 /// suite focuses on the Codex-specific credential staging.
 /// </summary>
 /// <remarks>
-/// As of v0.0.23 the builder produces per-file read-only mounts of each
+/// As of v0.0.22 the builder produces per-file read-only mounts of each
 /// top-level credential file rather than a single dir-level RW mount of the
 /// staged copy. The change avoids a Docker Desktop Windows + WSL2 bind-mount
 /// permissions issue where the in-container <c>agent</c> user could not
@@ -59,7 +59,7 @@ public class DockerCodexMountBuilderTests : IDisposable
     public async Task BuildAsync_CredPathExists_CreatesPerFileRoMounts_NotDirectoryRwMount()
     {
         // The headline regression guard: a single dir-level mount at
-        // /home/agent/.codex (RW) was the v0.0.22 KvA failure shape — Codex
+        // /home/agent/.codex (RW) was the KvA failure shape — Codex
         // CLI could not mkdir sessions/ inside it on Docker Desktop Windows.
         // The fix is per-file RO mounts.
         var hostCredDir = Path.Combine(_tempDir, ".codex");

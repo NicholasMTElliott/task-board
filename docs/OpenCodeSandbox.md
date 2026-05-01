@@ -96,7 +96,7 @@ Having the executor registered is not the same as using it — nothing routes to
 | `ModelName` | `qwen3.6-35b-a3b` | **Default** model alias when a workflow role doesn't pin one. Both Qwen3.6 variants (`qwen3.6-35b-a3b` and `qwen3.6-35b-a3b-think`) are registered in the sandbox image; per-role `model` overrides this default. |
 | `TimeoutSeconds` | `600` | Cold prefix cache on first request can take 1–2 min. Keep the timeout generous. |
 | `MaxRetriesOnMalformedOutput` | `2` | Retry budget when the model response doesn't parse as Agent Contract JSON. After the final attempt, the executor returns `outcome: ERROR` with raw output in detail rather than throwing. **Bypassed for fatal stderr hints** — see "Fatal-hint short-circuit" below. **Preceded by a one-shot structurer call** on the first parse failure — see "No-think structurer fallback" below. |
-| `EnableStructurer` | `true` | When the agent's first invocation produces non-empty output that fails to parse as the Agent Contract JSON, run a one-shot follow-up call against `StructurerModelName` (no-think Qwen by default) asking it to extract the outcome from the prior narrative. Set to `false` to revert to the v0.0.23 behaviour: re-prompt the same model with a stricter instruction block. |
+| `EnableStructurer` | `true` | When the agent's first invocation produces non-empty output that fails to parse as the Agent Contract JSON, run a one-shot follow-up call against `StructurerModelName` (no-think Qwen by default) asking it to extract the outcome from the prior narrative. Set to `false` to revert to the v0.0.22 behaviour: re-prompt the same model with a stricter instruction block. |
 | `StructurerModelName` | `qwen3.6-35b-a3b` | Model alias used by the recovery structurer. Defaults to the no-think variant — structuring is a fast mechanical extraction task where chain-of-thought is unhelpful. |
 | `StructurerTimeoutSeconds` | `180` | Hard wall-clock cap for the structurer subprocess. Tight by design: extraction over a few-KB narrative should take seconds on a warm llama-server. |
 | `ContainerNamePrefix` | `aiboard-oc` | Prefix for generated container names (shape: `aiboard-oc-{tenantHash}-{cardId}-{rand}`). Keep the `aiboard-` prefix so orphaned-container detection still matches. |
@@ -209,7 +209,7 @@ This is guidance, not enforcement — the executor will run any role you point a
 - Model errors fire a stderr hint (category `Model`) when the requested alias isn't loaded on llama-server.
 - The executor logs the resolved `ProviderBaseUrl` and `ModelName` at Info on every run — verify the expected values appear in logs.
 
-### Fatal-hint short-circuit (v0.0.23+)
+### Fatal-hint short-circuit (v0.0.22+)
 
 When the stderr signature detector fires with one of the **fatal categories** — `Network`, `Auth`, `Config`, `Path` — the retry-on-malformed-output loop is bypassed. The executor immediately throws `CliInfrastructureException` (recorded as `INFRASTRUCTURE` failure-reason in `agent_run.failure_reason`).
 
@@ -219,7 +219,7 @@ Why: re-prompting cannot recover an unreachable upstream, a rejected token, a mi
 
 If you see a fatal-hint bail in your logs, the operator-actionable fix is in the hint text itself (e.g. "Docker network 'llm-net' does not exist. Start the local-llm compose project first") — not "give the model another try."
 
-### No-think structurer fallback (v0.0.24+)
+### No-think structurer fallback (v0.0.22+)
 
 The most common parse failure for thinking-variant Qwen on heavy-reasoning roles isn't malformed JSON — it's *missing* JSON. The agent narrates correct work in prose and forgets to emit the `{"outcome":"COMPLETE", ...}` envelope at the end. Re-prompting the same thinking model with "be stricter" rarely fixes this, because the model already thinks it's done.
 
@@ -229,13 +229,13 @@ When the first attempt produces non-empty output that fails to parse, the execut
 2. Pins the model to `StructurerModelName` (default: `qwen3.6-35b-a3b`, the no-think variant — structuring is a mechanical extraction task where reasoning is counterproductive).
 3. Sends a tight prompt: "Below is an agent's free-form narrative. Extract ONLY a JSON object matching this schema." No tools, no system prompt, no chain-of-thought.
 4. If the structurer returns parseable JSON, the executor returns it as the recovered result with a marker in `ConversationLog` (`Recovered via no-think structurer`).
-5. If the structurer fails (timeout, unparseable output, container error), execution falls through to the existing retry-with-stricter-reprompt path. The original v0.0.23 behaviour is preserved as the safety net.
+5. If the structurer fails (timeout, unparseable output, container error), execution falls through to the existing retry-with-stricter-reprompt path. The original v0.0.22 behaviour is preserved as the safety net.
 
 The structurer fires **only on the first parse failure**, never on subsequent retries — it's a one-shot recovery, not a per-retry helper.
 
 **Trade-off**: structuring infers fields from prose, which is by definition parser-side inference. The structurer prompt tells the model to faithfully summarize the narrative without inventing claims, but a determined hallucination in the agent's prose will be preserved verbatim in the structured output. If you need a stricter wire contract, route the role through `docker-claude-qwen` (server-enforced schema via `--json-schema` → tool-call); the structurer is the right answer when you need OpenCode's prompt-engineered path to be viable for thinking workloads.
 
-**Operator opt-out**: set `DockerAgents:OpenCode:EnableStructurer = false` in `appsettings.json` to revert to v0.0.23 behaviour.
+**Operator opt-out**: set `DockerAgents:OpenCode:EnableStructurer = false` in `appsettings.json` to revert to v0.0.22 behaviour.
 
 **Logs to look for**:
 - `Docker/OpenCode invoking structurer for card N (model=...)` — structurer is firing.

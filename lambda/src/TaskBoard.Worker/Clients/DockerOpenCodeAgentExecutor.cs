@@ -191,7 +191,7 @@ public sealed class DockerOpenCodeAgentExecutor(
                 // fix an unreachable server. Bail immediately as INFRASTRUCTURE
                 // failure so AgentRunner restores the card to its trigger column
                 // and the operator (or a fallback slot) gets a fast signal.
-                // Without this, the original v0.0.22 KvA failure mode burns
+                // Without this, the original KvA failure mode burns
                 // 3 × inactivity-timer (~60 min) before surfacing the same error.
                 if (hint is not null && FatalHintCategories.Contains(hint.Category))
                 {

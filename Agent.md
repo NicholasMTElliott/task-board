@@ -213,6 +213,9 @@ Most operators will only edit a small subset of keys. A complete annotated examp
       "ModelName": "qwen3.6-35b-a3b",            // default; per-role model overrides this
       "TimeoutSeconds": 600,
       "MaxRetriesOnMalformedOutput": 2,
+      "EnableStructurer": true,                  // v0.0.22+: one-shot no-think structurer fallback on parse failure
+      "StructurerModelName": "qwen3.6-35b-a3b",  // structurer always uses no-think (mechanical extraction)
+      "StructurerTimeoutSeconds": 180,
       "PromptMountPoint": "/mnt/aiboard/prompts",
       "CliArguments": ["run"],
       "RateLimitPatterns": []                    // operator-extensible stderr substrings
@@ -936,7 +939,7 @@ Use the per-(role, provider) data to refine routing. If a role's win rate drops,
 | `ApplicationException: rate limited` then retry | Rate limit detected from CLI stderr (`AgentCli`) or board API (`BoardApi`). | Wait — `PollingRunner` backs off 30 min for CLI, 2 min for board. |
 | Qwen first request takes 60+ seconds | Cold prefix cache. Normal. | `TimeoutSeconds: 600` in DockerAgents:OpenCode / DockerAgents:ClaudeQwen. |
 | Two concurrent candidates against Qwen are slow | `local-llm` server is `--parallel 1`. Concurrent calls bust the prefix cache. | `CandidateExecutor` runs candidates sequentially; if you ran them in parallel manually, don't. |
-| OpenCode keeps returning ERROR with raw stdout | Model isn't producing parseable JSON; bounded retry exhausted. | Check `CliFailureHintDetector.OpenCodeSignatures` matches in logs. May indicate model misconfiguration or upstream rate-limit on the proxy. |
+| OpenCode keeps returning ERROR with raw stdout | Model isn't producing parseable JSON; bounded retry exhausted. **Check the structurer ran** — startup logs `Docker/OpenCode invoking structurer for card N` on first parse failure (v0.0.22+). If the structurer also failed, look for `falling through to retry loop` followed by `OpenCode CLI produced no parseable Agent Contract JSON after N attempts`. | Check `CliFailureHintDetector.OpenCodeSignatures` matches in logs. May indicate model misconfiguration or upstream rate-limit on the proxy. If the agent's narrative looks correct but doesn't end with JSON, the structurer should be recovering it — verify `EnableStructurer: true` in `DockerAgents:OpenCode`. |
 | `Schema validation` stderr from Claude / Codex | Schema mismatch between the CLI version and what `AgentSchemas.OutcomeSchema` expects. | Update the CLI image; check schema SHA in startup logs. |
 
 ---

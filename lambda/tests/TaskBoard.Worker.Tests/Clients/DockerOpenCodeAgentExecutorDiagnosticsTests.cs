@@ -282,7 +282,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
     [Fact]
     public async Task ExecuteAsync_NetworkHint502_ExitZeroProse_BailsBeforeRetry()
     {
-        // The original v0.0.22 KvA failure shape: llama-server proxy returned
+        // The original KvA failure shape: llama-server proxy returned
         // 502 mid-run; OpenCode CLI exited 0 with prose ("upstream unreachable")
         // and "502" in stderr. Without the bail, the retry-on-malformed-output
         // loop burned 3 × inactivity-timer (~60 min) before surfacing.
@@ -518,7 +518,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
         Assert.StartsWith("aiboard-oc-deadbeef-42-", name);
     }
 
-    // ── No-think Qwen structurer fallback (v0.0.24+) ───────────────────────
+    // ── No-think Qwen structurer fallback (v0.0.22+) ───────────────────────
 
     /// <summary>
     /// Distinguishes structurer calls from main-agent calls by inspecting the
@@ -539,7 +539,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
     [Fact]
     public async Task ExecuteAsync_StructurerEnabled_RecoversFromProseNarrative_NoRetry()
     {
-        // Headline scenario: the v0.0.22 KvA failure shape — agent narrates
+        // Headline scenario: the KvA failure shape — agent narrates
         // correct work in prose but skips the JSON envelope. Structurer takes
         // the narrative, returns parseable JSON. Executor returns recovered
         // result without consuming a retry attempt.
@@ -619,7 +619,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
     [Fact]
     public async Task ExecuteAsync_StructurerDisabled_GoesStraightToRetry()
     {
-        // Operator opt-out: EnableStructurer=false reverts to the v0.0.23
+        // Operator opt-out: EnableStructurer=false reverts to the pre-structurer
         // behavior — re-prompt the same model with stricter instructions.
         var (ws, promptFile) = NewWorkspace();
         try
@@ -774,6 +774,112 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
             Assert.Equal(AgentOutcome.ERROR, result.Outcome);
         }
         finally { CleanupWorkspace(ws); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StructurerInfersNeedsInfo_PropagatesQuestions()
+    {
+        // The structurer should recognize question-asking narratives and emit
+        // outcome=NEEDS_INFO with questions[] rather than COMPLETE. This is the
+        // path that lets human-in-the-loop questions survive even when the
+        // original agent forgot to emit the JSON envelope.
+        var (ws, promptFile) = NewWorkspace();
+        try
+        {
+            var mainCalls = 0;
+            var structurerCalls = 0;
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _) =>
+            {
+                if (IsStructurerCall(args))
+                {
+                    structurerCalls++;
+                    return Task.FromResult((0,
+                        "```json\n" +
+                        "{\"outcome\":\"NEEDS_INFO\",\"detail\":\"Agent asked for clarification\"," +
+                        "\"questions\":[{\"question\":\"Should the menu use serif or sans-serif font?\",\"recommendations\":[\"Cinzel\",\"Inter\"]}]}\n" +
+                        "```",
+                        ""));
+                }
+                mainCalls++;
+                return Task.FromResult((0,
+                    "I started looking at main_menu.gd but realized I need to know " +
+                    "whether you want the buttons to use a serif font like Cinzel " +
+                    "or a sans-serif like Inter. Can you confirm?",
+                    ""));
+            };
+
+            var executor = CreateExecutor(runner, maxRetries: 2, enableStructurer: true);
+
+            var result = await executor.ExecuteAsync(
+                CreateContext(ws, promptFile), CancellationToken.None);
+
+            Assert.Equal(1, mainCalls);
+            Assert.Equal(1, structurerCalls);
+            Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
+            Assert.NotNull(result.Questions);
+            Assert.Single(result.Questions);
+            Assert.Contains("serif", result.Questions[0].Question, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { CleanupWorkspace(ws); }
+    }
+
+    // ── BuildStructurerPrompt: regression guard for the model's contract ──
+
+    [Fact]
+    public void BuildStructurerPrompt_ContainsSchemaAndNarrative()
+    {
+        const string narrative = "I read main_menu.gd and verified the buttons are present. Task is complete.";
+        var prompt = DockerOpenCodeAgentExecutor.BuildStructurerPrompt(narrative);
+
+        // The narrative must be passed verbatim under a clearly-marked header.
+        Assert.Contains("## Narrative to Structure", prompt);
+        Assert.Contains(narrative, prompt);
+
+        // The schema must appear in a JSON code fence — the structurer needs to
+        // see the contract shape it's extracting against.
+        Assert.Contains("```json", prompt);
+        Assert.Contains("\"outcome\"", prompt);
+
+        // Outcome enum values must appear so the model knows the valid set.
+        Assert.Contains("COMPLETE", prompt);
+        Assert.Contains("NEEDS_INFO", prompt);
+        Assert.Contains("ERROR", prompt);
+    }
+
+    [Fact]
+    public void BuildStructurerPrompt_DoesNotIncludeOriginalTaskOrSystemPrompt()
+    {
+        // Critical regression guard: the structurer must see ONLY the narrative
+        // it is structuring, not the original task or system prompt. Otherwise
+        // it could hallucinate fields based on the task description rather than
+        // the agent's actual narrative output. The user-facing risk:
+        // structurer says COMPLETE because the task SAID to do X, even though
+        // the narrative didn't actually finish X.
+        const string narrative = "I started but didn't finish.";
+        var prompt = DockerOpenCodeAgentExecutor.BuildStructurerPrompt(narrative);
+
+        // The structurer prompt is a closed system: schema + rules + narrative.
+        // It must not include task-prompt headers or shared-section markers
+        // that the main-agent prompt builder injects.
+        Assert.DoesNotContain("## Task\n", prompt);
+        Assert.DoesNotContain("## System Instructions", prompt);
+        Assert.DoesNotContain("## Card Body", prompt);
+        Assert.DoesNotContain("## Comments", prompt);
+    }
+
+    [Fact]
+    public void BuildStructurerPrompt_ForbidsReasoningOutput()
+    {
+        // The structurer is invoked against the no-think Qwen variant precisely
+        // because reasoning would bury the JSON output. The prompt must
+        // explicitly forbid reasoning so even the -think variant (if an operator
+        // overrides StructurerModelName) doesn't pollute the output.
+        var prompt = DockerOpenCodeAgentExecutor.BuildStructurerPrompt("any narrative");
+
+        Assert.Contains("Output ONLY the JSON object", prompt);
+        Assert.Contains("Do NOT", prompt); // covers "Do NOT add fields" + "Do NOT include reasoning"
+        // Faithfulness instruction — guards against hallucinating fields.
+        Assert.Contains("do NOT invent", prompt, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
