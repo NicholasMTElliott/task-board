@@ -208,3 +208,9 @@ Migrate workflow roles from `codex` → `docker-codex` to keep working without `
 **Agent runs but seems to ignore the workspace** — check that `WorkspacePath` points at a real git worktree (Codex expects `.git` to be reachable). The host log warns when the workspace has no `.git`.
 
 **Codex stderr: `Operation not permitted (os error 1)` / `Codex cannot access session files at /home/agent/.codex/sessions`** — your sandbox image is from before v0.0.22, when credentials were mounted as a single dir-level RW mount. On Docker Desktop Windows + WSL2 the bind-mounted Windows-temp directory's effective permissions inside the container don't allow the non-root `agent` user to `mkdir sessions/` inside it. **Fix**: rebuild the sandbox image (`.\scripts\build-codex-sandbox.ps1`); the Dockerfile now pre-creates `/home/agent/.codex` agent-owned, and the mount builder switched to per-file RO mounts, sidestepping the bind-mount permissions issue. If you see this error AFTER rebuilding, file an issue — it likely means a new credential file shape is reaching the container.
+
+---
+
+## 10. Project-specific tooling
+
+If your project's agent work needs additional tooling baked into this sandbox (a JVM, a specific compiler, etc.), overlay it instead of forking. See [ProjectOverlays.md](ProjectOverlays.md) for the `FROM aiboard-codex-sandbox:latest` pattern, build-script template, and `appsettings.json` wiring.

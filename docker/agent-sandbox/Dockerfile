@@ -18,14 +18,19 @@ ARG AGENT_GID=1000
 ARG CLAUDE_CLI_VERSION=latest
 
 # Install system dependencies:
-#   git        - required for worktree operations
-#   ripgrep    - required by Claude Code for file search (rg)
-#   curl       - common utility; used by Claude Code tooling
+#   git             - required for worktree operations
+#   ripgrep         - required by Claude Code for file search (rg)
+#   curl            - common utility; used by Claude Code tooling
+#   ca-certificates - HTTPS trust anchors. Required by curl when project
+#                     overlays (FROM aiboard-agent-sandbox:latest) fetch
+#                     their own dependencies over HTTPS, and matches what
+#                     the Codex/OpenCode sandboxes already ship.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         git \
         ripgrep \
         curl \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Remove any existing user at the target UID/GID to avoid conflicts.

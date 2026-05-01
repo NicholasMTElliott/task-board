@@ -250,3 +250,9 @@ The structurer fires **only on the first parse failure**, never on subsequent re
 - **Schema enforcement is prompt-engineered, not wire-enforced (today).** llama.cpp itself supports `response_format: {"type":"json_schema", ...}` server-side (per the model card), but the OpenCode CLI doesn't expose a flag to thread it through, so this executor relies on a schema instruction block in the prompt + client-side validation by `OpenCodeOutputParser` + bounded retry. This is less strict than Claude's `--json-schema` enforcement; if you see frequent parse failures on a specific role, the long-term fix is to extend OpenCode's CLI surface (or call llama.cpp directly) rather than scale the retry budget.
 - **128K context ceiling.** Local llama.cpp is configured for 128K. Oversized prompts fail at the server boundary (stderr hint `context length`).
 - **No credential staging.** Unlike the Claude sandbox, no host directory is mounted into the container — the connection detail is just env vars passed through to the entrypoint.
+
+---
+
+## 9. Project-specific tooling
+
+If your project's agent work needs additional tooling baked into this sandbox (a runtime, a compiler, a CLI), overlay it instead of forking. See [ProjectOverlays.md](ProjectOverlays.md) for the `FROM aiboard-opencode-sandbox:latest` pattern, build-script template, and `appsettings.json` wiring.

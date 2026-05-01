@@ -275,6 +275,17 @@ public sealed class InitRunner
         stdout.WriteLine("  3. To run on a specific card explicitly:");
         stdout.WriteLine($"       aiboard --mode agent --card-id <N> --board-id {projectNumber}");
         stdout.WriteLine();
+        stdout.WriteLine("  4. Add this snippet to your project's .gitignore so the runtime ephemera");
+        stdout.WriteLine("     (cards, comments, images, updates) stays out of git, but the project's");
+        stdout.WriteLine("     workflow + appsettings ARE tracked:");
+        stdout.WriteLine();
+        stdout.WriteLine("       .aiboard/*");
+        stdout.WriteLine("       !.aiboard/workflow.json");
+        stdout.WriteLine("       !.aiboard/appsettings.json");
+        stdout.WriteLine();
+        stdout.WriteLine("     If you renamed workflow.json (e.g. workflow.github.json), add a matching");
+        stdout.WriteLine("     `!.aiboard/<name>.json` line.");
+        stdout.WriteLine();
     }
 
     private static bool ParseBool(string? value)

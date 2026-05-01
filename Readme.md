@@ -341,6 +341,10 @@ The third executor, `docker-claude-qwen`, runs the regular Claude CLI in the sam
 $env:AGENT_EXECUTOR = "docker-claude-qwen"
 ```
 
+### Add project-specific tooling to the sandbox (optional)
+
+If your project's agent work needs a runtime that the upstream sandbox doesn't ship (a game engine, a JVM, a specific compiler, etc.), don't fork the upstream `Dockerfile`. Overlay it: a tiny `FROM aiboard-X-sandbox:latest` Dockerfile in your project repo, retag, and point `DockerAgents:*:ImageName` at the new tag. See [docs/ProjectOverlays.md](docs/ProjectOverlays.md) for the pattern, build-script template, and a worked Godot example.
+
 No separate image build needed — reuses the Claude sandbox built above. Pair with `docker-opencode` in a candidate group to A/B them on real workloads.
 
 ### Run an agent on a card

@@ -848,6 +848,16 @@ If you have **personal credentials that span every project** (e.g., a personal A
 }
 ```
 
+> **Canonical `.gitignore` for `.aiboard/`.** The directory mixes **two kinds of files**: project config (workflow + appsettings — should be committed and travel with the repo) and runtime ephemera (`tasks/`, `comments/`, `images/`, `updates/` — written by the orchestrator on every agent run, churns constantly, must never be committed). Add this snippet to the project repo's root `.gitignore`:
+>
+> ```gitignore
+> .aiboard/*
+> !.aiboard/workflow.json
+> !.aiboard/appsettings.json
+> ```
+>
+> If you renamed the workflow file (e.g. `workflow.github.json`), add a matching `!.aiboard/<name>.json` line. If your project also keeps a `appsettings.user.json` for machine-local secrets (different from the install-dir one — same name, different scope), do **not** add a `!`-line for it — it should stay gitignored as the wildcard already excludes it. `aiboard --mode init` prints this snippet at the end of its output as a reminder.
+
 ### 11.4 Create the project's `.aiboard/workflow.github.json`
 
 Copy `workflow.github.example.json` from the aiboard install directory into the project's `.aiboard/workflow.github.json` (NOT alongside the example file at the install). The example wires the full SDLC pipeline (Backlog → Ready for Design → Designing → Designed → Ready for Implementation → ... → Done). At minimum:
@@ -879,10 +889,13 @@ Postgres on `localhost:5432`, Flyway migrations run automatically, Grafana dashb
 
 ```powershell
 .\scripts\build-sandbox.ps1               # for docker-claude-cli + docker-claude-qwen
+.\scripts\build-codex-sandbox.ps1         # for docker-codex
 .\scripts\build-opencode-sandbox.ps1      # for docker-opencode
 ```
 
 For Qwen-target executors, also bring up the sibling [`local-llm`](../local-llm/) project (`cd ..\local-llm && docker compose up -d`) and verify `docker network ls | Select-String llm-net`.
+
+If your project's agent work needs additional tooling baked into the sandbox (a game engine, a JVM, a specific compiler, etc.), don't fork the upstream `Dockerfile` — overlay it. See [docs/ProjectOverlays.md](docs/ProjectOverlays.md) for the `FROM aiboard-X-sandbox:latest` pattern, build-script template, and `DockerAgents:*:ImageName` wiring.
 
 ### 11.8 First run
 

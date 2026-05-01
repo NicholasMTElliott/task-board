@@ -45,6 +45,16 @@ Output: `./.aiboard/{appsettings.json, workflow.json}`. The `appsettings.json` p
 
 To switch providers later, re-run with `--force` and a different `--template`.
 
+**Then add the canonical `.aiboard/` `.gitignore` snippet** to the project's root `.gitignore`:
+
+```gitignore
+.aiboard/*
+!.aiboard/workflow.json
+!.aiboard/appsettings.json
+```
+
+This excludes the runtime ephemera (`.aiboard/tasks/`, `.aiboard/comments/`, `.aiboard/images/`, `.aiboard/updates/`) — written and rewritten on every agent run — while keeping the project's workflow + appsettings tracked in git so the config travels with the repo. If you renamed the workflow file (e.g. `workflow.github.json`), add a matching `!.aiboard/<name>.json` line. `aiboard --mode init` prints this snippet at the end of its "Next steps" output as a reminder.
+
 ---
 
 ## Step 2 — `aiboard --mode validation --board-id N`

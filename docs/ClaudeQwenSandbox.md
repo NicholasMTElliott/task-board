@@ -179,3 +179,9 @@ See [docs/CandidateEvaluation.md](CandidateEvaluation.md) for the full mechanics
 - **Claude CLI version drift.** The CLI evolves; flag changes between versions are caught by stderr-signature category `VersionDrift`. If you see this, the CLI image needs rebuilding against the same Claude CLI version your real-Anthropic `docker-claude-cli` runs on, so the two stay aligned.
 - **No session reuse (yet).** The real-Anthropic `docker-claude-cli` supports `IAgentExecutorSession` for multi-step container reuse; this Qwen-target variant does not. Each step spawns a new container. Reasonable for the candidate-evaluation use case (each candidate uses a different worktree mount anyway), but if you route this executor to non-candidate workflow roles you'll pay a fresh container startup per step. Add it if the latency matters.
 - **Telemetry-vs-cache trade-off.** `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` suppresses Claude CLI's feature-flag checks. If a future CLI feature requires those checks to enable, you'll need to set the flag back to `0` and accept the prefix-cache cost.
+
+---
+
+## 7. Project-specific tooling
+
+This executor reuses the Claude sandbox image (`aiboard-agent-sandbox:latest`) — overlays you build for `docker-claude-cli` apply here automatically. See [ProjectOverlays.md](ProjectOverlays.md) for the `FROM aiboard-agent-sandbox:latest` pattern; remember to set both `DockerAgents:Claude:ImageName` and `DockerAgents:ClaudeQwen:ImageName` to the same overlay tag.

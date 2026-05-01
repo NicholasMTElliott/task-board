@@ -153,3 +153,9 @@ Confirm both code paths work by flipping `DockerAgents:Claude:ReuseContainer` (l
 ## 6. Disable
 
 Either unset `AGENT_EXECUTOR` (defaults back to stub / whatever `appsettings.json` selects) or set it explicitly to `claude-cli`. No image cleanup needed.
+
+---
+
+## 7. Project-specific tooling
+
+If your project's agent work needs additional tooling baked into the sandbox (a game engine, a JVM, a specific compiler, etc.), don't fork this image — overlay it. See [ProjectOverlays.md](ProjectOverlays.md) for the `FROM aiboard-agent-sandbox:latest` pattern, build-script template, and `appsettings.json` wiring.

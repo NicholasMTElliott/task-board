@@ -48,6 +48,14 @@ The user wants to set up a new project. Walk these steps:
 
 4. If validation reports missing fields/labels, offer scaffold-board (continue at branch B). If everything is clean, point the operator at polling.
 
+5. Remind the operator about the canonical `.gitignore` snippet for `.aiboard/` — `init` already prints it, but reinforcing the WHY helps. The pattern is:
+   ```gitignore
+   .aiboard/*
+   !.aiboard/workflow.json
+   !.aiboard/appsettings.json
+   ```
+   This keeps the project's workflow + appsettings tracked (so the config travels with the repo) while excluding the runtime ephemera (`tasks/`, `comments/`, `images/`, `updates/`) that the orchestrator rewrites on every agent run. If the operator renamed the workflow (e.g. `workflow.github.json`), the snippet needs a matching `!.aiboard/<name>.json` line.
+
 ### B. `./.aiboard/` exists, board shape may be incomplete → Scaffold
 
 The user is asking to set up the board fields/labels, OR validation just flagged missing items.
@@ -91,6 +99,21 @@ The user wants to know if their workflow JSON matches the board shape, or if the
    ```
 
 2. Walk the Errors first (these block runs), then Warnings (don't block but indicate latent issues), then Infos.
+
+3. **Workflow intent audit** (catches conflicts the CLI doesn't flag yet):
+
+   **Discard-phase steps that write tracked paths.** A step in a `gitBehavior: "discard"` phase that writes outside `.aiboard/{tasks,updates}/` will have its changes silently thrown away — only `.aiboard/{tasks,updates}/` survive winner promotion, and `HandleGitBehaviorAsync` discards the rest. The agent still reports COMPLETE; a subsequent gate check sees stale HEAD and contradicts the prior step's success.
+
+   To audit:
+   - Read `./.aiboard/workflow.json` and list each state where `gitBehavior == "discard"`.
+   - For each step in those states, resolve `taskPromptFile`. Try `./<path>` first; fall back to `<aiboard-install-dir>/<path>` (the install dir is wherever `aiboard.exe` / `aiboard` lives — alongside its bundled `prompts/`).
+   - Grep each prompt for tracked-path markers: `memory-bank/`, `docs/`, `README`, or any source root in the project (`src/`, language-specific dirs). A prompt that instructs the agent to *write* to those paths is the smoking gun.
+   - Fallback when the prompt is unreadable: flag step names matching `update_doc.*`, `update_memory.*`, `update_readme.*`, `write_doc.*`.
+
+   Surface each finding to the user as:
+   > "Step `<step>` in state `<state>` (gitBehavior: discard) writes tracked paths (`<paths>`); those changes will be discarded post-run. Move this step into a `commit_and_push` phase, or change the phase's `gitBehavior`."
+
+   Keep this audit focused on the discard/tracked-path conflict — don't extrapolate to other config-vs-intent checks unless the user asks.
 
 ### E. Run on a specific card → Agent mode
 

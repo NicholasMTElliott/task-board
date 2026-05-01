@@ -28,6 +28,20 @@ Each state runs **one agent per step** (no candidate-evaluation fan-out). The pr
 - **Story decomposition (Tasking).** The KvA pipeline doesn't include a Ready-for-Tasking phase. If you want stories to spawn child tasks automatically, add a Tasking state with `generationConfig` — see `workflow.github.example.json` (the column-per-state legacy template).
 - **Trello.** All three from-scratch templates assume GitHub Projects. Trello operators should hand-author or extend.
 
+## Canonical `.gitignore` for `.aiboard/`
+
+The `.aiboard/` directory mixes two kinds of files: **project config** (`workflow.json`, `appsettings.json` — should be committed and travel with the repo) and **runtime ephemera** (`tasks/`, `comments/`, `images/`, `updates/` — written by the orchestrator on every agent run, churns constantly, must never be committed).
+
+After running `aiboard --mode init`, add this snippet to the project's root `.gitignore`:
+
+```gitignore
+.aiboard/*
+!.aiboard/workflow.json
+!.aiboard/appsettings.json
+```
+
+If you renamed the workflow file (e.g. `workflow.github.json`), add a matching `!.aiboard/<name>.json` line. `aiboard --mode init` prints the snippet at the end of its "Next steps" output as a reminder.
+
 ## Substitutions
 
 `appsettings.json` ships with placeholders that `aiboard --mode init` replaces:
