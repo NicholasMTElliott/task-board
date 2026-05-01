@@ -100,4 +100,38 @@ public sealed class DockerOpenCodeAgentOptions : DockerAgentOptionsBase
     /// common case).
     /// </summary>
     public List<string> RateLimitPatterns { get; set; } = new();
+
+    /// <summary>
+    /// When the agent's first invocation produces non-empty output that fails
+    /// to parse as the Agent Contract JSON (typical for thinking-variant Qwen
+    /// models that narrate progress and forget to emit the structured envelope),
+    /// run a one-shot follow-up call against <see cref="StructurerModelName"/>
+    /// asking it to extract an outcome JSON from the prior narrative. On success
+    /// the executor returns the structured result without consuming a retry
+    /// attempt; on failure it falls through to the existing retry loop unchanged.
+    /// </summary>
+    /// <remarks>
+    /// Default <c>true</c>. Disabling reverts to the v0.0.23 behaviour:
+    /// re-prompt the same model with a stricter instruction block. The
+    /// structurer addresses a specific failure shape — correct work narrated
+    /// in prose without the JSON envelope — that simply re-prompting the
+    /// thinking model rarely fixes.
+    /// </remarks>
+    public bool EnableStructurer { get; set; } = true;
+
+    /// <summary>
+    /// Model alias used by the recovery structurer call. Defaults to the
+    /// no-think Qwen variant (<c>qwen3.6-35b-a3b</c>) because structuring
+    /// is a fast, mechanical extraction task — chain-of-thought is unhelpful
+    /// here and tends to bury the JSON output in additional reasoning.
+    /// </summary>
+    public string StructurerModelName { get; set; } = "qwen3.6-35b-a3b";
+
+    /// <summary>
+    /// Hard wall-clock cap for the structurer subprocess. Tight by design:
+    /// extraction over a 4–8 KB narrative should take seconds on a warm
+    /// llama-server. Defaults to 180s to leave headroom for cold prefix-cache
+    /// warmup on the first structurer call after a server restart.
+    /// </summary>
+    public int StructurerTimeoutSeconds { get; set; } = 180;
 }

@@ -12,13 +12,22 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
 {
     private static DockerOpenCodeAgentExecutor CreateExecutor(
         ProcessRunnerDelegate runner,
-        int maxRetries = 0) =>
+        int maxRetries = 0,
+        bool enableStructurer = false,
+        string? structurerModelName = null) =>
         new(
             Options.Create(new DockerOpenCodeAgentOptions
             {
                 ImageName = "aiboard-opencode-test:latest",
                 TimeoutSeconds = 30,
                 MaxRetriesOnMalformedOutput = maxRetries,
+                // Opt-out by default in tests so the bulk of the suite
+                // exercises the existing single-call path without the new
+                // structurer interfering. Production default is true; tests
+                // that exercise the structurer pass enableStructurer: true.
+                EnableStructurer = enableStructurer,
+                StructurerModelName = structurerModelName ?? "qwen3.6-35b-a3b",
+                StructurerTimeoutSeconds = 5,
             }),
             Helpers.TestTenant.Instance,
             NullLogger<DockerOpenCodeAgentExecutor>.Instance,
@@ -507,5 +516,303 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
 
         // Expected shape: aiboard-oc-{tenantHash}-{cardId}-{rand8}
         Assert.StartsWith("aiboard-oc-deadbeef-42-", name);
+    }
+
+    // ── No-think Qwen structurer fallback (v0.0.24+) ───────────────────────
+
+    /// <summary>
+    /// Distinguishes structurer calls from main-agent calls by inspecting the
+    /// container name passed via <c>--name</c>. Structurer containers carry a
+    /// <c>-struct-</c> infix (see <c>BuildStructurerContainerName</c>).
+    /// </summary>
+    private static bool IsStructurerCall(string[] dockerArgs)
+    {
+        for (var i = 0; i < dockerArgs.Length - 1; i++)
+        {
+            if (dockerArgs[i] == "--name"
+                && dockerArgs[i + 1].Contains("-struct-", StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StructurerEnabled_RecoversFromProseNarrative_NoRetry()
+    {
+        // Headline scenario: the v0.0.22 KvA failure shape — agent narrates
+        // correct work in prose but skips the JSON envelope. Structurer takes
+        // the narrative, returns parseable JSON. Executor returns recovered
+        // result without consuming a retry attempt.
+        var (ws, promptFile) = NewWorkspace();
+        try
+        {
+            var mainCalls = 0;
+            var structurerCalls = 0;
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _) =>
+            {
+                if (IsStructurerCall(args))
+                {
+                    structurerCalls++;
+                    return Task.FromResult((0,
+                        "```json\n{\"outcome\":\"COMPLETE\",\"detail\":\"Recovered: agent finished implementation\"}\n```",
+                        ""));
+                }
+                mainCalls++;
+                return Task.FromResult((0,
+                    "I read the code and the task is already complete. " +
+                    "main_menu.gd has all the live text buttons wired up correctly.",
+                    ""));
+            };
+
+            var executor = CreateExecutor(runner, maxRetries: 2, enableStructurer: true);
+
+            var result = await executor.ExecuteAsync(
+                CreateContext(ws, promptFile), CancellationToken.None);
+
+            Assert.Equal(1, mainCalls);
+            Assert.Equal(1, structurerCalls);
+            Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+            Assert.Equal("Recovered: agent finished implementation", result.Detail);
+            Assert.Contains("Recovered via no-think structurer", result.ConversationLog);
+        }
+        finally { CleanupWorkspace(ws); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StructurerAlsoFails_FallsThroughToRetryLoop()
+    {
+        // Belt-and-braces: when the structurer ALSO produces unparseable
+        // output, we don't get stuck — execution falls through to the
+        // existing retry-with-stricter-reprompt path.
+        var (ws, promptFile) = NewWorkspace();
+        try
+        {
+            var mainCalls = 0;
+            var structurerCalls = 0;
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _) =>
+            {
+                if (IsStructurerCall(args))
+                {
+                    structurerCalls++;
+                    return Task.FromResult((0,
+                        "I cannot determine the outcome from the narrative.",
+                        ""));
+                }
+                mainCalls++;
+                return Task.FromResult((0, "narrative without JSON", ""));
+            };
+
+            var executor = CreateExecutor(runner, maxRetries: 1, enableStructurer: true);
+
+            var result = await executor.ExecuteAsync(
+                CreateContext(ws, promptFile), CancellationToken.None);
+
+            // 1 initial + 1 retry = 2 main calls. Structurer fired once on attempt 0 only.
+            Assert.Equal(2, mainCalls);
+            Assert.Equal(1, structurerCalls);
+            Assert.Equal(AgentOutcome.ERROR, result.Outcome);
+            Assert.Contains("no parseable Agent Contract JSON", result.Detail);
+        }
+        finally { CleanupWorkspace(ws); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StructurerDisabled_GoesStraightToRetry()
+    {
+        // Operator opt-out: EnableStructurer=false reverts to the v0.0.23
+        // behavior — re-prompt the same model with stricter instructions.
+        var (ws, promptFile) = NewWorkspace();
+        try
+        {
+            var mainCalls = 0;
+            var structurerCalls = 0;
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _) =>
+            {
+                if (IsStructurerCall(args)) { structurerCalls++; }
+                else { mainCalls++; }
+                return Task.FromResult((0, "narrative without JSON", ""));
+            };
+
+            var executor = CreateExecutor(runner, maxRetries: 1, enableStructurer: false);
+
+            var result = await executor.ExecuteAsync(
+                CreateContext(ws, promptFile), CancellationToken.None);
+
+            Assert.Equal(0, structurerCalls);
+            Assert.Equal(2, mainCalls); // initial + 1 retry
+            Assert.Equal(AgentOutcome.ERROR, result.Outcome);
+        }
+        finally { CleanupWorkspace(ws); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StructurerOnlyFiresOnFirstAttempt()
+    {
+        // Pin: the structurer is a one-shot fallback, not a per-retry helper.
+        // After the first structurer attempt fails, subsequent retries do NOT
+        // re-invoke it — that would multiply the cost on hopeless prompts.
+        var (ws, promptFile) = NewWorkspace();
+        try
+        {
+            var mainCalls = 0;
+            var structurerCalls = 0;
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _) =>
+            {
+                if (IsStructurerCall(args)) { structurerCalls++; }
+                else { mainCalls++; }
+                return Task.FromResult((0, "still no JSON", ""));
+            };
+
+            var executor = CreateExecutor(runner, maxRetries: 3, enableStructurer: true);
+
+            var result = await executor.ExecuteAsync(
+                CreateContext(ws, promptFile), CancellationToken.None);
+
+            // 4 main calls (1 initial + 3 retries), 1 structurer call (on attempt 0 only).
+            Assert.Equal(4, mainCalls);
+            Assert.Equal(1, structurerCalls);
+            Assert.Equal(AgentOutcome.ERROR, result.Outcome);
+        }
+        finally { CleanupWorkspace(ws); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_OutputParseable_StructurerNotInvoked()
+    {
+        // Performance regression guard: when the original output IS parseable,
+        // the structurer must NOT be invoked. Cost matters — every container
+        // spin-up adds 30-60s + token spend.
+        var (ws, promptFile) = NewWorkspace();
+        try
+        {
+            var mainCalls = 0;
+            var structurerCalls = 0;
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _) =>
+            {
+                if (IsStructurerCall(args)) { structurerCalls++; }
+                else { mainCalls++; }
+                return Task.FromResult((0,
+                    "```json\n{\"outcome\":\"COMPLETE\",\"detail\":\"first try worked\"}\n```",
+                    ""));
+            };
+
+            var executor = CreateExecutor(runner, maxRetries: 2, enableStructurer: true);
+
+            var result = await executor.ExecuteAsync(
+                CreateContext(ws, promptFile), CancellationToken.None);
+
+            Assert.Equal(1, mainCalls);
+            Assert.Equal(0, structurerCalls);
+            Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+            Assert.Equal("first try worked", result.Detail);
+        }
+        finally { CleanupWorkspace(ws); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StructurerTimesOut_FallsThroughToRetry()
+    {
+        // Robustness: structurer infrastructure failures (timeout, container
+        // crash) must not propagate up — they fall through to the existing
+        // retry path so the operator gets the same final outcome they would
+        // have without the structurer enabled.
+        var (ws, promptFile) = NewWorkspace();
+        try
+        {
+            var mainCalls = 0;
+            var structurerCalls = 0;
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _) =>
+            {
+                if (IsStructurerCall(args))
+                {
+                    structurerCalls++;
+                    throw new TimeoutException(
+                        "Docker/OpenCode structurer timed out after 5s. Partial stderr: ");
+                }
+                mainCalls++;
+                return Task.FromResult((0, "narrative without JSON", ""));
+            };
+
+            var executor = CreateExecutor(runner, maxRetries: 1, enableStructurer: true);
+
+            var result = await executor.ExecuteAsync(
+                CreateContext(ws, promptFile), CancellationToken.None);
+
+            Assert.Equal(1, structurerCalls);
+            Assert.Equal(2, mainCalls); // initial + 1 retry — structurer didn't crash the run
+            Assert.Equal(AgentOutcome.ERROR, result.Outcome);
+        }
+        finally { CleanupWorkspace(ws); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StructurerExitNonZero_FallsThroughToRetry()
+    {
+        var (ws, promptFile) = NewWorkspace();
+        try
+        {
+            var mainCalls = 0;
+            var structurerCalls = 0;
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _) =>
+            {
+                if (IsStructurerCall(args))
+                {
+                    structurerCalls++;
+                    return Task.FromResult((1, "", "structurer container crashed"));
+                }
+                mainCalls++;
+                return Task.FromResult((0, "narrative without JSON", ""));
+            };
+
+            var executor = CreateExecutor(runner, maxRetries: 1, enableStructurer: true);
+
+            var result = await executor.ExecuteAsync(
+                CreateContext(ws, promptFile), CancellationToken.None);
+
+            Assert.Equal(1, structurerCalls);
+            Assert.Equal(2, mainCalls);
+            Assert.Equal(AgentOutcome.ERROR, result.Outcome);
+        }
+        finally { CleanupWorkspace(ws); }
+    }
+
+    [Fact]
+    public void BuildStructurerDockerArgumentList_AppendsModelOverride_BeforeImage()
+    {
+        // The override env var must come AFTER the mountContext's env vars
+        // (which set OPENCODE_MODEL_NAME based on the role's effective model)
+        // and BEFORE the image name. Docker honors the LAST -e for a duplicate
+        // key, so this ordering is what makes the no-think model take effect.
+        var executor = CreateExecutor(
+            (_, _, _, _, _, _, _, _, _) => throw new InvalidOperationException("not invoked"),
+            maxRetries: 0,
+            enableStructurer: true,
+            structurerModelName: "qwen3.6-35b-a3b");
+
+        var args = executor.BuildStructurerDockerArgumentList(
+            structurerContainerName: "aiboard-oc-struct-test-42-abc",
+            hostPromptDir: "",
+            mountContext: null);
+
+        var imageIndex = Array.IndexOf(args, "aiboard-opencode-test:latest");
+        Assert.True(imageIndex > 0, "image must appear in args");
+
+        // Find the LAST -e OPENCODE_MODEL_NAME=... before the image
+        var found = false;
+        for (var i = 0; i < imageIndex - 1; i++)
+        {
+            if (args[i] == "-e"
+                && args[i + 1] == "OPENCODE_MODEL_NAME=qwen3.6-35b-a3b")
+            {
+                found = true;
+            }
+        }
+        Assert.True(found, "structurer args must include -e OPENCODE_MODEL_NAME=<no-think> before the image");
+
+        // And the container --name must include -struct- so observability /
+        // orphan detection treat it distinctly.
+        var nameIdx = Array.IndexOf(args, "--name");
+        Assert.True(nameIdx >= 0);
+        Assert.Contains("-struct-", args[nameIdx + 1], StringComparison.Ordinal);
     }
 }

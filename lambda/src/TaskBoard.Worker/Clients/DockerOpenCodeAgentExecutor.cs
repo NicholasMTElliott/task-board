@@ -308,6 +308,26 @@ public sealed class DockerOpenCodeAgentExecutor(
                         RateLimitSource.AgentCli);
                 }
 
+                // Structurer fallback: on the first attempt only, hand the
+                // narrative to a no-think Qwen call that extracts the Agent
+                // Contract JSON. Faster and more reliable than re-prompting
+                // a thinking model with "be stricter" — the failure shape is
+                // typically "agent did the work but skipped the JSON envelope,"
+                // not "agent doesn't understand the schema."
+                if (attempt == 0 && _options.EnableStructurer)
+                {
+                    var recovered = await TryRecoverViaStructurerAsync(
+                        narrative: lastStdout,
+                        conversationLog: conversationLog,
+                        hostPromptDir: hostPromptDir,
+                        mountContext: mountContext,
+                        context: context,
+                        cancellationToken: cancellationToken);
+                    if (recovered is not null)
+                        return recovered;
+                    // Structurer didn't recover — fall through to existing retry path.
+                }
+
                 // Output did not contain an outcome-bearing JSON object.
                 if (attempt >= _options.MaxRetriesOnMalformedOutput)
                 {
@@ -630,6 +650,212 @@ public sealed class DockerOpenCodeAgentExecutor(
         sb.AppendLine();
         sb.Append(basePrompt);
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Builds the prompt for a one-shot structurer call. Strips the original
+    /// task context (the structurer doesn't need to know what the task was —
+    /// only how to map the agent's narrative onto the Agent Contract schema)
+    /// and explicitly forbids reasoning/thinking output.
+    /// </summary>
+    internal static string BuildStructurerPrompt(string narrative)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Task: Extract Agent Contract from Narrative");
+        sb.AppendLine();
+        sb.AppendLine(
+            "Below is an AI agent's free-form response to a coding task. The agent did the work " +
+            "but did NOT emit the required structured JSON envelope. Your job is to read its " +
+            "narrative and produce ONLY a single JSON object matching the schema below.");
+        sb.AppendLine();
+        sb.AppendLine("```json");
+        sb.Append(AgentOutputParser.MinifyJson(AgentSchemas.OutcomeSchema));
+        sb.AppendLine();
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("### Rules");
+        sb.AppendLine();
+        sb.AppendLine(
+            "- `outcome` is REQUIRED. Use `COMPLETE` when the narrative indicates the agent " +
+            "finished its task (work performed, OR existing state already satisfies the " +
+            "requirement and the agent verified it). Use `NEEDS_INFO` when the agent asked " +
+            "the operator a question or flagged a blocking ambiguity. Use `ERROR` when the " +
+            "agent reported a failure, refused, or could not complete.");
+        sb.AppendLine(
+            "- `detail` should be a concise GitHub-flavored markdown summary (a few short " +
+            "paragraphs at most) of what the agent did or found. Faithfully summarize the " +
+            "narrative — do NOT invent claims the narrative didn't make.");
+        sb.AppendLine(
+            "- `questions` is REQUIRED only when `outcome=NEEDS_INFO`; copy the agent's " +
+            "actual questions into the array.");
+        sb.AppendLine(
+            "- Do NOT add fields the schema doesn't include. Do NOT include reasoning or " +
+            "explanation. Output ONLY the JSON object — either bare or in ```json ... ``` " +
+            "fences. The very LAST thing in your response must be the closing `}`.");
+        sb.AppendLine();
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.AppendLine("## Narrative to Structure");
+        sb.AppendLine();
+        sb.AppendLine(narrative);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// One-shot recovery call: spawns a separate Docker container pinned to
+    /// <see cref="DockerOpenCodeAgentOptions.StructurerModelName"/> (no-think
+    /// Qwen by default) and asks it to extract an outcome JSON from the prior
+    /// agent's narrative. Returns the parsed result on success, or <c>null</c>
+    /// on any failure (timeout, exit error, output also unparseable). The
+    /// caller falls through to the existing retry loop on null.
+    /// </summary>
+    /// <remarks>
+    /// The structurer reuses the original run's <see cref="DockerMountContext"/>
+    /// so the workspace bind mounts and llm-server connection env vars are
+    /// shared. <c>OPENCODE_MODEL_NAME</c> is appended as a final
+    /// <c>-e</c> flag to override whatever model the original run used —
+    /// Docker honors the LAST <c>-e</c> for a duplicate key.
+    /// </remarks>
+    private async Task<AgentResult?> TryRecoverViaStructurerAsync(
+        string narrative,
+        string conversationLog,
+        string hostPromptDir,
+        DockerMountContext? mountContext,
+        AgentExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(narrative))
+            return null;
+
+        var structurerContainerName = BuildStructurerContainerName(context.TargetCardId);
+        var structurerArgs = BuildStructurerDockerArgumentList(
+            structurerContainerName, hostPromptDir, mountContext);
+        var structurerPrompt = BuildStructurerPrompt(narrative);
+
+        logger.LogInformation(
+            "Docker/OpenCode invoking structurer for card {CardId} (model={Model}, container={Container}, narrative={Chars} chars)",
+            context.TargetCardId, _options.StructurerModelName,
+            structurerContainerName, narrative.Length);
+
+        int exitCode;
+        string stdout, stderr;
+        try
+        {
+            (exitCode, stdout, stderr) = await _runProcess(
+                DockerExecutable, structurerArgs, context.WorkspacePath,
+                _options.StructurerTimeoutSeconds, cancellationToken,
+                stdinData: structurerPrompt,
+                envVarsToRemove: null,
+                agentName: $"Docker/OpenCode structurer ({structurerContainerName})",
+                inactivityTimeoutSeconds: null);
+        }
+        catch (TimeoutException)
+        {
+            await StopAndRemoveContainerAsync(structurerContainerName);
+            logger.LogWarning(
+                "Docker/OpenCode structurer timed out after {Seconds}s for card {CardId}; falling through to retry loop",
+                _options.StructurerTimeoutSeconds, context.TargetCardId);
+            return null;
+        }
+        catch (OperationCanceledException)
+        {
+            await StopAndRemoveContainerAsync(structurerContainerName);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Docker/OpenCode structurer threw for card {CardId}; falling through to retry loop",
+                context.TargetCardId);
+            return null;
+        }
+
+        if (exitCode != 0)
+        {
+            logger.LogWarning(
+                "Docker/OpenCode structurer exited {ExitCode} for card {CardId}; falling through. Stderr: {Stderr}",
+                exitCode, context.TargetCardId, Truncate(stderr, 1000));
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(stdout))
+        {
+            logger.LogWarning(
+                "Docker/OpenCode structurer returned empty output for card {CardId}; falling through",
+                context.TargetCardId);
+            return null;
+        }
+
+        var (resultJson, structurerLog) = OpenCodeOutputParser.Parse(stdout, logger);
+        if (resultJson is null)
+        {
+            logger.LogWarning(
+                "Docker/OpenCode structurer output also unparseable for card {CardId}; falling through to retry loop",
+                context.TargetCardId);
+            return null;
+        }
+
+        var wrapped = "{\"structured_output\":" + resultJson + "}";
+        var combinedLog = string.IsNullOrEmpty(conversationLog)
+            ? structurerLog
+            : conversationLog + "\n\n[Recovered via no-think structurer]\n" + structurerLog;
+        var result = AgentOutputParser.ParseResult(wrapped) with { ConversationLog = combinedLog };
+
+        logger.LogInformation(
+            "Docker/OpenCode structurer recovered outcome={Outcome} for card {CardId} from {Chars}-char narrative",
+            result.Outcome, context.TargetCardId, narrative.Length);
+
+        return result;
+    }
+
+    private string BuildStructurerContainerName(string cardId)
+    {
+        // Distinct from BuildContainerName so that startup orphan-container
+        // detection and operator-side `docker ps` filters still see the
+        // session container's normal naming.
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        return $"{_options.ContainerNamePrefix}-struct-{tenant.ShortHash}-{cardId}-{suffix}";
+    }
+
+    /// <summary>
+    /// Builds docker-run args for the structurer call. Reuses the original
+    /// run's mount context (workspace bind mounts, llm-server connection
+    /// env vars) and appends <c>-e OPENCODE_MODEL_NAME=...</c> at the end so
+    /// it overrides the model the original run used.
+    /// </summary>
+    internal string[] BuildStructurerDockerArgumentList(
+        string structurerContainerName,
+        string hostPromptDir,
+        DockerMountContext? mountContext)
+    {
+        var args = BuildDockerArgumentList(
+            structurerContainerName,
+            hostPromptDir,
+            BuildOpenCodeArgumentList(),
+            mountContext);
+
+        // Insert the model override before the image+command tail. The image
+        // name is at index args.Length - (1 + CliArguments.Count) — instead of
+        // arithmetic, find the image-name index by matching it directly.
+        var imageIndex = Array.IndexOf(args, _options.ImageName);
+        if (imageIndex < 0)
+        {
+            // Defensive: fall back to appending env var pre-image somehow not
+            // possible — log and return as-is so the structurer call uses
+            // whatever model the original invocation had. Caller will surface
+            // a parse failure if it doesn't recover, then fall through to retry.
+            logger.LogWarning(
+                "Could not locate image-name index in structurer docker args; " +
+                "structurer will run against the original model");
+            return args;
+        }
+
+        var withOverride = new List<string>(args.Length + 2);
+        withOverride.AddRange(args.AsSpan(0, imageIndex).ToArray());
+        withOverride.Add("-e");
+        withOverride.Add($"OPENCODE_MODEL_NAME={_options.StructurerModelName}");
+        withOverride.AddRange(args.AsSpan(imageIndex).ToArray());
+        return withOverride.ToArray();
     }
 
     private static string Truncate(string s, int max)
