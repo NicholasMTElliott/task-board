@@ -68,4 +68,48 @@ public sealed record StepResultRecord(
     /// and for non-slot rows; legacy rows persisted before the slot model was
     /// added are also null.
     /// </summary>
-    int? SlotIndex = null);
+    int? SlotIndex = null,
+    /// <summary>
+    /// Cost in USD of this step's LLM invocation. Populated for Claude (host
+    /// and Docker variants) from <c>total_cost_usd</c> on the result event.
+    /// Null for Codex (ChatGPT subscription has no per-call cost), local-LLM
+    /// providers, and the stub executor.
+    /// </summary>
+    decimal? CostUsd = null,
+    /// <summary>
+    /// Input tokens consumed by this step. Populated by all real providers when
+    /// the CLI emits <c>usage.input_tokens</c>; null when not reported.
+    /// Local-LLM rows include this so operators can reason about
+    /// llama.cpp prefix-cache pressure on Qwen-target steps.
+    /// </summary>
+    long? InputTokens = null,
+    /// <summary>Output tokens emitted by this step. Same semantics as <see cref="InputTokens"/>.</summary>
+    long? OutputTokens = null,
+    /// <summary>Cache-read tokens (Claude only; null for other providers).</summary>
+    long? CacheReadTokens = null,
+    /// <summary>Cache-creation tokens (Claude only; null for other providers).</summary>
+    long? CacheCreationTokens = null,
+    /// <summary>
+    /// True when the re-run preamble was injected for this step AND the agent
+    /// returned COMPLETE — the fast path actually short-circuited a full re-run.
+    /// Null when the fast path didn't apply or wasn't checked.
+    /// </summary>
+    bool? FastPathHit = null,
+    /// <summary>
+    /// True only on DockerOpenCode rows where the no-think structurer fallback
+    /// recovered the Agent Contract JSON from the agent's narrative. Null otherwise.
+    /// </summary>
+    bool? StructurerFallbackUsed = null,
+    /// <summary>
+    /// Character length of the prompt sent to the evaluator. Set on evaluator
+    /// step rows (<c>step_name LIKE '%:evaluator'</c>) so trends toward
+    /// truncation territory are visible before the evaluator silently degrades.
+    /// </summary>
+    int? EvaluatorPromptChars = null,
+    /// <summary>
+    /// True on candidate winners (Selected = true) when the same run's gate
+    /// check returned GATE_FAIL — the evaluator's verdict didn't survive
+    /// downstream scrutiny. Null when GATE_FAIL hasn't fired yet or this row
+    /// is not a candidate winner.
+    /// </summary>
+    bool? WinnerRegressed = null);

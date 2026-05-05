@@ -743,6 +743,8 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         public Task UpdateRunEstimateAsync(string runId, double estimate, CancellationToken ct) => Task.CompletedTask;
         public Task UpdateRunSessionStartupMsAsync(string runId, int startupMs, CancellationToken ct) => Task.CompletedTask;
         public Task UpdateCandidateEvaluationAsync(string runId, Guid groupId, int idx, bool selected, decimal? score, string? reasoning, CancellationToken ct) => Task.CompletedTask;
+        public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;
+        public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct) => Task.CompletedTask;
     }
 
     // ── Builders ─────────────────────────────────────────────────────────────
@@ -891,6 +893,8 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
             string runId, Guid candidateGroupId, int candidateIndex,
             bool selected, decimal? qualityScore, string? evaluatorReasoning,
             CancellationToken ct) => Task.CompletedTask;
+        public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;
+        public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct) => Task.CompletedTask;
     }
 
     private sealed class NullBoardClient : ITaskBoardClient

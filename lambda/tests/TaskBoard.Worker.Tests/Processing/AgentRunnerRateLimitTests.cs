@@ -74,7 +74,7 @@ public class AgentRunnerRateLimitTests : IDisposable
         RunGitSync(path, "commit", "-m", "initial");
     }
 
-    private AgentRunner CreateRunner(string gitBehavior = "discard")
+    private AgentRunner CreateRunner(string gitBehavior = "discard", IRunStore? runStore = null)
     {
         var config = BuildWorkflowConfig(gitBehavior).Normalised();
         return new AgentRunner(
@@ -86,7 +86,7 @@ public class AgentRunnerRateLimitTests : IDisposable
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
-            NullRunStore.Instance,
+            runStore ?? NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             NullLogger<AgentRunner>.Instance);
@@ -209,5 +209,56 @@ public class AgentRunnerRateLimitTests : IDisposable
             && Directory.EnumerateDirectories(aiboardDir).Any();
         Assert.False(hasLeafWorktree,
             "Leaf worktree directory should have been cleaned up but child directories remain under aiboard/");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RateLimit_IncrementsRateLimitEventsCounter()
+    {
+        // V22: per-run counter on agent_run is bumped every time AgentRunner
+        // catches a RateLimitException, so operators can spot capacity-contention
+        // patterns without grepping logs.
+        var recording = new CountingRunStore();
+        var runner = CreateRunner(runStore: recording);
+
+        await Assert.ThrowsAsync<RateLimitException>(
+            () => runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None));
+
+        Assert.True(recording.RateLimitIncrements >= 1,
+            $"Expected IncrementRateLimitEventsAsync to be called at least once, got {recording.RateLimitIncrements}");
+    }
+
+    /// <summary>
+    /// Minimal IRunStore stub that just counts the V22 reliability-signal calls
+    /// — IncrementRateLimitEventsAsync and FlagWinnersRegressedForRunAsync.
+    /// Everything else is a no-op so the AgentRunner happy path still works.
+    /// </summary>
+    private sealed class CountingRunStore : IRunStore
+    {
+        public int RateLimitIncrements { get; private set; }
+        public int WinnerRegressedFlags { get; private set; }
+
+        public Task CreateRunAsync(RunRecord run, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateRunProgressAsync(string runId, int completedSteps, CancellationToken ct) => Task.CompletedTask;
+        public Task CompleteRunAsync(string runId, AgentOutcome outcome, string? errorDetail, FailureReason? failureReason, CancellationToken ct) => Task.CompletedTask;
+        public Task SaveStepResultAsync(StepResultRecord result, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<StepResultRecord>> GetStepResultsForCardAsync(string cardId, string? stateName, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<StepResultRecord>>([]);
+        public Task<IReadOnlyList<StepResultRecord>> GetLatestRunStepResultsAsync(string cardId, string stateName, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<StepResultRecord>>([]);
+        public Task UpdateRunEstimateAsync(string runId, double estimate, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateRunSessionStartupMsAsync(string runId, int startupMs, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateCandidateEvaluationAsync(string runId, Guid candidateGroupId, int candidateIndex, bool selected, decimal? qualityScore, string? evaluatorReasoning, CancellationToken ct) => Task.CompletedTask;
+
+        public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct)
+        {
+            RateLimitIncrements++;
+            return Task.CompletedTask;
+        }
+
+        public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct)
+        {
+            WinnerRegressedFlags++;
+            return Task.CompletedTask;
+        }
     }
 }

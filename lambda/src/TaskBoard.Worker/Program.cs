@@ -574,6 +574,9 @@ builder.Services.AddSingleton(sp =>
 
 builder.Services.AddSingleton<UpdateFileProcessor>();
 builder.Services.AddSingleton<RerunPreambleBuilder>();
+builder.Services.Configure<ResourcePoolOptions>(
+    builder.Configuration.GetSection(ResourcePoolOptions.SectionName));
+builder.Services.AddSingleton<IResourcePool, ResourcePool>();
 builder.Services.AddSingleton<CandidateExecutor>();
 builder.Services.AddSingleton<AgentRunner>();
 builder.Services.AddSingleton<MergeRunner>();

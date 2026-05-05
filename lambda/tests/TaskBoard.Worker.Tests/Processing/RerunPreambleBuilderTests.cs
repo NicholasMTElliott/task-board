@@ -348,6 +348,8 @@ public class RerunPreambleBuilderTests
             string runId, Guid candidateGroupId, int candidateIndex,
             bool selected, decimal? qualityScore, string? evaluatorReasoning,
             CancellationToken ct) => Task.CompletedTask;
+        public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;
+        public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct) => Task.CompletedTask;
     }
 
     private sealed record StubRecord(

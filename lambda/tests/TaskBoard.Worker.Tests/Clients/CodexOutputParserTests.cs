@@ -352,4 +352,65 @@ public class CodexOutputParserTests
         Assert.True(report.Length < 4000,
             $"Expected truncation but report is {report.Length} chars long");
     }
+
+    // ── V22: turn.completed usage merge ──────────────────────────────────────
+
+    [Fact]
+    public void Parse_LegacyResultEvent_MergesUsageFromTrailingTurnCompleted()
+    {
+        // Codex v0.124 stream: structured_output is on a `result` event; usage
+        // is on the SUBSEQUENT turn.completed event. The merge step injects
+        // usage into the resultJson so AgentOutputParser.ParseUsage picks it up.
+        var ndjson = string.Join('\n',
+            """{"type":"thread.started"}""",
+            """{"type":"turn.started"}""",
+            """{"type":"result","structured_output":{"outcome":"COMPLETE","detail":"d"}}""",
+            """{"type":"turn.completed","usage":{"input_tokens":42,"output_tokens":7}}""");
+
+        var (resultJson, _) = CodexOutputParser.Parse(ndjson, Logger);
+
+        Assert.NotNull(resultJson);
+        var parsed = AgentOutputParser.ParseResult(resultJson);
+        Assert.NotNull(parsed.Usage);
+        Assert.Equal(42, parsed.Usage!.InputTokens);
+        Assert.Equal(7, parsed.Usage.OutputTokens);
+    }
+
+    [Fact]
+    public void Parse_AgentMessageFallback_MergesUsageFromTurnCompleted()
+    {
+        // Codex v0.125+ shape: outcome JSON in the text of agent_message;
+        // usage on the trailing turn.completed. The synthetic envelope built
+        // from agent_message text gets usage attached on the way out.
+        var ndjson = string.Join('\n',
+            """{"type":"thread.started"}""",
+            """{"type":"turn.started"}""",
+            """{"type":"item.completed","item":{"type":"agent_message","text":"{\"outcome\":\"COMPLETE\",\"detail\":\"d\"}"}}""",
+            """{"type":"turn.completed","usage":{"input_tokens":9,"output_tokens":3}}""");
+
+        var (resultJson, _) = CodexOutputParser.Parse(ndjson, Logger);
+
+        Assert.NotNull(resultJson);
+        var parsed = AgentOutputParser.ParseResult(resultJson);
+        Assert.NotNull(parsed.Usage);
+        Assert.Equal(9, parsed.Usage!.InputTokens);
+        Assert.Equal(3, parsed.Usage.OutputTokens);
+    }
+
+    [Fact]
+    public void Parse_NoTurnCompletedEvent_LeavesUsageNull()
+    {
+        // Defensive: if Codex CLI never emitted turn.completed (truncated stream,
+        // killed before completion), we should still return the result with
+        // Usage null rather than fabricating zeros.
+        var ndjson = string.Join('\n',
+            """{"type":"thread.started"}""",
+            """{"type":"item.completed","item":{"type":"agent_message","text":"{\"outcome\":\"COMPLETE\"}"}}""");
+
+        var (resultJson, _) = CodexOutputParser.Parse(ndjson, Logger);
+
+        Assert.NotNull(resultJson);
+        var parsed = AgentOutputParser.ParseResult(resultJson);
+        Assert.Null(parsed.Usage);
+    }
 }

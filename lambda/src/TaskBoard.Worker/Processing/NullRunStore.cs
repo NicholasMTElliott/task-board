@@ -49,4 +49,10 @@ public sealed class NullRunStore : IRunStore
         string? evaluatorReasoning,
         CancellationToken ct)
         => Task.CompletedTask;
+
+    public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct)
+        => Task.CompletedTask;
+
+    public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct)
+        => Task.CompletedTask;
 }

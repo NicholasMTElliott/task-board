@@ -799,7 +799,11 @@ public sealed class DockerOpenCodeAgentExecutor(
         var combinedLog = string.IsNullOrEmpty(conversationLog)
             ? structurerLog
             : conversationLog + "\n\n[Recovered via no-think structurer]\n" + structurerLog;
-        var result = AgentOutputParser.ParseResult(wrapped) with { ConversationLog = combinedLog };
+        var result = AgentOutputParser.ParseResult(wrapped) with
+        {
+            ConversationLog = combinedLog,
+            StructurerFallbackUsed = true,
+        };
 
         logger.LogInformation(
             "Docker/OpenCode structurer recovered outcome={Outcome} for card {CardId} from {Chars}-char narrative",

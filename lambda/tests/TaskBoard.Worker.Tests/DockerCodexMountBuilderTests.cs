@@ -268,6 +268,132 @@ public class DockerCodexMountBuilderTests : IDisposable
     }
 
     [Fact]
+    public async Task BuildAsync_RuntimeStateFiles_NotCopiedAndNotMounted()
+    {
+        // Codex CLI 0.125.0+ writes runtime state to several files in
+        // ~/.codex/ at startup. If we mount those RO, Codex fails immediately
+        // with "Read-only file system (os error 30)" before any agent work
+        // begins. The fix is to skip them entirely — they must not appear in
+        // the staged dir AND must not appear in the mount list.
+        var hostCredDir = Path.Combine(_tempDir, ".codex");
+        Directory.CreateDirectory(hostCredDir);
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "auth.json"), "{}");
+        // Runtime state files Codex writes at startup:
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "models_cache.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "state_5.sqlite"), "");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "state_5.sqlite-shm"), "");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "state_5.sqlite-wal"), "");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "logs_2.sqlite"), "");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "sandbox.log"), "");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "history.jsonl"), "");
+
+        var options = new DockerCodexAgentOptions { CredentialPath = hostCredDir };
+
+        await using var ctx = await Builder.BuildAsync(_tempDir, options);
+
+        var stagedDir = Path.GetDirectoryName(
+            CredentialFileMounts(ctx).First().HostPath)!;
+
+        // Runtime state files MUST NOT be in the staged dir.
+        Assert.False(File.Exists(Path.Combine(stagedDir, "models_cache.json")));
+        Assert.False(File.Exists(Path.Combine(stagedDir, "state_5.sqlite")));
+        Assert.False(File.Exists(Path.Combine(stagedDir, "state_5.sqlite-shm")));
+        Assert.False(File.Exists(Path.Combine(stagedDir, "state_5.sqlite-wal")));
+        Assert.False(File.Exists(Path.Combine(stagedDir, "logs_2.sqlite")));
+        Assert.False(File.Exists(Path.Combine(stagedDir, "sandbox.log")));
+        Assert.False(File.Exists(Path.Combine(stagedDir, "history.jsonl")));
+
+        // Runtime state files MUST NOT be mounted.
+        var paths = CredentialFileMounts(ctx).Select(m => m.ContainerPath).ToList();
+        Assert.DoesNotContain(paths, p => p.EndsWith("/models_cache.json", StringComparison.Ordinal));
+        Assert.DoesNotContain(paths, p => p.Contains("/state_", StringComparison.Ordinal));
+        Assert.DoesNotContain(paths, p => p.Contains("/logs_", StringComparison.Ordinal));
+        Assert.DoesNotContain(paths, p => p.EndsWith("/sandbox.log", StringComparison.Ordinal));
+        Assert.DoesNotContain(paths, p => p.EndsWith("/history.jsonl", StringComparison.Ordinal));
+
+        // auth.json IS still mounted.
+        Assert.Contains(paths, p => p.EndsWith("/auth.json", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task BuildAsync_AllCredentialFiles_CopiedAndMountedRo()
+    {
+        // Pin every entry in the credential allowlist: auth.json, config.toml,
+        // cap_sid, installation_id, version.json, .personality_migration.
+        // Each must be staged and mounted RO at /home/agent/.codex/<name>.
+        var hostCredDir = Path.Combine(_tempDir, ".codex");
+        Directory.CreateDirectory(hostCredDir);
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "auth.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "config.toml"), "");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "cap_sid"), "x");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "installation_id"), "x");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "version.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, ".personality_migration"), "");
+
+        var options = new DockerCodexAgentOptions { CredentialPath = hostCredDir };
+
+        await using var ctx = await Builder.BuildAsync(_tempDir, options);
+
+        var paths = CredentialFileMounts(ctx).Select(m => m.ContainerPath).ToHashSet();
+        Assert.Contains($"{DockerCodexMountBuilder.DefaultCredentialMountPoint}/auth.json", paths);
+        Assert.Contains($"{DockerCodexMountBuilder.DefaultCredentialMountPoint}/config.toml", paths);
+        Assert.Contains($"{DockerCodexMountBuilder.DefaultCredentialMountPoint}/cap_sid", paths);
+        Assert.Contains($"{DockerCodexMountBuilder.DefaultCredentialMountPoint}/installation_id", paths);
+        Assert.Contains($"{DockerCodexMountBuilder.DefaultCredentialMountPoint}/version.json", paths);
+        Assert.Contains($"{DockerCodexMountBuilder.DefaultCredentialMountPoint}/.personality_migration", paths);
+
+        Assert.All(CredentialFileMounts(ctx),
+            m => Assert.True(m.ReadOnly, "Credential mounts must be RO"));
+    }
+
+    [Fact]
+    public async Task BuildAsync_KvAFailureShape_RegressionGuard()
+    {
+        // Reproduces the exact set of files observed in the failing
+        // ~/.codex/ staging dir from the v0.0.22→v0.0.23 KvA report
+        // (card 4 polling run). Pre-fix, every file shown here was
+        // mounted RO, and Codex CLI's startup write to models_cache.json
+        // and state_5.sqlite failed with "Read-only file system (os error 30)".
+        // Post-fix, only the six allowlisted credential files are mounted.
+        var hostCredDir = Path.Combine(_tempDir, ".codex");
+        Directory.CreateDirectory(hostCredDir);
+
+        // Allowlisted (must be mounted):
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "auth.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "config.toml"), "");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "cap_sid"), "x");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "installation_id"), "x");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "version.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, ".personality_migration"), "");
+
+        // Runtime state (must NOT be mounted):
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "models_cache.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "state_5.sqlite"), "");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "state_5.sqlite-shm"), "");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "state_5.sqlite-wal"), "");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "logs_2.sqlite"), "");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "logs_2.sqlite-shm"), "");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "logs_2.sqlite-wal"), "");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "sandbox.log"), "");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "history.jsonl"), "");
+
+        var options = new DockerCodexAgentOptions { CredentialPath = hostCredDir };
+
+        await using var ctx = await Builder.BuildAsync(_tempDir, options);
+
+        var paths = CredentialFileMounts(ctx).Select(m => m.ContainerPath).ToList();
+        Assert.Equal(6, paths.Count);
+
+        // Headline regression guard: none of the files Codex needs to write
+        // at startup may appear in the mount list.
+        Assert.DoesNotContain(paths, p => p.EndsWith("/models_cache.json", StringComparison.Ordinal));
+        Assert.DoesNotContain(paths, p => p.Contains("/state_", StringComparison.Ordinal));
+        Assert.DoesNotContain(paths, p => p.Contains("/logs_", StringComparison.Ordinal));
+        Assert.DoesNotContain(paths, p => p.EndsWith("/sandbox.log", StringComparison.Ordinal));
+        Assert.DoesNotContain(paths, p => p.EndsWith("/history.jsonl", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task BuildAsync_AlwaysIncludesGitOptionalLocksZero()
     {
         await using var ctx = await Builder.BuildAsync(_tempDir, new DockerCodexAgentOptions

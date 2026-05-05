@@ -70,6 +70,10 @@ internal static class CodexOutputParser
         string? lastAgentMessageText = null;
         int lastAgentMessageLine = 0;
         int agentMessageCount = 0;
+        // Usage lives on turn.completed in BOTH the v0.124 and v0.125 wire shapes,
+        // separate from the result/agent_message line. Track the JSON of the most
+        // recent turn.completed so we can merge its usage into the final resultJson.
+        string? lastTurnCompletedJson = null;
 
         foreach (var line in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
@@ -129,6 +133,11 @@ internal static class CodexOutputParser
                     structuredOutputCount++;
                 }
 
+                if (string.Equals(type, "turn.completed", StringComparison.OrdinalIgnoreCase))
+                {
+                    lastTurnCompletedJson = trimmed;
+                }
+
                 if (string.Equals(type, "item.completed", StringComparison.OrdinalIgnoreCase)
                     && root.TryGetProperty("item", out var agentMsgItem)
                     && agentMsgItem.ValueKind == JsonValueKind.Object
@@ -180,6 +189,17 @@ internal static class CodexOutputParser
         }
 
         var resultJson = resultWithStructuredOutput ?? lastResultJson;
+
+        // Merge usage from the trailing turn.completed event into resultJson so
+        // AgentOutputParser.ParseUsage (which inspects the result line's root)
+        // can pick it up. Codex emits usage and structured-outcome on separate
+        // events; without this merge we'd silently discard token counts.
+        if (resultJson is not null && lastTurnCompletedJson is not null)
+        {
+            var merged = TryMergeUsageIntoResult(resultJson, lastTurnCompletedJson, logger);
+            if (merged is not null)
+                resultJson = merged;
+        }
 
         if (resultWithStructuredOutput is not null && lastResultJson is not null
             && resultWithStructuredOutput != lastResultJson)
@@ -364,6 +384,56 @@ internal static class CodexOutputParser
 
         sb.Append("===");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Inject <c>usage</c> and <c>total_cost_usd</c> from the trailing
+    /// <c>turn.completed</c> event into the result JSON line. Returns the merged
+    /// JSON string, or null if either side was malformed (caller falls through
+    /// to the unmerged result — usage just won't appear).
+    /// </summary>
+    internal static string? TryMergeUsageIntoResult(
+        string resultJson, string turnCompletedJson, ILogger logger)
+    {
+        try
+        {
+            using var resultDoc = JsonDocument.Parse(resultJson);
+            using var turnDoc = JsonDocument.Parse(turnCompletedJson);
+
+            // If result already has usage, prefer it (e.g. Claude-style streams
+            // that put usage directly on the result event).
+            if (resultDoc.RootElement.TryGetProperty("usage", out _))
+                return null;
+
+            var hasUsage = turnDoc.RootElement.TryGetProperty("usage", out var usage);
+            var hasCost = turnDoc.RootElement.TryGetProperty("total_cost_usd", out var cost);
+            if (!hasUsage && !hasCost) return null;
+
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream))
+            {
+                writer.WriteStartObject();
+                foreach (var prop in resultDoc.RootElement.EnumerateObject())
+                    prop.WriteTo(writer);
+                if (hasUsage)
+                {
+                    writer.WritePropertyName("usage");
+                    usage.WriteTo(writer);
+                }
+                if (hasCost)
+                {
+                    writer.WritePropertyName("total_cost_usd");
+                    cost.WriteTo(writer);
+                }
+                writer.WriteEndObject();
+            }
+            return Encoding.UTF8.GetString(stream.ToArray());
+        }
+        catch (JsonException ex)
+        {
+            logger.LogDebug(ex, "Failed to merge turn.completed usage into resultJson; usage will be dropped.");
+            return null;
+        }
     }
 
     private static void ExtractTextContent(

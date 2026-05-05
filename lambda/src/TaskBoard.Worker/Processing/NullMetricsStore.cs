@@ -36,4 +36,12 @@ public sealed class NullMetricsStore : IMetricsStore
     public Task<IReadOnlyList<HeadToHeadRecord>> GetCandidateHeadToHeadAsync(
         DateTimeOffset? since, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<HeadToHeadRecord>>([]);
+
+    public Task<IReadOnlyList<EvaluatorReliabilityRecord>> GetEvaluatorReliabilityAsync(
+        DateTimeOffset? since, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<EvaluatorReliabilityRecord>>([]);
+
+    public Task<IReadOnlyList<FastPathHitRecord>> GetFastPathHitRateAsync(
+        DateTimeOffset? since, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<FastPathHitRecord>>([]);
 }

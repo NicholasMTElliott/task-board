@@ -666,6 +666,8 @@ public class CandidateExecutorSlotsTests : IDisposable
             lock (_lock) { _recordedVerdicts.Add(new RecordedVerdict(runId, candidateGroupId, candidateIndex, selected, qualityScore, evaluatorReasoning)); }
             return Task.CompletedTask;
         }
+        public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;
+        public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct) => Task.CompletedTask;
     }
 
     private sealed record RecordedVerdict(string RunId, Guid GroupId, int CandidateIndex, bool Selected, decimal? QualityScore, string? Reasoning);

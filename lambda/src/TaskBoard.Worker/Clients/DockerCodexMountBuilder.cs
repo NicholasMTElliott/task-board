@@ -7,8 +7,8 @@ namespace TaskBoard.Worker.Clients;
 /// </summary>
 /// <remarks>
 /// Produces three shared bind mounts (worktree RW, base <c>.git</c> RO, <c>.git</c>
-/// file override RO) plus one read-only file mount per top-level credential file
-/// in the staged copy of <c>~/.codex/</c>.
+/// file override RO) plus one read-only file mount per allowlisted credential
+/// file in the staged copy of <c>~/.codex/</c>.
 /// <para>
 /// Per-file mounts (rather than a single dir-level mount at <c>/home/agent/.codex</c>)
 /// are required for compatibility with Docker Desktop on Windows + WSL2. A bind-mounted
@@ -20,16 +20,32 @@ namespace TaskBoard.Worker.Clients;
 /// creation of <c>sessions/</c> and <c>log/</c> succeeds.
 /// </para>
 /// <para>
-/// Trade-off: Codex's runtime token refresh writes to <c>auth.json</c> are silently
-/// no-op'd by the read-only mount. Functionally equivalent to the prior dir-level
-/// behaviour, since the staged copy was destroyed on <see cref="DockerMountContext.DisposeAsync"/>
-/// regardless — refreshed tokens never reached the host's <c>~/.codex/auth.json</c>.
+/// Mounted files are constrained by an explicit allowlist (<see cref="CredentialFileNames"/>)
+/// rather than "every top-level file." Codex CLI 0.125.0+ writes runtime state to
+/// several files in <c>~/.codex/</c> at startup (<c>models_cache.json</c>, the
+/// <c>state_*.sqlite*</c> session DB, the <c>logs_*.sqlite*</c> logging DB,
+/// <c>sandbox.log</c>, <c>history.jsonl</c>). Mounting those RO blocked startup
+/// with "Read-only file system (os error 30)" before any agent work began;
+/// mounting them RW would re-trigger the v0.0.22 dir-perms class of bug.
+/// The fix is to skip them entirely — Codex regenerates fresh copies in the
+/// agent-writable container directory on every run. Trade-off: ~1s extra on
+/// first API call (no models_cache priming) and no command-history carryover
+/// across runs (which is the right behaviour for an isolated agent anyway).
+/// Privacy bonus: the operator's host-side <c>history.jsonl</c> is no longer
+/// exposed to every agent.
+/// </para>
+/// <para>
+/// Trade-off on credential mounts: Codex's runtime token refresh writes to
+/// <c>auth.json</c> are silently no-op'd by the read-only mount. Functionally
+/// equivalent to the prior dir-level behaviour, since the staged copy was
+/// destroyed on <see cref="DockerMountContext.DisposeAsync"/> regardless —
+/// refreshed tokens never reached the host's <c>~/.codex/auth.json</c>.
 /// Operators re-authenticate via <c>codex login</c> on the host as before.
 /// </para>
 /// <para>Heavy subdirectories (<c>sessions</c>, <c>log</c>, <c>screenshots</c>)
 /// are excluded from the copy. Subdirs that survive the copy are NOT mounted —
-/// only top-level files are mounted, by design, so we never re-introduce the
-/// dir-level permissions issue.</para>
+/// only top-level allowlisted files are mounted, by design, so we never
+/// re-introduce the dir-level permissions issue.</para>
 /// </remarks>
 public sealed class DockerCodexMountBuilder(ILogger<DockerCodexMountBuilder> logger)
     : DockerMountBuilderBase
@@ -100,7 +116,7 @@ public sealed class DockerCodexMountBuilder(ILogger<DockerCodexMountBuilder> log
         var stagedCredDir = Path.Combine(
             Path.GetTempPath(),
             $"aiboard-codex-{Guid.NewGuid():N}");
-        CopyDirectoryRecursive(credPath, stagedCredDir, CredentialCopyExcludes);
+        CopyDirectoryRecursive(credPath, stagedCredDir, CredentialCopyExcludes, CredentialFileNames);
         tempDirs.Add(stagedCredDir);
 
         // Mount each top-level file from the staged copy as a read-only file
@@ -150,12 +166,36 @@ public sealed class DockerCodexMountBuilder(ILogger<DockerCodexMountBuilder> log
         "screenshots",
     };
 
-    private static void CopyDirectoryRecursive(string source, string dest, HashSet<string> excludeTopLevelDirs)
+    /// <summary>
+    /// Allowlist of top-level filenames inside <c>~/.codex/</c> that are
+    /// staged and mounted into the container. Anything else (including the
+    /// runtime-state files Codex CLI 0.125.0+ writes at startup —
+    /// <c>models_cache.json</c>, <c>state_*.sqlite*</c>, <c>logs_*.sqlite*</c>,
+    /// <c>sandbox.log</c>, <c>history.jsonl</c>) is skipped, so Codex
+    /// regenerates fresh copies in the agent-writable container directory
+    /// rather than failing on a read-only mount.
+    /// </summary>
+    internal static readonly HashSet<string> CredentialFileNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "auth.json",            // OAuth tokens — required for API calls
+        "config.toml",          // CLI config (model preferences, etc.)
+        "cap_sid",              // capability/session ID — auth-related
+        "installation_id",      // stable per-installation UUID — keep for telemetry continuity
+        "version.json",         // last-checked CLI version metadata
+        ".personality_migration", // one-time migration flag
+    };
+
+    private static void CopyDirectoryRecursive(
+        string source,
+        string dest,
+        HashSet<string> excludeTopLevelDirs,
+        HashSet<string> includeTopLevelFiles)
     {
         Directory.CreateDirectory(dest);
         foreach (var file in Directory.EnumerateFiles(source))
         {
             var name = Path.GetFileName(file);
+            if (!includeTopLevelFiles.Contains(name)) continue;
             try
             {
                 File.Copy(file, Path.Combine(dest, name), overwrite: true);

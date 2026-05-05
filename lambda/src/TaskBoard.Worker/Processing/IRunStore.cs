@@ -38,4 +38,20 @@ public interface IRunStore
         decimal? qualityScore,
         string? evaluatorReasoning,
         CancellationToken ct);
+
+    /// <summary>
+    /// Increments <c>agent_run.rate_limit_events</c> by 1. Called whenever
+    /// AgentRunner catches a <c>RateLimitException</c> from any source
+    /// (board API or agent CLI). Idempotent failure: a DB-side hiccup logs
+    /// at warning level but never throws to the caller.
+    /// </summary>
+    Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct);
+
+    /// <summary>
+    /// Flags every <c>selected = true</c> candidate row in the given run as
+    /// <c>winner_regressed = true</c>. Called from AgentRunner when the same
+    /// run's gate check returns GATE_FAIL — the evaluator's verdict didn't
+    /// survive downstream scrutiny.
+    /// </summary>
+    Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct);
 }

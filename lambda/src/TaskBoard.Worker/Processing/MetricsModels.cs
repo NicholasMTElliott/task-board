@@ -52,7 +52,9 @@ public sealed record CycleTimePerPointSummary(
 /// Per-(role, provider) aggregate from <c>v_provider_role_metrics</c>. Drives
 /// "is provider X worth keeping for role Y" decisions. <c>WinRatePercent</c>
 /// and <c>AvgQualityScore</c> can be null when no candidate group has been
-/// evaluated yet for this combination.
+/// evaluated yet for this combination. Cost / token / structurer aggregates
+/// are null when the underlying provider doesn't report them (Codex omits
+/// cost; local-LLM omits cost and may omit tokens depending on the proxy).
 /// </summary>
 public sealed record ProviderRoleMetric(
     string Role,
@@ -62,7 +64,45 @@ public sealed record ProviderRoleMetric(
     int RunsWithDecision,
     double? WinRatePercent,
     double? AvgQualityScore,
-    double? AvgDurationSeconds);
+    double? AvgDurationSeconds,
+    decimal? TotalCostUsd,
+    decimal? AvgCostUsd,
+    long? TotalInputTokens,
+    long? TotalOutputTokens,
+    double? AvgInputTokens,
+    double? AvgOutputTokens,
+    long? TotalCacheReadTokens,
+    long? TotalCacheCreationTokens,
+    int StructurerFallbackCount,
+    double? StructurerFallbackRatePercent);
+
+/// <summary>
+/// Per-(evaluator-role, evaluator-provider) regression rate from
+/// <c>v_evaluator_reliability</c>. <c>RegressionRatePercent</c> is the share
+/// of evaluator verdicts whose chosen winner was later flagged
+/// <c>winner_regressed</c> by the same run's gate check.
+/// </summary>
+public sealed record EvaluatorReliabilityRecord(
+    string EvaluatorRole,
+    string EvaluatorProvider,
+    int TotalVerdicts,
+    int RegressedCount,
+    double? RegressionRatePercent);
+
+/// <summary>
+/// Per-(state, step, role, provider) re-run fast-path hit rate. High hit rate
+/// means the preamble is paying off; zero rate on a step that re-runs often
+/// means something is preventing the fast path (operator deletes comments,
+/// markers diverging, etc).
+/// </summary>
+public sealed record FastPathHitRecord(
+    string StateName,
+    string StepName,
+    string Role,
+    string Provider,
+    int TotalInvocations,
+    int FastPathHits,
+    double? HitRatePercent);
 
 /// <summary>
 /// Pairwise head-to-head record: how many times <c>ProviderA</c> beat

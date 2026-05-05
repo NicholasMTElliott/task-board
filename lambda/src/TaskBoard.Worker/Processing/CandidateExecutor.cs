@@ -43,7 +43,8 @@ public sealed class CandidateExecutor(
     IRunStore runStore,
     ITaskBoardClient boardClient,
     ILogger<CandidateExecutor> logger,
-    RerunPreambleBuilder? rerunPreambleBuilder = null)
+    RerunPreambleBuilder? rerunPreambleBuilder = null,
+    IResourcePool? resourcePool = null)
 {
     /// <summary>
     /// Backward-compatible single-slot entry. Treats the request's step as a
@@ -570,7 +571,21 @@ public sealed class CandidateExecutor(
             {
                 // Each candidate runs as its own short-lived process. Do NOT attempt
                 // session reuse — sessions assume a single canonical worktree mount.
-                var result = await executor.ExecuteAsync(context, cancellationToken);
+                // Acquire any named resources this provider needs (e.g. local-llm
+                // for docker-opencode + docker-claude-qwen sharing a single
+                // llama.cpp server) so concurrent same-resource candidates from
+                // different providers don't pile up on the same backend.
+                AgentResult result;
+                if (resourcePool is not null)
+                {
+                    await using var lease = await resourcePool.AcquireAsync(
+                        candidate.Provider, cancellationToken);
+                    result = await executor.ExecuteAsync(context, cancellationToken);
+                }
+                else
+                {
+                    result = await executor.ExecuteAsync(context, cancellationToken);
+                }
                 return (result, RateLimited: false);
             }
             catch (RateLimitException ex) when (
@@ -824,7 +839,17 @@ public sealed class CandidateExecutor(
             Selected: null,
             QualityScore: null,
             EvaluatorReasoning: null,
-            SlotIndex: totalSlots > 1 ? slotIndex : null);
+            SlotIndex: totalSlots > 1 ? slotIndex : null,
+            // Usage / fast-path / structurer flow through to the per-candidate row
+            // so v_provider_role_metrics can aggregate cost / tokens / structurer
+            // rate by (role, provider). Each candidate hits its own provider, so
+            // these are the most meaningful place to attribute consumption.
+            CostUsd: result.Usage?.CostUsd,
+            InputTokens: result.Usage?.InputTokens,
+            OutputTokens: result.Usage?.OutputTokens,
+            CacheReadTokens: result.Usage?.CacheReadTokens,
+            CacheCreationTokens: result.Usage?.CacheCreationTokens,
+            StructurerFallbackUsed: result.StructurerFallbackUsed);
 
         try
         {
@@ -1103,7 +1128,18 @@ public sealed class CandidateExecutor(
         AgentResult evaluatorResult;
         try
         {
-            evaluatorResult = await evaluatorExecutor.ExecuteAsync(context, cancellationToken);
+            // Acquire named resources for the evaluator's provider, same
+            // pattern as candidate execution.
+            if (resourcePool is not null)
+            {
+                await using var lease = await resourcePool.AcquireAsync(
+                    evaluatorRole.Provider, cancellationToken);
+                evaluatorResult = await evaluatorExecutor.ExecuteAsync(context, cancellationToken);
+            }
+            else
+            {
+                evaluatorResult = await evaluatorExecutor.ExecuteAsync(context, cancellationToken);
+            }
         }
         catch (Exception ex) when (
             ex is not OperationCanceledException
@@ -1144,7 +1180,17 @@ public sealed class CandidateExecutor(
             CompletedAtUtc: completedAt,
             SessionExecMs: null,
             Provider: evaluatorRole.Provider,
-            SlotIndex: totalSlots > 1 ? slotIndex : null);
+            SlotIndex: totalSlots > 1 ? slotIndex : null,
+            CostUsd: evaluatorResult.Usage?.CostUsd,
+            InputTokens: evaluatorResult.Usage?.InputTokens,
+            OutputTokens: evaluatorResult.Usage?.OutputTokens,
+            CacheReadTokens: evaluatorResult.Usage?.CacheReadTokens,
+            CacheCreationTokens: evaluatorResult.Usage?.CacheCreationTokens,
+            // Evaluator prompt size: useful to spot when growing diffs / candidate
+            // counts push the evaluator toward context-truncation territory before
+            // the verdict silently degrades. evaluatorTaskPrompt is the entire
+            // prompt body (rubric + per-candidate diffs / artifacts).
+            EvaluatorPromptChars: evaluatorTaskPrompt.Length);
 
         try
         {

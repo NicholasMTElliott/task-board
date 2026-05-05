@@ -273,4 +273,65 @@ public class AgentOutputParserTests
         Assert.Equal(7m, result.Scores![0].Score);
         Assert.Equal("on reflection", result.Scores[0].Reasoning);
     }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Usage parsing (V22 — token + cost capture from the result event wrapper)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ParseResult_ClaudeStreamShape_PopulatesUsageAndCost()
+    {
+        // Claude `--output-format stream-json` final result event puts usage and
+        // total_cost_usd on the wrapper next to structured_output. Parse extracts
+        // both onto AgentResult.Usage so the executor doesn't need to.
+        var json = """
+            {
+              "type": "result",
+              "structured_output": {"outcome": "COMPLETE", "detail": "Done"},
+              "usage": {
+                "input_tokens": 1234,
+                "output_tokens": 56,
+                "cache_read_input_tokens": 200,
+                "cache_creation_input_tokens": 100
+              },
+              "total_cost_usd": 0.0234
+            }
+            """;
+        var result = AgentOutputParser.ParseResult(json);
+
+        Assert.NotNull(result.Usage);
+        Assert.Equal(1234, result.Usage!.InputTokens);
+        Assert.Equal(56, result.Usage.OutputTokens);
+        Assert.Equal(200, result.Usage.CacheReadTokens);
+        Assert.Equal(100, result.Usage.CacheCreationTokens);
+        Assert.Equal(0.0234m, result.Usage.CostUsd);
+    }
+
+    [Fact]
+    public void ParseResult_NoUsageBlock_LeavesUsageNull()
+    {
+        // A bare structured_output (e.g. local-LLM proxy that strips usage)
+        // should leave Usage null so callers can distinguish "not reported"
+        // from "reported zero."
+        var json = """{"structured_output":{"outcome":"COMPLETE"}}""";
+        var result = AgentOutputParser.ParseResult(json);
+        Assert.Null(result.Usage);
+    }
+
+    [Fact]
+    public void ParseResult_UsageWithoutCost_PopulatesTokensAndLeavesCostNull()
+    {
+        // Codex (ChatGPT subscription) and local llama.cpp typically report
+        // tokens but no cost. Cost stays null without forcing tokens to null.
+        var json = """
+            {"structured_output":{"outcome":"COMPLETE"},"usage":{"input_tokens":42,"output_tokens":7}}
+            """;
+        var result = AgentOutputParser.ParseResult(json);
+        Assert.NotNull(result.Usage);
+        Assert.Equal(42, result.Usage!.InputTokens);
+        Assert.Equal(7, result.Usage.OutputTokens);
+        Assert.Null(result.Usage.CostUsd);
+        Assert.Null(result.Usage.CacheReadTokens);
+        Assert.Null(result.Usage.CacheCreationTokens);
+    }
 }

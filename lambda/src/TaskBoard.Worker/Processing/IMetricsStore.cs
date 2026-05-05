@@ -35,4 +35,18 @@ public interface IMetricsStore
     /// </summary>
     Task<IReadOnlyList<HeadToHeadRecord>> GetCandidateHeadToHeadAsync(
         DateTimeOffset? since, CancellationToken ct);
+
+    /// <summary>
+    /// Per-evaluator regression rate. High rate means evaluator verdicts often
+    /// don't survive the same run's gate check — signals an unreliable judge.
+    /// </summary>
+    Task<IReadOnlyList<EvaluatorReliabilityRecord>> GetEvaluatorReliabilityAsync(
+        DateTimeOffset? since, CancellationToken ct);
+
+    /// <summary>
+    /// Per-(state, step, role, provider) re-run fast-path hit rate. Lets
+    /// operators verify the re-run preamble is actually short-circuiting work.
+    /// </summary>
+    Task<IReadOnlyList<FastPathHitRecord>> GetFastPathHitRateAsync(
+        DateTimeOffset? since, CancellationToken ct);
 }

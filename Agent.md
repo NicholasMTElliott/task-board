@@ -770,6 +770,58 @@ The runtime detects re-runs automatically and prepends a "RE-RUN; bail with COMP
 
 ---
 
+### 10.3 Named-resource concurrency pool
+
+Some providers share an external resource — most notably `docker-opencode` and `docker-claude-qwen` both targeting the same local llama.cpp server. Without serialization, parallel-by-provider candidate execution lets both hit the proxy at once; the second waits minutes and the inactivity timer fires before any tokens stream back.
+
+Declare resources with concurrency caps in `appsettings.json` and tag the providers that need them:
+
+```json
+"ResourcePool": {
+  "Pools": {
+    "local-llm": { "MaxConcurrent": 1 }
+  },
+  "ProviderResources": {
+    "docker-opencode": ["local-llm"],
+    "docker-claude-qwen": ["local-llm"]
+  }
+}
+```
+
+The pool acquires a `SemaphoreSlim` slot on every declared resource for the calling provider before invoking the executor and releases it on dispose. Wired at three executor invocation sites: regular step / gate / optional reviewer (in `AgentRunner`), per-candidate retries, and the evaluator. **The lease wraps only the LLM call itself** — not the retry backoff or post-step git operations — so a waiting candidate makes progress as soon as the previous one releases the resource.
+
+**Opt-in.** An empty `ResourcePool` config (the default) registers a singleton with no pools, so every acquire is a no-op. Zero overhead for users who don't need it.
+
+**Other useful patterns:**
+
+- **Per-provider rate-limit budgets**: declare `claude-cli-budget` with `MaxConcurrent: 2` and tag `["claude-cli", "docker-claude-cli"]` to cap concurrent Anthropic API calls across both executor flavors.
+- **Host CPU caps**: declare `host-cpu` with cap N sized for your machine and tag every provider, turning unbounded cross-provider parallelism into a global cap.
+- **Multi-resource providers**: list more than one resource per provider — the pool acquires all in alphabetical order and releases in reverse, deadlock-free.
+
+Unknown resource names in a provider's list are filtered out at startup with a warning so config typos degrade gracefully.
+
+### 10.4 Cost & token tracking
+
+Both Claude (`stream-json` final result event) and Codex (`turn.completed`) report token usage on the wire; Claude additionally reports `total_cost_usd`. As of V22 these flow into `step_result` (`cost_usd`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`) and surface in `aiboard --mode metrics` per `(role, provider)`:
+
+```
+── Provider × Role Metrics (candidate runs) ─────────────
+  Role           Provider             Runs  Wins   Win%  AvgScore  AvgDur     Cost$    InTok   OutTok  Struct%
+  implementer    docker-claude-cli      12    9   75.0%      8.20    4.2m   $0.4128    18.2k     2.4k       —
+  implementer    docker-opencode        12    3   25.0%      6.80    3.8m         —    42.1k     5.1k    18.2%
+```
+
+Local-LLM rows (e.g. `docker-opencode`, `docker-claude-qwen`) have null cost (no monetary cost) but populated tokens, which is the **headline signal for context-fill pressure** on Qwen-target steps. The `Struct%` column is the rate at which the DockerOpenCode no-think structurer fallback recovered a result from prose narrative — high values flag a thinking model struggling with the structured-output contract.
+
+Two new sections supplement this:
+
+- **Evaluator Reliability** — per-`(evaluator-role, provider)` regression rate. When a candidate winner fails the same run's gate check, it's flagged `winner_regressed = true`; the rate column is the share of evaluator verdicts whose pick didn't survive scrutiny.
+- **Re-run Fast-Path Hit Rate** — per-`(state, step, role, provider)` share of re-run preamble injections that actually short-circuited (agent returned COMPLETE without redoing work).
+
+Sections are suppressed when their underlying tables are empty.
+
+---
+
 ## 11. Setting up a brand-new project (step by step)
 
 This is the canonical bootstrap flow. Follow it once when wiring AI Board to a new GitHub Projects board.

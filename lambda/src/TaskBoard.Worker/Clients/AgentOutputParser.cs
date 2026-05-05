@@ -45,9 +45,13 @@ internal static class AgentOutputParser
                 var winnerIndex = ParseWinnerIndex(structured);
                 var scores = ParseEvaluatorScores(structured);
 
+                // Usage / cost lives on the wrapper event next to structured_output,
+                // not inside structured_output itself. Pull from root.
+                var usage = ParseUsage(root);
+
                 return new AgentResult(
                     outcome, detail, questions, null, requestedSteps, estimate,
-                    winnerIndex, scores);
+                    winnerIndex, scores, usage);
             }
 
             // Try result field
@@ -162,6 +166,53 @@ internal static class AgentOutputParser
         return byIndex.Count > 0
             ? byIndex.Values.OrderBy(s => s.Index).ToList()
             : null;
+    }
+
+    /// <summary>
+    /// Pulls token / cost data from the result event wrapper. Both Claude
+    /// (<c>{"type":"result","usage":{...},"total_cost_usd":N}</c>) and Codex
+    /// (<c>{"type":"turn.completed","usage":{...}}</c>, no cost) follow the
+    /// same shape — a top-level <c>usage</c> object with at minimum
+    /// <c>input_tokens</c> / <c>output_tokens</c>, plus optionally
+    /// <c>cache_read_input_tokens</c> / <c>cache_creation_input_tokens</c> on
+    /// Claude. Returns null when no usage is present at all so callers can
+    /// distinguish "executor didn't report" from "executor reported zero."
+    /// </summary>
+    internal static UsageInfo? ParseUsage(JsonElement root)
+    {
+        long? input = null, output = null, cacheRead = null, cacheCreate = null;
+        decimal? cost = null;
+
+        if (root.TryGetProperty("usage", out var usage)
+            && usage.ValueKind == JsonValueKind.Object)
+        {
+            input = ReadLong(usage, "input_tokens");
+            output = ReadLong(usage, "output_tokens");
+            cacheRead = ReadLong(usage, "cache_read_input_tokens");
+            cacheCreate = ReadLong(usage, "cache_creation_input_tokens");
+        }
+
+        if (root.TryGetProperty("total_cost_usd", out var costEl)
+            && costEl.ValueKind == JsonValueKind.Number
+            && costEl.TryGetDecimal(out var c))
+        {
+            cost = c;
+        }
+
+        if (input is null && output is null && cacheRead is null
+            && cacheCreate is null && cost is null)
+        {
+            return null;
+        }
+
+        return new UsageInfo(input, output, cacheRead, cacheCreate, cost);
+    }
+
+    private static long? ReadLong(JsonElement obj, string name)
+    {
+        if (!obj.TryGetProperty(name, out var el)) return null;
+        if (el.ValueKind != JsonValueKind.Number) return null;
+        return el.TryGetInt64(out var v) ? v : null;
     }
 
     internal static IReadOnlyList<string>? ParseRequestedSteps(JsonElement structured)

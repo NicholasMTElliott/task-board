@@ -186,30 +186,44 @@ Rule of thumb: if your step's `gitBehavior` is `discard`, don't point at `code_r
 
 ## Reading the metrics
 
-`aiboard --mode metrics` adds two new sections when candidate-group data exists:
+`aiboard --mode metrics` surfaces four candidate-related sections when data exists:
 
 ```
 ── Provider × Role Metrics (candidate runs) ─────────────
-  Role                        Provider                Runs  Wins    Win%  AvgScore    AvgDur
-  ──────────────────────────  ──────────────────────  ────  ────  ──────  ────────  ────────
-  implementer                 docker-claude-cli         12    9    75.0%      8.20      4.2m
-  implementer                 docker-opencode           12    3    25.0%      6.80      3.8m
+  Role                        Provider                Runs  Wins    Win%  AvgScore    AvgDur       Cost$       InTok      OutTok  Struct%
+  ──────────────────────────  ──────────────────────  ────  ────  ──────  ────────  ────────  ──────────  ──────────  ──────────  ───────
+  implementer                 docker-claude-cli         12    9    75.0%      8.20      4.2m     $0.4128       18.2k        2.4k       —
+  implementer                 docker-opencode           12    3    25.0%      6.80      3.8m           —       42.1k        5.1k    18.2%
 
 ── Head-to-Head (candidate pairs) ───────────────────────
   Role                        Provider A              Provider B                A    B  Tie
   ──────────────────────────  ──────────────────────  ──────────────────────  ───  ───  ───
   implementer                 docker-claude-cli       docker-opencode           9    3    0
+
+── Evaluator Reliability (winner regression rate) ───────
+  Role                        Provider                Verdicts  Regressed    Rate
+  ──────────────────────────  ──────────────────────  ────────  ─────────  ──────
+  evaluator                   docker-claude-cli             24          1    4.2%
+
+── Re-run Fast-Path Hit Rate ────────────────────────────
+  State                   Step                        Role                    Total   Hits    Rate
+  ──────────────────────  ──────────────────────────  ──────────────────────  ─────  ─────  ──────
+  Ready for Design        review_related_tickets      board_analyst              17     11   64.7%
 ```
 
-Sections are suppressed when no candidate groups have run — no header noise for users who haven't opted in.
+Sections are suppressed when their underlying tables are empty — no header noise for users who haven't opted into the relevant feature.
 
-The **Grafana** dashboard (auto-provisioned in the local-dev stack) gets two new bar-gauge panels: "Candidate Win Rate by Provider × Role" and "Avg Quality Score by Provider × Role", both sourced from the new `v_provider_role_metrics` view (created by migration V18).
+The **Grafana** dashboard (auto-provisioned in the local-dev stack) gets two new bar-gauge panels: "Candidate Win Rate by Provider × Role" and "Avg Quality Score by Provider × Role", both sourced from the `v_provider_role_metrics` view (created by migration V18, extended in V22).
 
-### What "win" and "score" mean (and don't mean)
+### What each column means (and doesn't)
 
-- **Win** = the evaluator picked this candidate as `winner_index`. It's a *short-loop* signal — the verdict happens within a single agent run.
-- **Score** = the evaluator's calibrated 0–10 quality assessment of this candidate's output, on the rubric supplied by the per-step-type evaluator prompt.
-- **Downstream acceptance** (does the winner's work actually pass the gate check, the human Tested gate, and final merge?) is computed post-hoc from `v_card_metrics` + `v_card_rework` + `selected`. v1 ships only the short-loop signal in the metrics surface; downstream acceptance is a follow-up if the win-rate signal isn't expressive enough on its own.
+- **Win** = the evaluator picked this candidate as `winner_index`. *Short-loop* signal — the verdict happens within a single agent run.
+- **Score** = the evaluator's calibrated 0–10 quality assessment on the rubric supplied by the per-step-type evaluator prompt.
+- **Cost$ / InTok / OutTok** (V22) = total USD cost and total input/output tokens consumed by candidates of this `(role, provider)` over the time window. Cost is null for Codex (ChatGPT subscription) and local-LLM providers (no monetary cost). Tokens are populated whenever the CLI's wire format reports `usage.{input_tokens, output_tokens}` — for local LLMs against llama.cpp this is the **headline signal for context-fill pressure** on Qwen-target steps. Cache tokens (Claude only) are summed in the underlying view but not in the console table to keep it readable; query `v_provider_role_metrics` directly when you need them.
+- **Struct%** (V22) = share of this provider's candidates where the DockerOpenCode no-think structurer fallback recovered the result from prose narrative instead of the agent emitting a clean JSON envelope. High rates flag a thinking model that's struggling with the structured-output contract; consider routing through `docker-claude-qwen` (server-enforced schema) for that role instead.
+- **Evaluator Reliability** (V22) = `regression_rate_percent` is the share of evaluator verdicts where the picked winner was later flagged `winner_regressed = true` by the same run's gate check. Answers "is this evaluator a reliable judge?" with data instead of opinion. Cross-run regressions are not yet detected.
+- **Fast-Path Hit Rate** (V22) = share of re-run preamble injections where the agent returned `COMPLETE` without redoing work. High rate means the feature is paying off; zero rate on a step that re-runs often signals something's preventing the fast path (operator deletes comments, marker drift, etc).
+- **Downstream acceptance** (does the winner's work actually pass the gate check, the human Tested gate, and final merge?) is the union of `winner_regressed` (in-run signal, V22) plus the existing post-hoc analysis over `v_card_metrics` + `v_card_rework` + `selected`. The v1 metrics surface ships the in-run signal directly; cross-run analysis remains a join you write yourself.
 
 ---
 
@@ -228,7 +242,7 @@ After promotion, AgentRunner's existing post-step processors run unchanged: `Tas
 
 - **Sessions disabled per candidate.** Each candidate runs as its own short-lived process; the optional Docker container session is bypassed because each candidate has a different worktree mount. This is a per-candidate cold start, not a per-run one.
 - **Gate checks can't have candidates yet.** `gateCheck` is a state-level field, not a `steps[]` entry. To compare gate checkers (e.g. Qwen vs Haiku for the `gate_checker` role), run separate cards with each provider routed and compare in the metrics. A future change could either (a) extend `GateCheckConfig` to support `candidates` + `evaluator` directly, or (b) inline the gate as a regular step.
-- **Cost tracking deferred.** Use `session_exec_ms` × hourly rate per provider as a proxy for now; explicit USD totals would require pulling token counts out of each CLI's output.
+- **Evaluator reliability is in-run only.** `winner_regressed` is set when the same run's gate check fires GATE_FAIL after a candidate group. A winner that survived the gate but later broke at the human Tested gate or in production is not flagged; that's a cross-run signal we haven't wired yet. The `selected` × `v_card_rework` join covers it manually.
 
 ## Re-run fast-path
 
@@ -259,6 +273,53 @@ V18 adds two new metrics views:
 - **`v_provider_role_metrics`** — aggregates per `(role, provider)`: total runs, wins, win rate, average quality score, average duration. The view is filtered to candidate rows only (`candidate_group_id IS NOT NULL`), so it never double-counts traditional steps.
 
 `v_step_duration` was also recreated in V18 to project the new candidate columns.
+
+### V22 columns (usage capture + reliability signals)
+
+V22 widens `step_result` further:
+
+| Column | Type | Meaning |
+|---|---|---|
+| `cost_usd` | NUMERIC(10,6) NULL | Claude only (`total_cost_usd` from `stream-json`); null for Codex / local-LLM. |
+| `input_tokens` / `output_tokens` | BIGINT NULL | Token counts from the CLI's `usage` block. Local-LLM rows include these so you can reason about Qwen prefix-cache pressure. |
+| `cache_read_tokens` / `cache_creation_tokens` | BIGINT NULL | Claude-specific cache token counts. |
+| `fast_path_hit` | BOOLEAN NULL | True when the re-run preamble was injected AND outcome was COMPLETE; false when injected but the agent redid work; null when the fast-path didn't apply. |
+| `structurer_fallback_used` | BOOLEAN NULL | True only on DockerOpenCode rows where the no-think structurer recovered the result from prose narrative. |
+| `evaluator_prompt_chars` | INT NULL | Set on `:evaluator` rows so context-truncation trends are visible. |
+| `winner_regressed` | BOOLEAN NULL | Set true on candidate winners (`selected = true`) when the same run's gate check returned GATE_FAIL. |
+
+V22 also adds `agent_run.rate_limit_events INT NOT NULL DEFAULT 0` (incremented per `RateLimitException` caught), recreates `v_step_duration` and `v_candidate_outcomes` to project the new columns, extends `v_provider_role_metrics` with cost / token / cache / structurer aggregates, and introduces two new views:
+
+- **`v_evaluator_reliability`** — per-`(evaluator-role, evaluator-provider)` regression rate via LEFT JOIN of evaluator step rows to their `selected = true` siblings within the same `(run_id, state_name)`. Surfaces evaluators whose verdicts don't survive scrutiny.
+- **`v_fast_path_hit_rate`** — per-`(state, step, role, provider)` re-run preamble payoff. Useful for confirming the feature is actually short-circuiting work where it should.
+
+---
+
+## Named-resource concurrency pool
+
+Multiple providers can share the same external resource and shouldn't all hammer it concurrently. The canonical case is `docker-opencode` and `docker-claude-qwen` both targeting the local llama.cpp server on `llm-net` — without serialization, parallel-by-provider candidate execution lets both hit the proxy at once, the second blocks for minutes waiting on the first, and the inactivity timer fires before any tokens stream back.
+
+Declare resources with caps in `appsettings.json` (or `./.aiboard/appsettings.json`):
+
+```json
+"ResourcePool": {
+  "Pools": {
+    "local-llm": { "MaxConcurrent": 1 }
+  },
+  "ProviderResources": {
+    "docker-opencode": ["local-llm"],
+    "docker-claude-qwen": ["local-llm"]
+  }
+}
+```
+
+The pool acquires a slot on every declared resource for the calling provider before invoking the executor and releases on dispose. Resources are sorted alphabetically before acquisition so multiple providers with overlapping resource sets can't deadlock. Unknown resource names in a provider's list are filtered out with a warning at startup so config typos degrade gracefully.
+
+The pool is opt-in: an empty `ResourcePool` config (the default) registers a singleton with no pools, so every `AcquireAsync` returns a no-op lease — zero overhead for users who don't need it.
+
+**Wired at three call sites**: regular step / gate / optional reviewer (via `AgentRunner.ExecuteWithSessionAsync`), per-candidate retry attempts, and the evaluator. The lease wraps only the `executor.ExecuteAsync` call itself — not the retry backoff or post-step git operations — so a waiting candidate makes progress as soon as the previous one releases the resource.
+
+**Use it for**: shared local-LLM servers; per-provider rate-limit budgets you want to enforce conservatively (declare a `claude-cli-budget` resource with cap 2 if you want at most two concurrent Claude CLI calls regardless of which providers spawned them); host CPU caps on memory-heavy Docker workloads (declare `host-cpu` with cap N where N is sized for your machine).
 
 ---
 

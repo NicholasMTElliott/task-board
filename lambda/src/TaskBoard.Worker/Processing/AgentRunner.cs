@@ -23,7 +23,8 @@ public sealed partial class AgentRunner(
     DockerClaudeMountBuilder? mountBuilder = null,
     ShutdownCoordinator? shutdownCoordinator = null,
     CandidateExecutor? candidateExecutor = null,
-    RerunPreambleBuilder? rerunPreambleBuilder = null)
+    RerunPreambleBuilder? rerunPreambleBuilder = null,
+    IResourcePool? resourcePool = null)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
 
@@ -432,6 +433,7 @@ public sealed partial class AgentRunner(
                 //        prior run completed this step with COMPLETE, prepend a "bail if nothing
                 //        changed" preamble so the agent can short-circuit without redoing work.
                 //        Operator force-rerun: delete the comment from the card → preamble suppressed.
+                bool rerunPreambleInjected = false;
                 if (rerunPreambleBuilder is not null)
                 {
                     var rerunPreamble = await rerunPreambleBuilder.TryBuildPreambleAsync(
@@ -444,6 +446,7 @@ public sealed partial class AgentRunner(
                     if (rerunPreamble is not null)
                     {
                         resolvedPrompt = rerunPreamble + "\n\n---\n\n" + resolvedPrompt;
+                        rerunPreambleInjected = true;
                         logger.LogInformation(
                             "Re-run preamble injected for step '{StepName}' on card {CardId}; agent may fast-path if no changes",
                             step.Name, cardId);
@@ -589,6 +592,14 @@ public sealed partial class AgentRunner(
                 }
                 lastResult = stepResult;
 
+                // Fast-path hit detection: preamble was injected AND the agent
+                // returned COMPLETE → the agent confirmed the prior output is
+                // still valid without redoing the work. Anything else (no preamble,
+                // or preamble + non-COMPLETE outcome) is null/false.
+                bool? stepFastPathHit = rerunPreambleInjected
+                    ? lastResult.Outcome == AgentOutcome.COMPLETE
+                    : null;
+
                 // Capture estimate if this step returned one and persist it to DB
                 if (lastResult.Estimate.HasValue)
                 {
@@ -670,7 +681,14 @@ public sealed partial class AgentRunner(
                         StartedAtUtc: stepStartedAt,
                         CompletedAtUtc: stepCompletedAt,
                         SessionExecMs: stepSessionExecMs,
-                        Provider: stepRole.Provider);
+                        Provider: stepRole.Provider,
+                        CostUsd: lastResult.Usage?.CostUsd,
+                        InputTokens: lastResult.Usage?.InputTokens,
+                        OutputTokens: lastResult.Usage?.OutputTokens,
+                        CacheReadTokens: lastResult.Usage?.CacheReadTokens,
+                        CacheCreationTokens: lastResult.Usage?.CacheCreationTokens,
+                        FastPathHit: stepFastPathHit,
+                        StructurerFallbackUsed: lastResult.StructurerFallbackUsed);
                     await SafeDbCallAsync(() => runStore.SaveStepResultAsync(stepRecord, cancellationToken));
                 }
                 await SafeDbCallAsync(() => runStore.UpdateRunProgressAsync(runId, stepIndex + 1, cancellationToken));
@@ -828,6 +846,11 @@ public sealed partial class AgentRunner(
             logger.LogWarning(rateLimitEx,
                 "Rate limit hit during agent run for card {CardId} — restoring to trigger column {TriggerColumn}",
                 cardId, targetCard.ColumnId);
+
+            // Increment rate_limit_events counter on agent_run. Best-effort: a DB
+            // hiccup logs a warning but doesn't break the rate-limit recovery path.
+            await SafeDbCallAsync(() =>
+                runStore.IncrementRateLimitEventsAsync(runId, cancellationToken));
 
             // Cleanup worktree for discard stages only (best effort)
             if (gitBehavior == "discard")
@@ -1191,6 +1214,7 @@ public sealed partial class AgentRunner(
         // Re-run fast-path for the gate check: if a prior run completed this gate with COMPLETE
         // and the canonical gate-check comment is still on the card, prepend a "confirm or update"
         // preamble. Operator force-rerun = delete the gate-check comment.
+        bool gatePreambleInjected = false;
         if (rerunPreambleBuilder is not null)
         {
             var gateComments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
@@ -1204,6 +1228,7 @@ public sealed partial class AgentRunner(
             if (gateRerunPreamble is not null)
             {
                 gatePrompt = gateRerunPreamble + "\n\n---\n\n" + gatePrompt;
+                gatePreambleInjected = true;
                 logger.LogInformation(
                     "Re-run preamble injected for gate check on card {CardId} state {State}",
                     cardId, state.Name);
@@ -1270,6 +1295,9 @@ public sealed partial class AgentRunner(
             // Save gate check result to DB.
             // Gate runs after main steps (or directly if no steps configured); fall back to 0
             // when Steps is null so the gate still records cleanly.
+            var gateFastPathHit = gatePreambleInjected
+                ? gateResult.Outcome == AgentOutcome.COMPLETE
+                : (bool?)null;
             var gateRecord = new StepResultRecord(
                 RunId: runId,
                 CardId: cardId,
@@ -1288,7 +1316,14 @@ public sealed partial class AgentRunner(
                 StartedAtUtc: gateStartedAt,
                 CompletedAtUtc: DateTimeOffset.UtcNow,
                 SessionExecMs: gateSessionExecMs,
-                Provider: gateRole.Provider);
+                Provider: gateRole.Provider,
+                CostUsd: gateResult.Usage?.CostUsd,
+                InputTokens: gateResult.Usage?.InputTokens,
+                OutputTokens: gateResult.Usage?.OutputTokens,
+                CacheReadTokens: gateResult.Usage?.CacheReadTokens,
+                CacheCreationTokens: gateResult.Usage?.CacheCreationTokens,
+                FastPathHit: gateFastPathHit,
+                StructurerFallbackUsed: gateResult.StructurerFallbackUsed);
             await SafeDbCallAsync(() => runStore.SaveStepResultAsync(gateRecord, cancellationToken));
         }
         catch (Exception ex)
@@ -1332,6 +1367,21 @@ public sealed partial class AgentRunner(
             case AgentOutcome.ERROR:
             default:
             {
+                // Gate returned ERROR → flag any candidate-group winners from this
+                // run as winner_regressed. The evaluator's verdict didn't survive
+                // downstream scrutiny — useful signal for evaluator-reliability
+                // metrics (v_evaluator_reliability).
+                //
+                // Why this isn't conflated with infrastructure errors: gate-check
+                // executor crashes (TimeoutException, RateLimitException,
+                // CliInfrastructureException) propagate as exceptions and bypass
+                // this switch entirely. AgentOutcome.ERROR is only returned when
+                // the gate agent ran to completion AND its structured response
+                // declared the work has issues. So this branch is the genuine
+                // "gate said no" signal; a regression flag here is meaningful.
+                await SafeDbCallAsync(() =>
+                    runStore.FlagWinnersRegressedForRunAsync(runId, cancellationToken));
+
                 // FAIL — check retry count for infinite loop guard
                 var previousFailures = await CountGateCheckFailuresAsync(
                     cardId, state.Name, cancellationToken);
@@ -1447,6 +1497,7 @@ public sealed partial class AgentRunner(
             // Re-run fast-path for this optional specialist reviewer: same detection rule as
             // regular steps (marker on card + prior COMPLETE row). Operator force-rerun =
             // delete the optional step's comment.
+            bool optPreambleInjected = false;
             if (rerunPreambleBuilder is not null)
             {
                 var optComments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
@@ -1460,6 +1511,7 @@ public sealed partial class AgentRunner(
                 if (optRerunPreamble is not null)
                 {
                     resolvedPrompt = optRerunPreamble + "\n\n---\n\n" + resolvedPrompt;
+                    optPreambleInjected = true;
                     logger.LogInformation(
                         "Re-run preamble injected for optional step '{StepName}' on card {CardId}",
                         step.Name, cardId);
@@ -1503,7 +1555,16 @@ public sealed partial class AgentRunner(
                 StartedAtUtc: optionalStepStartedAt,
                 CompletedAtUtc: DateTimeOffset.UtcNow,
                 SessionExecMs: optionalSessionExecMs,
-                Provider: stepRole.Provider);
+                Provider: stepRole.Provider,
+                CostUsd: result.Usage?.CostUsd,
+                InputTokens: result.Usage?.InputTokens,
+                OutputTokens: result.Usage?.OutputTokens,
+                CacheReadTokens: result.Usage?.CacheReadTokens,
+                CacheCreationTokens: result.Usage?.CacheCreationTokens,
+                FastPathHit: optPreambleInjected
+                    ? result.Outcome == AgentOutcome.COMPLETE
+                    : (bool?)null,
+                StructurerFallbackUsed: result.StructurerFallbackUsed);
             await SafeDbCallAsync(() => runStore.SaveStepResultAsync(optionalStepRecord, cancellationToken));
 
             // Update card body
@@ -1608,6 +1669,13 @@ public sealed partial class AgentRunner(
         var initMirror = AgentInitFileResolver.EnsureInitFile(
             context.WorkspacePath, providerKey, logger);
 
+        // Acquire any named resources this provider needs (e.g. local-llm).
+        // The lease is a no-op for providers without declared resources or when
+        // the pool isn't injected (legacy DI / test setups).
+        var lease = resourcePool is not null
+            ? await resourcePool.AcquireAsync(providerKey, cancellationToken)
+            : null;
+
         try
         {
             // Provider mismatch: step uses a different provider than the session
@@ -1657,6 +1725,10 @@ public sealed partial class AgentRunner(
         }
         finally
         {
+            if (lease is not null)
+            {
+                await lease.DisposeAsync();
+            }
             AgentInitFileResolver.CleanupInitFile(initMirror, logger);
         }
     }

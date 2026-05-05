@@ -134,6 +134,61 @@ public class AgentRunnerGateCheckTests : IDisposable
             TargetCardId, DesignListId, Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task GateCheck_Fail_FlagsCandidateGroupWinnersAsRegressed()
+    {
+        // V22: when a same-run gate check returns ERROR, AgentRunner should
+        // call IRunStore.FlagWinnersRegressedForRunAsync so any candidate-group
+        // winners promoted earlier in this run are marked winner_regressed=true.
+        // The test exercises the gate-fail path (not a candidate group itself —
+        // that's a separate fixture). What matters here is that the side effect
+        // fires regardless of whether this run actually had a candidate group;
+        // the SQL UPDATE is a no-op when no winners exist.
+        var callIndex = 0;
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callIndex++;
+                return callIndex == 1
+                    ? new AgentResult(AgentOutcome.COMPLETE, "Impl done")
+                    : new AgentResult(AgentOutcome.ERROR, "Gate fails");
+            });
+
+        var recording = new GateRecordingRunStore();
+        var runner = CreateRunner(executor, BuildGateCheckConfig("discard"), runStore: recording);
+        SetupBoardCards(DesignListId);
+
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.True(recording.WinnerRegressedFlags >= 1,
+            $"Expected FlagWinnersRegressedForRunAsync to be called on gate fail; got {recording.WinnerRegressedFlags} call(s)");
+    }
+
+    [Fact]
+    public async Task GateCheck_Pass_DoesNotFlagWinnersAsRegressed()
+    {
+        // Negative case: a passing gate must not trigger the regression flag.
+        var callIndex = 0;
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callIndex++;
+                return callIndex == 1
+                    ? new AgentResult(AgentOutcome.COMPLETE, "Impl done")
+                    : new AgentResult(AgentOutcome.COMPLETE, "Gate passes");
+            });
+
+        var recording = new GateRecordingRunStore();
+        var runner = CreateRunner(executor, BuildGateCheckConfig("discard"), runStore: recording);
+        SetupBoardCards(DesignListId);
+
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(0, recording.WinnerRegressedFlags);
+    }
+
     // ── Gate FAIL without GATE_FAIL transition: falls back to ERROR ─
 
     [Fact]
@@ -443,7 +498,7 @@ public class AgentRunnerGateCheckTests : IDisposable
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    private AgentRunner CreateRunner(IAgentExecutor executor, WorkflowConfig config)
+    private AgentRunner CreateRunner(IAgentExecutor executor, WorkflowConfig config, IRunStore? runStore = null)
     {
         var normalisedConfig = config.Normalised();
         return new AgentRunner(
@@ -451,7 +506,7 @@ public class AgentRunnerGateCheckTests : IDisposable
             normalisedConfig, new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
             new UpdateFileProcessor(_boardClient, normalisedConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
-            NullRunStore.Instance,
+            runStore ?? NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             NullLogger<AgentRunner>.Instance);
@@ -593,5 +648,28 @@ public class AgentRunnerGateCheckTests : IDisposable
         }
 
         Directory.Delete(path, recursive: true);
+    }
+
+    /// <summary>Counts V22 reliability-signal calls; everything else is no-op.</summary>
+    private sealed class GateRecordingRunStore : IRunStore
+    {
+        public int WinnerRegressedFlags { get; private set; }
+        public Task CreateRunAsync(RunRecord run, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateRunProgressAsync(string runId, int completedSteps, CancellationToken ct) => Task.CompletedTask;
+        public Task CompleteRunAsync(string runId, AgentOutcome outcome, string? errorDetail, FailureReason? failureReason, CancellationToken ct) => Task.CompletedTask;
+        public Task SaveStepResultAsync(StepResultRecord result, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<StepResultRecord>> GetStepResultsForCardAsync(string cardId, string? stateName, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<StepResultRecord>>([]);
+        public Task<IReadOnlyList<StepResultRecord>> GetLatestRunStepResultsAsync(string cardId, string stateName, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<StepResultRecord>>([]);
+        public Task UpdateRunEstimateAsync(string runId, double estimate, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateRunSessionStartupMsAsync(string runId, int startupMs, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateCandidateEvaluationAsync(string runId, Guid candidateGroupId, int candidateIndex, bool selected, decimal? qualityScore, string? evaluatorReasoning, CancellationToken ct) => Task.CompletedTask;
+        public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;
+        public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct)
+        {
+            WinnerRegressedFlags++;
+            return Task.CompletedTask;
+        }
     }
 }

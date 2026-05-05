@@ -30,7 +30,27 @@ public sealed record AgentResult(
     // them, capture and use them; when it doesn't, ParseEvaluatorVerdict falls
     // back to extracting from the detail markdown (fenced JSON or prose patterns).
     int? WinnerIndex = null,
-    IReadOnlyList<EvaluatorScore>? Scores = null);
+    IReadOnlyList<EvaluatorScore>? Scores = null,
+    // Usage and timing data captured by the executor, surfaced through to step_result.
+    // All nullable because not every executor / model / wire format reports them
+    // (Codex omits cost; OpenCode against local llama.cpp omits everything except
+    // possibly token counts via the proxy; the stub executor reports nothing).
+    UsageInfo? Usage = null,
+    // True only when the DockerOpenCode no-think structurer fallback recovered the
+    // result from prose narrative on a -think model run. Null otherwise.
+    bool? StructurerFallbackUsed = null);
+
+/// <summary>
+/// Token / cost usage extracted from the CLI's final result event.
+/// Cost is in USD; Codex (ChatGPT subscription) and local-LLM runs leave it null.
+/// Cache fields are Claude-specific and null for other providers.
+/// </summary>
+public sealed record UsageInfo(
+    long? InputTokens = null,
+    long? OutputTokens = null,
+    long? CacheReadTokens = null,
+    long? CacheCreationTokens = null,
+    decimal? CostUsd = null);
 
 public sealed record AgentQuestion(
     string Question,

@@ -199,7 +199,22 @@ public sealed class PgMetricsStore(
                         COUNT(*) FILTER (WHERE selected IS NOT NULL)
                 END                                                         AS win_rate_percent,
                 AVG(quality_score) FILTER (WHERE quality_score IS NOT NULL) AS avg_quality_score,
-                AVG(EXTRACT(EPOCH FROM (completed_at_utc - started_at_utc))) AS avg_duration_seconds
+                AVG(EXTRACT(EPOCH FROM (completed_at_utc - started_at_utc))) AS avg_duration_seconds,
+                SUM(cost_usd)                                               AS total_cost_usd,
+                AVG(cost_usd) FILTER (WHERE cost_usd IS NOT NULL)           AS avg_cost_usd,
+                SUM(input_tokens)                                           AS total_input_tokens,
+                SUM(output_tokens)                                          AS total_output_tokens,
+                AVG(input_tokens) FILTER (WHERE input_tokens IS NOT NULL)   AS avg_input_tokens,
+                AVG(output_tokens) FILTER (WHERE output_tokens IS NOT NULL) AS avg_output_tokens,
+                SUM(cache_read_tokens)                                      AS total_cache_read_tokens,
+                SUM(cache_creation_tokens)                                  AS total_cache_creation_tokens,
+                COUNT(*) FILTER (WHERE structurer_fallback_used = true)     AS structurer_fallback_count,
+                CASE
+                    WHEN COUNT(*) = 0 THEN NULL
+                    ELSE 100.0 *
+                        COUNT(*) FILTER (WHERE structurer_fallback_used = true) /
+                        COUNT(*)
+                END                                                         AS structurer_fallback_rate
             FROM step_result
             WHERE tenant_id = $1
               AND candidate_group_id IS NOT NULL
@@ -223,10 +238,134 @@ public sealed class PgMetricsStore(
                 RunsWithDecision: (int)reader.GetInt64(4),
                 WinRatePercent: reader.IsDBNull(5) ? null : (double?)reader.GetDouble(5),
                 AvgQualityScore: reader.IsDBNull(6) ? null : (double?)(double)reader.GetDecimal(6),
-                AvgDurationSeconds: reader.IsDBNull(7) ? null : (double?)reader.GetDouble(7)));
+                AvgDurationSeconds: reader.IsDBNull(7) ? null : (double?)reader.GetDouble(7),
+                TotalCostUsd: reader.IsDBNull(8) ? null : reader.GetDecimal(8),
+                AvgCostUsd: reader.IsDBNull(9) ? null : reader.GetDecimal(9),
+                TotalInputTokens: reader.IsDBNull(10) ? null : reader.GetInt64(10),
+                TotalOutputTokens: reader.IsDBNull(11) ? null : reader.GetInt64(11),
+                AvgInputTokens: reader.IsDBNull(12) ? null : (double?)(double)reader.GetDecimal(12),
+                AvgOutputTokens: reader.IsDBNull(13) ? null : (double?)(double)reader.GetDecimal(13),
+                TotalCacheReadTokens: reader.IsDBNull(14) ? null : reader.GetInt64(14),
+                TotalCacheCreationTokens: reader.IsDBNull(15) ? null : reader.GetInt64(15),
+                StructurerFallbackCount: (int)reader.GetInt64(16),
+                StructurerFallbackRatePercent: reader.IsDBNull(17) ? null : (double?)reader.GetDouble(17)));
         }
 
         logger.LogDebug("GetProviderRoleMetricsAsync returned {Count} (role, provider) row(s)", results.Count);
+        return results;
+    }
+
+    public async Task<IReadOnlyList<EvaluatorReliabilityRecord>> GetEvaluatorReliabilityAsync(
+        DateTimeOffset? since, CancellationToken ct)
+    {
+        // Inline equivalent of v_evaluator_reliability with a since-filter applied.
+        // The join must include step_index AND slot_index — a multi-slot fallback
+        // chain in a single run can produce multiple evaluator rows with different
+        // slot_index but the same state_name. Without those join keys, a slot 0
+        // evaluator that failed (no winner) would cross-match slot 1's winner.
+        // IS NOT DISTINCT FROM handles the NULL=NULL case for single-slot setups
+        // (where both evaluator and winner have slot_index = NULL). Filter to
+        // outcome='COMPLETE' so only verdict-bearing evaluator rows count.
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            WITH evaluator_steps AS (
+                SELECT tenant_id, run_id, state_name, step_index, slot_index, role, provider, started_at_utc
+                FROM step_result
+                WHERE tenant_id = $1
+                  AND step_name LIKE '%:evaluator'
+                  AND candidate_group_id IS NULL
+                  AND outcome = 'COMPLETE'
+                  AND ($2::timestamptz IS NULL OR started_at_utc >= $2)
+            ), winners AS (
+                SELECT tenant_id, run_id, state_name, step_index, slot_index, winner_regressed
+                FROM step_result
+                WHERE tenant_id = $1
+                  AND selected = true
+                  AND candidate_group_id IS NOT NULL
+                  AND ($2::timestamptz IS NULL OR started_at_utc >= $2)
+            )
+            SELECT
+                e.role,
+                e.provider,
+                COUNT(*)                                                   AS total_verdicts,
+                COUNT(*) FILTER (WHERE w.winner_regressed = true)          AS regressed,
+                CASE
+                    WHEN COUNT(*) FILTER (WHERE w.winner_regressed IS NOT NULL) = 0 THEN NULL
+                    ELSE 100.0 *
+                        COUNT(*) FILTER (WHERE w.winner_regressed = true) /
+                        COUNT(*) FILTER (WHERE w.winner_regressed IS NOT NULL)
+                END                                                         AS regression_rate_percent
+            FROM evaluator_steps e
+            LEFT JOIN winners w
+                   ON w.tenant_id  = e.tenant_id
+                  AND w.run_id     = e.run_id
+                  AND w.state_name = e.state_name
+                  AND w.step_index = e.step_index
+                  AND w.slot_index IS NOT DISTINCT FROM e.slot_index
+            GROUP BY e.role, e.provider
+            ORDER BY e.role, e.provider
+            """;
+        cmd.Parameters.AddWithValue(tenant.Value);
+        cmd.Parameters.AddWithValue(since.HasValue ? (object)since.Value : DBNull.Value);
+
+        var results = new List<EvaluatorReliabilityRecord>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            results.Add(new EvaluatorReliabilityRecord(
+                EvaluatorRole: reader.GetString(0),
+                EvaluatorProvider: reader.GetString(1),
+                TotalVerdicts: (int)reader.GetInt64(2),
+                RegressedCount: (int)reader.GetInt64(3),
+                RegressionRatePercent: reader.IsDBNull(4) ? null : (double?)reader.GetDouble(4)));
+        }
+        return results;
+    }
+
+    public async Task<IReadOnlyList<FastPathHitRecord>> GetFastPathHitRateAsync(
+        DateTimeOffset? since, CancellationToken ct)
+    {
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                state_name,
+                step_name,
+                role,
+                provider,
+                COUNT(*)                                              AS total,
+                COUNT(*) FILTER (WHERE fast_path_hit = true)          AS hits,
+                CASE
+                    WHEN COUNT(*) FILTER (WHERE fast_path_hit IS NOT NULL) = 0 THEN NULL
+                    ELSE 100.0 *
+                        COUNT(*) FILTER (WHERE fast_path_hit = true) /
+                        COUNT(*) FILTER (WHERE fast_path_hit IS NOT NULL)
+                END                                                    AS hit_rate_percent
+            FROM step_result
+            WHERE tenant_id = $1
+              AND completed_at_utc IS NOT NULL
+              AND fast_path_hit IS NOT NULL
+              AND ($2::timestamptz IS NULL OR started_at_utc >= $2)
+            GROUP BY state_name, step_name, role, provider
+            ORDER BY state_name, step_name, role, provider
+            """;
+        cmd.Parameters.AddWithValue(tenant.Value);
+        cmd.Parameters.AddWithValue(since.HasValue ? (object)since.Value : DBNull.Value);
+
+        var results = new List<FastPathHitRecord>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            results.Add(new FastPathHitRecord(
+                StateName: reader.GetString(0),
+                StepName: reader.GetString(1),
+                Role: reader.GetString(2),
+                Provider: reader.GetString(3),
+                TotalInvocations: (int)reader.GetInt64(4),
+                FastPathHits: (int)reader.GetInt64(5),
+                HitRatePercent: reader.IsDBNull(6) ? null : (double?)reader.GetDouble(6)));
+        }
         return results;
     }
 

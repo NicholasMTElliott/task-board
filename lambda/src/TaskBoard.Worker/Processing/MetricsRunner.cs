@@ -34,6 +34,8 @@ public sealed class MetricsRunner(
             var cyclePerPoint = await metricsStore.GetCycleTimePerPointAsync(since, ct);
             var providerRole = await metricsStore.GetProviderRoleMetricsAsync(since, ct);
             var headToHead = await metricsStore.GetCandidateHeadToHeadAsync(since, ct);
+            var evalReliability = await metricsStore.GetEvaluatorReliabilityAsync(since, ct);
+            var fastPath = await metricsStore.GetFastPathHitRateAsync(since, ct);
 
             PrintRunSummary(summary);
             PrintCardMetrics(cards);
@@ -42,6 +44,8 @@ public sealed class MetricsRunner(
             PrintCycleTimePerPoint(cyclePerPoint);
             PrintProviderRoleMetrics(providerRole);
             PrintHeadToHead(headToHead);
+            PrintEvaluatorReliability(evalReliability);
+            PrintFastPathHitRate(fastPath);
         }
         catch (Exception ex)
         {
@@ -169,20 +173,73 @@ public sealed class MetricsRunner(
 
         Console.WriteLine("── Provider × Role Metrics (candidate runs) ─────────────");
         Console.WriteLine(
-            $"  {"Role",-26}  {"Provider",-22}  {"Runs",4}  {"Wins",4}  {"Win%",6}  {"AvgScore",8}  {"AvgDur",8}");
+            $"  {"Role",-26}  {"Provider",-22}  {"Runs",4}  {"Wins",4}  {"Win%",6}  {"AvgScore",8}  {"AvgDur",8}  {"Cost$",10}  {"InTok",10}  {"OutTok",10}  {"Struct%",7}");
         Console.WriteLine(
-            $"  {"──────────────────────────",-26}  {"──────────────────────",-22}  {"────",4}  {"────",4}  {"──────",6}  {"────────",8}  {"────────",8}");
+            $"  {"──────────────────────────",-26}  {"──────────────────────",-22}  {"────",4}  {"────",4}  {"──────",6}  {"────────",8}  {"────────",8}  {"──────────",10}  {"──────────",10}  {"──────────",10}  {"───────",7}");
 
         foreach (var r in rows)
         {
             var winPct = r.WinRatePercent.HasValue ? $"{r.WinRatePercent.Value:F1}%" : "—";
             var score = r.AvgQualityScore.HasValue ? r.AvgQualityScore.Value.ToString("F2") : "—";
             var dur = r.AvgDurationSeconds.HasValue ? FormatDuration(r.AvgDurationSeconds.Value) : "—";
+            var cost = r.TotalCostUsd.HasValue ? $"${r.TotalCostUsd.Value:F4}" : "—";
+            var inTok = r.TotalInputTokens.HasValue ? FormatTokens(r.TotalInputTokens.Value) : "—";
+            var outTok = r.TotalOutputTokens.HasValue ? FormatTokens(r.TotalOutputTokens.Value) : "—";
+            var structPct = r.StructurerFallbackRatePercent.HasValue
+                ? $"{r.StructurerFallbackRatePercent.Value:F1}%"
+                : "—";
             Console.WriteLine(
-                $"  {r.Role,-26}  {r.Provider,-22}  {r.TotalRuns,4}  {r.Wins,4}  {winPct,6}  {score,8}  {dur,8}");
+                $"  {r.Role,-26}  {r.Provider,-22}  {r.TotalRuns,4}  {r.Wins,4}  {winPct,6}  {score,8}  {dur,8}  {cost,10}  {inTok,10}  {outTok,10}  {structPct,7}");
         }
 
         Console.WriteLine();
+    }
+
+    private static void PrintEvaluatorReliability(IReadOnlyList<EvaluatorReliabilityRecord> rows)
+    {
+        if (rows.Count == 0) return;
+
+        Console.WriteLine("── Evaluator Reliability (winner regression rate) ───────");
+        Console.WriteLine(
+            $"  {"Role",-26}  {"Provider",-22}  {"Verdicts",8}  {"Regressed",9}  {"Rate",6}");
+        Console.WriteLine(
+            $"  {"──────────────────────────",-26}  {"──────────────────────",-22}  {"────────",8}  {"─────────",9}  {"──────",6}");
+
+        foreach (var r in rows)
+        {
+            var rate = r.RegressionRatePercent.HasValue ? $"{r.RegressionRatePercent.Value:F1}%" : "—";
+            Console.WriteLine(
+                $"  {r.EvaluatorRole,-26}  {r.EvaluatorProvider,-22}  {r.TotalVerdicts,8}  {r.RegressedCount,9}  {rate,6}");
+        }
+
+        Console.WriteLine();
+    }
+
+    private static void PrintFastPathHitRate(IReadOnlyList<FastPathHitRecord> rows)
+    {
+        if (rows.Count == 0) return;
+
+        Console.WriteLine("── Re-run Fast-Path Hit Rate ────────────────────────────");
+        Console.WriteLine(
+            $"  {"State",-22}  {"Step",-26}  {"Role",-22}  {"Total",5}  {"Hits",5}  {"Rate",6}");
+        Console.WriteLine(
+            $"  {"──────────────────────",-22}  {"──────────────────────────",-26}  {"──────────────────────",-22}  {"─────",5}  {"─────",5}  {"──────",6}");
+
+        foreach (var r in rows)
+        {
+            var rate = r.HitRatePercent.HasValue ? $"{r.HitRatePercent.Value:F1}%" : "—";
+            Console.WriteLine(
+                $"  {r.StateName,-22}  {r.StepName,-26}  {r.Role,-22}  {r.TotalInvocations,5}  {r.FastPathHits,5}  {rate,6}");
+        }
+
+        Console.WriteLine();
+    }
+
+    private static string FormatTokens(long tokens)
+    {
+        if (tokens < 1_000) return tokens.ToString();
+        if (tokens < 1_000_000) return $"{tokens / 1_000.0:F1}k";
+        return $"{tokens / 1_000_000.0:F1}M";
     }
 
     private static void PrintHeadToHead(IReadOnlyList<HeadToHeadRecord> rows)

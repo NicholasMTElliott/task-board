@@ -111,6 +111,45 @@ public class CandidateExecutorFlowTests : IDisposable
         Assert.Equal(2, _boardClient.Comments.Count(c => c.Marker.Contains(":cand-")));
     }
 
+    // ── V22: evaluator_prompt_chars persisted on evaluator step row ──────────
+
+    [Fact]
+    public async Task EvaluatorRow_PersistsEvaluatorPromptChars()
+    {
+        // V22: the evaluator step row should carry the prompt body's char count
+        // so operators can spot context-truncation trends before evaluator
+        // verdicts silently degrade. Char count is non-zero (the prompt always
+        // contains rubric + per-candidate sections). Non-evaluator candidate
+        // rows must NOT carry this field — it's evaluator-specific.
+        var candidateExecutor = BuildExecutor(
+            ("docker-claude-cli", AgentOutcome.COMPLETE, "Claude impl"),
+            ("docker-opencode",   AgentOutcome.COMPLETE, "Qwen impl"),
+            evaluatorOutcome: AgentOutcome.COMPLETE,
+            evaluatorDetail: """
+                ```json
+                {"outcome":"COMPLETE","winner_index":1,"scores":[
+                  {"index":0,"score":7,"reasoning":"works"},
+                  {"index":1,"score":8.5,"reasoning":"cleaner"}
+                ]}
+                ```
+                """);
+
+        var request = NewRequest(
+            stepName: "implement",
+            providers: ["docker-claude-cli", "docker-opencode"]);
+
+        await candidateExecutor.ExecuteCandidateGroupAsync(request, CancellationToken.None);
+
+        var evaluatorRow = _runStore.SavedSteps.Single(r => r.StepName.EndsWith(":evaluator"));
+        Assert.NotNull(evaluatorRow.EvaluatorPromptChars);
+        Assert.True(evaluatorRow.EvaluatorPromptChars > 0,
+            $"Expected evaluator prompt chars > 0; got {evaluatorRow.EvaluatorPromptChars}");
+
+        // Candidate rows themselves should NOT carry the evaluator-prompt char count.
+        var candidateRows = _runStore.SavedSteps.Where(r => r.CandidateGroupId is not null);
+        Assert.All(candidateRows, r => Assert.Null(r.EvaluatorPromptChars));
+    }
+
     // ── Cleanup pinning ──────────────────────────────────────────────────────
 
     [Fact]
@@ -405,6 +444,101 @@ public class CandidateExecutorFlowTests : IDisposable
             opencode.StartedAtUtc < claude0.CompletedAtUtc,
             $"Different-provider candidates should overlap. claude[0] completed at {claude0.CompletedAtUtc:O}, " +
             $"opencode started at {opencode.StartedAtUtc:O} (lag {(opencode.StartedAtUtc - claude0.CompletedAtUtc).TotalMilliseconds:F0}ms — should be <0).");
+    }
+
+    // ── V22: ResourcePool serialization across providers ─────────────────────
+
+    [Fact]
+    public async Task ResourcePool_SharedResource_SerializesAcrossProviders()
+    {
+        // V22: docker-opencode and docker-claude-qwen both target a single
+        // local llama.cpp server. Without the resource pool, the parallel-by-
+        // provider path lets them hit the proxy concurrently — the second waits
+        // minutes for a slot, the inactivity timer fires, and the candidate
+        // looks like a timeout. With the pool tagging both providers to a
+        // local-llm resource of capacity 1, the second waits cleanly on the
+        // semaphore until the first releases.
+        var sleepDuration = TimeSpan.FromMilliseconds(250);
+
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-opencode"]    = new SleepingExecutor(sleepDuration, AgentOutcome.COMPLETE, "qwen-1"),
+            ["docker-claude-qwen"] = new SleepingExecutor(sleepDuration, AgentOutcome.COMPLETE, "qwen-2"),
+            ["claude-cli"]         = new ScriptedExecutor(AgentOutcome.COMPLETE,
+                """
+                {"outcome":"COMPLETE","winner_index":0,"scores":[
+                  {"index":0,"score":7,"reasoning":"a"},
+                  {"index":1,"score":7,"reasoning":"b"}
+                ]}
+                """),
+        };
+
+        var poolOpts = new ResourcePoolOptions
+        {
+            Pools = { ["local-llm"] = new ResourcePoolDefinition { MaxConcurrent = 1 } },
+            ProviderResources =
+            {
+                ["docker-opencode"] = ["local-llm"],
+                ["docker-claude-qwen"] = ["local-llm"],
+            },
+        };
+        using var pool = new ResourcePool(
+            Microsoft.Extensions.Options.Options.Create(poolOpts),
+            NullLogger<ResourcePool>.Instance);
+
+        var candidateExecutor = new CandidateExecutor(
+            _git,
+            new MapResolver(byProvider),
+            _runStore,
+            _boardClient,
+            NullLogger<CandidateExecutor>.Instance,
+            rerunPreambleBuilder: null,
+            resourcePool: pool);
+
+        var request = NewRequest(
+            stepName: "implement",
+            providers: ["docker-opencode", "docker-claude-qwen"]);
+
+        var result = await candidateExecutor.ExecuteCandidateGroupAsync(
+            request, CancellationToken.None);
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+
+        var records = _runStore.SavedSteps
+            .Where(r => r.CandidateGroupId is not null)
+            .ToDictionary(r => r.CandidateIndex!.Value);
+
+        Assert.Equal(2, records.Count);
+        var first = records[0];
+        var second = records[1];
+
+        // The two candidates run on DIFFERENT providers, so without the pool
+        // they'd overlap (~250ms total wall time). With the pool serialising
+        // them on local-llm, total wall time should be ≥ 2*sleepDuration.
+        //
+        // We check end-to-end span: from earliest startedAt to latest completedAt.
+        // Note: candidate `startedAt` is captured BEFORE the pool acquire (worktree
+        // setup runs concurrently across providers), so we can't assert on
+        // startedAt ordering alone — the pool only serialises the LLM call itself.
+        var earliestStart = new[] { first.StartedAtUtc, second.StartedAtUtc }.Min();
+        var latestEnd = new[] { first.CompletedAtUtc, second.CompletedAtUtc }.Max();
+        var totalSpan = latestEnd - earliestStart;
+
+        Assert.True(
+            totalSpan >= sleepDuration * 1.8,  // 1.8x to allow some scheduling slop while still rejecting 1x overlap
+            $"Total wall time should reflect serialised execution (≥ ~{(sleepDuration * 1.8).TotalMilliseconds:F0}ms). " +
+            $"Got {totalSpan.TotalMilliseconds:F0}ms — pool isn't serialising? " +
+            $"first: {first.StartedAtUtc:O}–{first.CompletedAtUtc:O} ({(first.CompletedAtUtc - first.StartedAtUtc).TotalMilliseconds:F0}ms), " +
+            $"second: {second.StartedAtUtc:O}–{second.CompletedAtUtc:O} ({(second.CompletedAtUtc - second.StartedAtUtc).TotalMilliseconds:F0}ms).");
+
+        // The waiting candidate's elapsed time is at least its sleep duration
+        // PLUS the wait — so one of the two should show elapsed ≥ ~2x sleep.
+        var firstElapsed = first.CompletedAtUtc - first.StartedAtUtc;
+        var secondElapsed = second.CompletedAtUtc - second.StartedAtUtc;
+        var maxElapsed = firstElapsed > secondElapsed ? firstElapsed : secondElapsed;
+        Assert.True(
+            maxElapsed >= sleepDuration * 1.8,
+            $"At least one candidate should have waited on the semaphore. " +
+            $"Max elapsed = {maxElapsed.TotalMilliseconds:F0}ms; expected ≥ ~{(sleepDuration * 1.8).TotalMilliseconds:F0}ms.");
     }
 
     // ── CommentsFilePath candidate-relative rewrite ──────────────────────────
@@ -932,6 +1066,9 @@ public class CandidateExecutorFlowTests : IDisposable
             }
             return Task.CompletedTask;
         }
+
+        public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;
+        public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct) => Task.CompletedTask;
     }
 
     internal sealed record RecordedVerdict(
