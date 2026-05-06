@@ -31,6 +31,8 @@
     <Content Include="appsettings.*.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\..\workflow.v1.json" CopyToOutputDirectory="PreserveNewest" Link="workflow.v1.json" />
     <Content Include="..\..\..\workflow.github.example.json" CopyToOutputDirectory="PreserveNewest" Link="workflow.github.example.json" />
+    <Content Include="..\..\..\workflow.simple.example.json" CopyToOutputDirectory="PreserveNewest" Link="workflow.simple.example.json" />
+    <Content Include="..\..\..\workflow.story-decomposition.example.json" CopyToOutputDirectory="PreserveNewest" Link="workflow.story-decomposition.example.json" />
     <Content Include="..\..\..\prompts\**\*" CopyToOutputDirectory="PreserveNewest" LinkBase="prompts" />
     <Content Include="..\..\..\templates\**\*" CopyToOutputDirectory="PreserveNewest" LinkBase="templates" />
     <Content Include="..\..\..\skills\**\*" CopyToOutputDirectory="PreserveNewest" LinkBase="skills" />

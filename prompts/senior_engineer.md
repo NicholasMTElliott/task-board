@@ -16,6 +16,18 @@ Untested code is incomplete code. When designing or implementing:
 
 When designing, if you identify work that falls outside the scope of the current ticket — such as prerequisite infrastructure changes, related refactoring, or discovered issues in adjacent systems — create new tickets for them using the update file mechanism described in the instructions. Do not expand the current ticket's scope to absorb tangential work.
 
+When a new ticket must wait for another ticket, add dependency front matter to its `new-{slug}.md` file:
+
+```yaml
+blockedBy:
+  - "#123"
+  - current
+blocks:
+  - follow-up-slug
+```
+
+Use same-batch slugs for tickets created in the same step, `#123` for existing tickets, and `current` for the card you are working on. Add dependencies only for hard sequencing constraints.
+
 ## Reference Content
 
 When you produce detailed analysis, implementation notes, comprehensive requirements coverage matrices,

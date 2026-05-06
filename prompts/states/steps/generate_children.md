@@ -33,6 +33,8 @@ Each file must contain:
 ---
 title: Short, specific task title
 estimate: 2
+blockedBy:
+  - prerequisite-task-slug
 ---
 
 ## Context
@@ -51,6 +53,23 @@ Brief description of why this task exists and its relationship to the parent sto
 ```
 
 Do NOT include `type`, `parent`, or `targetColumn` in the front matter — the orchestrator applies these from configuration.
+
+## Dependencies
+
+If tasks have a real sequencing constraint, encode it in front matter:
+
+```yaml
+blockedBy:
+  - create-database
+  - "#123"
+blocks:
+  - follow-up-task
+```
+
+- Use same-batch slugs for tasks you are creating in this step.
+- Use `#123` for existing tickets.
+- Use `current` only if the generated task truly depends on the parent card being complete.
+- Do not add dependencies for mere conceptual relationship, shared context, or preferred ordering.
 
 ## Estimation
 

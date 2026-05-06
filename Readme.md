@@ -51,9 +51,10 @@ Execution modes:
   --mode validation --board-id N              (read-only workflow vs. board check)
   --mode diagnose --card-id N                 (explain why a card isn't being picked up)
   --mode scaffold-board --board-id N [--apply] (create missing fields/labels via gh)
+  --install                                   (install bundled Claude Code skill(s) into ~/.claude/skills/; combinable with any --mode)
 
 Conversational front-end (optional):
-  /aiboard                                    (Claude Code skill bundled in skills/aiboard/)
+  /aiboard                                    (Claude Code skill bundled in skills/aiboard/, install once via `aiboard --install`)
 
 AgentRunner flow (agent_run states):
   Fetch card → move to IN_PROGRESS column
@@ -215,6 +216,12 @@ File-based config (`workflow.github.json`) maps columns to roles and transitions
     "fieldName": "Estimate",
     "scale": [1, 2, 4, 8]
   },
+  "dependencyPolicy": {
+    "enabled": false,
+    "enforcedStates": ["Ready for Implementation", "Ready for Test", "Approved"],
+    "satisfiedColumns": ["Done"],
+    "commentOnBlocked": true
+  },
   "cardTypes": {
     "story": { "name": "User Story", "labelPrefix": "type", "allowedChildren": ["task"] },
     "task": { "name": "Task", "allowedChildren": [] }
@@ -231,12 +238,13 @@ File-based config (`workflow.github.json`) maps columns to roles and transitions
 - `pipelineOrder` determines polling priority (higher = picked first)
 - `transitions` values can be a string (column name) or an array of actions (`moveToColumn`, `setField`, `updateParentSum`)
 - `estimation` configures calibration-based ticket sizing (scale, calibration ticket, board field)
+- `dependencyPolicy` enables blocking dependencies. When enabled, polling skips blocked cards and direct agent/merge runs refuse them until blockers are in `satisfiedColumns` (or closed when the provider exposes only issue state)
 - `cardTypes` defines card type hierarchy for child task generation (e.g., stories → tasks). `labelPrefix` is optional — set it to apply `{prefix}:{typeKey}` labels, or omit/null it to opt that type out of labels entirely
 - `cardTypeField` (optional, workflow-level) — name of a project field (e.g. `"Type"`) that holds each card's type. When set, generated children write their `CardTypeDefinition.Name` to this field, and parent-type lookups for `allowedChildren` enforcement read from this field first and fall back to labels. Labels and fields can be used together; each `cardTypes[k]` must have either a `labelPrefix` or a global `cardTypeField`
 - `generationConfig` on a step specifies child ticket creation: `targetType`, `targetColumn`, `linkToParent`, `copyFields` (fields to inherit from parent, e.g., priority), `setFields` (literal field→value map applied to the new card — useful for putting children into a specific pipeline stage, e.g. `{"Type": "Task", "Activity": "Design"}`; wins over `copyFields` on key collision)
 - `updateParentSum` transition action recalculates a parent card's field as the sum of its children's values (used for estimate rollup)
 
-See [docs/CardTypesAndGeneration.md](docs/CardTypesAndGeneration.md) for a walkthrough of label-based vs. field-based type discrimination and `generationConfig.setFields` usage.
+See [docs/CardTypesAndGeneration.md](docs/CardTypesAndGeneration.md) for a walkthrough of label-based vs. field-based type discrimination, `generationConfig.setFields`, and dependency front matter on generated tickets.
 
 ---
 
@@ -261,7 +269,7 @@ See [docs/CardTypesAndGeneration.md](docs/CardTypesAndGeneration.md) for a walkt
 
 If you're an AI coding agent setting this system up for the first time, read **[Agent.md](Agent.md)** before anything else. It's a single-file guide written specifically for LLM consumption that covers the architecture, the JSON schemas for `appsettings.json` and `workflow.*.json`, every available agent executor and model with pros/cons + when-to-use guidance, the role catalog, multi-agent candidate evaluation, and a step-by-step setup flow for a new project. The file ships in the release distribution alongside `aiboard.exe`.
 
-A Claude Code skill (`skills/aiboard/SKILL.md`) is bundled with the distribution. After installing it under `~/.claude/skills/aiboard/`, you can drive aiboard through `/aiboard` in any Claude Code conversation — the skill detects your project state and routes you through the right `aiboard --mode ...` invocation. See [skills/README.md](skills/README.md) for install steps.
+A Claude Code skill (`skills/aiboard/SKILL.md`) is bundled with the distribution. Install it once per machine with `aiboard --install` (copies every bundled skill into `~/.claude/skills/<name>/`). After that, `/aiboard` in any Claude Code conversation routes you through the right `aiboard --mode ...` invocation — the skill detects your project state and picks the right mode. The `--install` flag can also be combined with another mode (e.g. `aiboard --install --mode init`) to install the skill and continue with the requested work. See [skills/README.md](skills/README.md) for details.
 
 For a narrative human-targeted walkthrough of the onboarding lifecycle (`init` → `validation` → `scaffold-board` → `polling`, plus `diagnose` for stuck cards), see [docs/Onboarding.md](docs/Onboarding.md).
 

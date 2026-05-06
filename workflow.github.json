@@ -609,6 +609,12 @@
     "fieldName": "Estimate",
     "scale": [1, 2, 4, 8]
   },
+  "dependencyPolicy": {
+    "enabled": false,
+    "enforcedStates": ["Ready for Implementation", "Ready for Test", "Approved"],
+    "satisfiedColumns": ["Done"],
+    "commentOnBlocked": true
+  },
   "cardTypes": {
     "story": {
       "name": "User Story",

@@ -27,7 +27,14 @@
       "Bash(git commit:*)",
       "Bash(git push:*)",
       "Bash(git pull:*)",
-      "Bash(git tag:*)"
+      "Bash(git tag:*)",
+      "Bash(gh issue *)",
+      "Bash(docker exec *)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\Nicho\\\\Documents\\\\task-board\" -Recurse -Directory)",
+      "Bash(Select-Object -First 30 FullName)",
+      "WebFetch(domain:docs.github.com)",
+      "WebFetch(domain:developer.atlassian.com)",
+      "WebFetch(domain:support.atlassian.com)"
     ]
   }
 }

@@ -85,6 +85,12 @@ public sealed record EstimationConfig(
     string FieldName = "Estimate",
     List<int>? Scale = null);
 
+public sealed record DependencyPolicy(
+    bool Enabled = false,
+    List<string>? EnforcedStates = null,
+    List<string>? SatisfiedColumns = null,
+    bool CommentOnBlocked = true);
+
 public sealed record WorkflowConfig(
     Dictionary<string, WorkflowState> States,
     Dictionary<string, WorkflowRole> Roles,
@@ -92,7 +98,8 @@ public sealed record WorkflowConfig(
     MergeResolutionConfig? MergeResolution = null,
     EstimationConfig? Estimation = null,
     Dictionary<string, CardTypeDefinition>? CardTypes = null,
-    string? CardTypeField = null)
+    string? CardTypeField = null,
+    DependencyPolicy? DependencyPolicy = null)
 {
     /// <summary>
     /// The directory containing the workflow config file. Set after deserialization.

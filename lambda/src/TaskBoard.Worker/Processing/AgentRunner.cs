@@ -24,7 +24,8 @@ public sealed partial class AgentRunner(
     ShutdownCoordinator? shutdownCoordinator = null,
     CandidateExecutor? candidateExecutor = null,
     RerunPreambleBuilder? rerunPreambleBuilder = null,
-    IResourcePool? resourcePool = null)
+    IResourcePool? resourcePool = null,
+    DependencyGuard? dependencyGuard = null)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
 
@@ -90,6 +91,19 @@ public sealed partial class AgentRunner(
                     state.Name, step.Name, step.Role);
                 return new AgentRunResult(AgentOutcome.ERROR,
                     $"Step '{step.Name}' references missing role '{step.Role}' in state {state.Name}");
+            }
+        }
+
+        if (dependencyGuard is not null)
+        {
+            var dependencyResult = await dependencyGuard.CheckAsync(
+                targetCard, state, "agent", cancellationToken);
+            if (dependencyResult.IsBlocked)
+            {
+                var blockers = string.Join(", ", dependencyResult.UnresolvedBlockers.Select(b => $"#{b.CardId}"));
+                return new AgentRunResult(
+                    AgentOutcome.NEEDS_INFO,
+                    $"Card is blocked by unresolved dependencies: {blockers}");
             }
         }
 

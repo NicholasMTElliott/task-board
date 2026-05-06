@@ -20,6 +20,7 @@ A single founder/operator can place a card in a "Ready for" column on their kanb
 - Git worktree isolation for agent execution
 - Gate checks after design, implementation, and test steps
 - Optional specialist-reviewer steps triggered by gate checks
+- Blocking dependencies between tickets; blocked cards are skipped/refused until blockers are satisfied
 - Single board, single operator
 
 ### Out of Scope (v1)

@@ -20,8 +20,12 @@ public sealed class UpdateFileProcessor(
     ITaskBoardClient boardClient,
     WorkflowConfig workflowConfig,
     AgentIdentity agentIdentity,
-    ILogger<UpdateFileProcessor> logger)
+    ILogger<UpdateFileProcessor> logger,
+    ICardDependencyClient? dependencyClient = null)
 {
+    private readonly ICardDependencyClient _dependencyClient =
+        dependencyClient ?? NullCardDependencyClient.Instance;
+
     internal const string UpdatesRelativePath = ".aiboard/updates";
 
     private static readonly Regex NewTicketPattern =
@@ -53,6 +57,7 @@ public sealed class UpdateFileProcessor(
         if (files.Length == 0)
             return UpdateProcessingResult.Empty;
 
+        var newTicketFiles = new List<(string FilePath, string Slug)>();
         var createdTickets = new List<CreatedTicketInfo>();
         var postedComments = new List<CrossCardCommentInfo>();
         string? referenceContent = null;
@@ -66,11 +71,7 @@ public sealed class UpdateFileProcessor(
                 var newTicketMatch = NewTicketPattern.Match(fileName);
                 if (newTicketMatch.Success)
                 {
-                    var result = await ProcessNewTicketFileAsync(
-                        filePath, newTicketMatch.Groups[1].Value,
-                        sourceCardId, stepName, currentSourceComments, generationConfig, cancellationToken);
-                    if (result is not null)
-                        createdTickets.Add(result);
+                    newTicketFiles.Add((filePath, newTicketMatch.Groups[1].Value));
                     continue;
                 }
 
@@ -104,14 +105,76 @@ public sealed class UpdateFileProcessor(
             }
         }
 
+        if (newTicketFiles.Count > 0)
+        {
+            var results = await ProcessNewTicketFilesAsync(
+                newTicketFiles, sourceCardId, currentSourceComments, generationConfig, cancellationToken);
+            createdTickets.AddRange(results);
+        }
+
         return new UpdateProcessingResult(createdTickets, postedComments, referenceContent);
     }
 
-    private async Task<CreatedTicketInfo?> ProcessNewTicketFileAsync(
+    private async Task<IReadOnlyList<CreatedTicketInfo>> ProcessNewTicketFilesAsync(
+        IReadOnlyList<(string FilePath, string Slug)> files,
+        string sourceCardId,
+        IReadOnlyList<CardComment> currentComments,
+        GenerationConfig? generationConfig,
+        CancellationToken ct)
+    {
+        var pending = new List<PendingTicketCreation>();
+        foreach (var (filePath, slug) in files)
+        {
+            var parsed = await PrepareNewTicketFileAsync(
+                filePath, slug, sourceCardId, currentComments, generationConfig, ct);
+            if (parsed is not null)
+                pending.Add(parsed);
+        }
+
+        var created = new List<CreatedTicketWithDependencies>();
+        foreach (var p in pending)
+        {
+            try
+            {
+                var newCardId = await boardClient.CreateCardAsync(p.Request, ct);
+                logger.LogInformation(
+                    "Created card #{NewCardId} '{Title}' from update file '{Slug}' (parent={Parent}, type={Type}, column={Column})",
+                    newCardId, p.Parsed.Title, p.Slug,
+                    p.Request.ParentCardId ?? "(none)", p.Request.CardType ?? "(none)",
+                    p.Request.TargetColumn ?? "(none)");
+
+                if (generationConfig is null)
+                {
+                    var dedupMarker = $"<!-- agent-created-ticket:{p.Slug} -->";
+                    var commentBody = $"**{agentIdentity.DisplayName}** created #{newCardId}: {p.Parsed.Title}";
+                    await boardClient.UpsertAgentCommentAsync(sourceCardId, commentBody, dedupMarker, ct);
+                }
+
+                File.Delete(p.FilePath);
+
+                double? estimateValue = null;
+                if (p.Parsed.Estimate is not null && double.TryParse(p.Parsed.Estimate, CultureInfo.InvariantCulture, out var ev))
+                    estimateValue = ev;
+
+                created.Add(new CreatedTicketWithDependencies(
+                    new CreatedTicketInfo(newCardId, p.Parsed.Title, p.Slug, estimateValue),
+                    p.Parsed.BlockedBy ?? [],
+                    p.Parsed.Blocks ?? []));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to create card from update file {File}", Path.GetFileName(p.FilePath));
+            }
+        }
+
+        await ApplyDependencyLinksAsync(sourceCardId, created, ct);
+        return created.Select(c => c.Info).ToList();
+    }
+
+    private async Task<PendingTicketCreation?> PrepareNewTicketFileAsync(
         string filePath,
         string slug,
         string sourceCardId,
-        string stepName,
         IReadOnlyList<CardComment> currentComments,
         GenerationConfig? generationConfig,
         CancellationToken ct)
@@ -208,30 +271,7 @@ public sealed class UpdateFileProcessor(
             TargetColumn: targetColumn,
             FieldValues: fieldValues);
 
-        var newCardId = await boardClient.CreateCardAsync(request, ct);
-        logger.LogInformation(
-            "Created card #{NewCardId} '{Title}' from update file '{Slug}' (parent={Parent}, type={Type}, column={Column})",
-            newCardId, parsed.Title, slug,
-            parentId ?? "(none)", typeLabel ?? "(none)", targetColumn ?? "(none)");
-
-        // Post notification comment on the source card with dedup marker (skip for structured
-        // generation — the task list in the parent body already tracks the relationship)
-        if (generationConfig is null)
-        {
-            var dedupMarker = $"<!-- agent-created-ticket:{slug} -->";
-            var commentBody = $"**{agentIdentity.DisplayName}** created #{newCardId}: {parsed.Title}";
-            await boardClient.UpsertAgentCommentAsync(sourceCardId, commentBody, dedupMarker, ct);
-        }
-
-        // Delete processed file
-        File.Delete(filePath);
-
-        // Parse estimate as double for aggregation
-        double? estimateValue = null;
-        if (parsed.Estimate is not null && double.TryParse(parsed.Estimate, CultureInfo.InvariantCulture, out var ev))
-            estimateValue = ev;
-
-        return new CreatedTicketInfo(newCardId, parsed.Title, slug, estimateValue);
+        return new PendingTicketCreation(filePath, slug, parsed, request);
     }
 
     private async Task<CrossCardCommentInfo?> ProcessCommentFileAsync(
@@ -262,6 +302,107 @@ public sealed class UpdateFileProcessor(
 
         File.Delete(filePath);
         return new CrossCardCommentInfo(targetCardId, Path.GetFileName(filePath));
+    }
+
+    private async Task ApplyDependencyLinksAsync(
+        string sourceCardId,
+        IReadOnlyList<CreatedTicketWithDependencies> created,
+        CancellationToken ct)
+    {
+        if (created.Count == 0)
+            return;
+
+        var slugToId = created.ToDictionary(c => c.Info.Slug, c => c.Info.NewCardId, StringComparer.OrdinalIgnoreCase);
+        var plannedEdges = new HashSet<(string Blocked, string Blocker)>();
+
+        foreach (var item in created)
+        {
+            foreach (var depRef in item.BlockedBy)
+            {
+                var blockerId = ResolveDependencyRef(depRef, sourceCardId, slugToId);
+                if (blockerId is null)
+                {
+                    logger.LogWarning(
+                        "Skipping dependency for created card #{CardId}: could not resolve blockedBy '{Ref}'",
+                        item.Info.NewCardId, depRef);
+                    continue;
+                }
+
+                await TryAddDependencyAsync(item.Info.NewCardId, blockerId, plannedEdges, ct);
+            }
+
+            foreach (var depRef in item.Blocks)
+            {
+                var blockedId = ResolveDependencyRef(depRef, sourceCardId, slugToId);
+                if (blockedId is null)
+                {
+                    logger.LogWarning(
+                        "Skipping dependency for created card #{CardId}: could not resolve blocks '{Ref}'",
+                        item.Info.NewCardId, depRef);
+                    continue;
+                }
+
+                await TryAddDependencyAsync(blockedId, item.Info.NewCardId, plannedEdges, ct);
+            }
+        }
+    }
+
+    private async Task TryAddDependencyAsync(
+        string blockedCardId,
+        string blockerCardId,
+        HashSet<(string Blocked, string Blocker)> plannedEdges,
+        CancellationToken ct)
+    {
+        if (string.Equals(blockedCardId, blockerCardId, StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogWarning("Skipping self-dependency on card #{CardId}", blockedCardId);
+            return;
+        }
+
+        var edge = (blockedCardId, blockerCardId);
+        if (plannedEdges.Contains((blockerCardId, blockedCardId)))
+        {
+            logger.LogWarning(
+                "Skipping dependency #{Blocked} blocked by #{Blocker}: would create a simple cycle",
+                blockedCardId, blockerCardId);
+            return;
+        }
+
+        if (!plannedEdges.Add(edge))
+            return;
+
+        try
+        {
+            await _dependencyClient.AddBlockedByAsync(blockedCardId, blockerCardId, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Failed to add dependency #{Blocked} blocked by #{Blocker}",
+                blockedCardId, blockerCardId);
+        }
+    }
+
+    private static string? ResolveDependencyRef(
+        string raw,
+        string sourceCardId,
+        IReadOnlyDictionary<string, string> slugToId)
+    {
+        var value = raw.Trim().Trim('"', '\'');
+        if (value.Length == 0)
+            return null;
+
+        if (string.Equals(value, "current", StringComparison.OrdinalIgnoreCase))
+            return sourceCardId;
+
+        if (value.StartsWith('#'))
+            value = value[1..].Trim();
+
+        if (value.All(char.IsAsciiDigit))
+            return value;
+
+        return slugToId.TryGetValue(value, out var cardId) ? cardId : null;
     }
 
     /// <summary>
@@ -380,6 +521,8 @@ public sealed class UpdateFileProcessor(
         string? parent = null;
         string? targetColumn = null;
         string? estimate = null;
+        var blockedBy = new List<string>();
+        var blocks = new List<string>();
         string body;
 
         if (trimmed.StartsWith("---", StringComparison.Ordinal))
@@ -397,19 +540,60 @@ public sealed class UpdateFileProcessor(
             var frontMatter = trimmed[3..endIdx];
             body = trimmed[(endIdx + 4)..].TrimStart('\n', '\r');
 
+            string? listKey = null;
             foreach (var line in frontMatter.Split('\n'))
             {
                 var l = line.Trim();
                 if (l.StartsWith("title:", StringComparison.OrdinalIgnoreCase))
+                {
                     title = l["title:".Length..].Trim().Trim('"', '\'');
+                    listKey = null;
+                }
                 else if (l.StartsWith("type:", StringComparison.OrdinalIgnoreCase))
+                {
                     type = l["type:".Length..].Trim().Trim('"', '\'');
+                    listKey = null;
+                }
                 else if (l.StartsWith("parent:", StringComparison.OrdinalIgnoreCase))
+                {
                     parent = l["parent:".Length..].Trim().Trim('"', '\'');
+                    listKey = null;
+                }
                 else if (l.StartsWith("targetColumn:", StringComparison.OrdinalIgnoreCase))
+                {
                     targetColumn = l["targetColumn:".Length..].Trim().Trim('"', '\'');
+                    listKey = null;
+                }
                 else if (l.StartsWith("estimate:", StringComparison.OrdinalIgnoreCase))
+                {
                     estimate = l["estimate:".Length..].Trim().Trim('"', '\'');
+                    listKey = null;
+                }
+                else if (l.StartsWith("blockedBy:", StringComparison.OrdinalIgnoreCase))
+                {
+                    listKey = "blockedBy";
+                    AddInlineListValues(l["blockedBy:".Length..], blockedBy);
+                }
+                else if (l.StartsWith("blocks:", StringComparison.OrdinalIgnoreCase))
+                {
+                    listKey = "blocks";
+                    AddInlineListValues(l["blocks:".Length..], blocks);
+                }
+                else if (l.StartsWith("- ", StringComparison.Ordinal) && listKey is not null)
+                {
+                    var value = l[2..].Trim().Trim('"', '\'');
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        if (listKey == "blockedBy")
+                            blockedBy.Add(value);
+                        else
+                            blocks.Add(value);
+                    }
+                }
+                else if (l.Length > 0)
+                {
+                    listKey = null;
+                }
             }
         }
         else
@@ -421,7 +605,27 @@ public sealed class UpdateFileProcessor(
 
         return string.IsNullOrWhiteSpace(title)
             ? null
-            : new ParsedNewTicket(title, body, type, parent, targetColumn, estimate);
+            : new ParsedNewTicket(title, body, type, parent, targetColumn, estimate, blockedBy, blocks);
+    }
+
+    private static void AddInlineListValues(string raw, List<string> target)
+    {
+        var value = raw.Trim();
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+
+        if (value.StartsWith('[') && value.EndsWith(']'))
+        {
+            foreach (var part in value[1..^1].Split(',', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var item = part.Trim().Trim('"', '\'');
+                if (!string.IsNullOrWhiteSpace(item))
+                    target.Add(item);
+            }
+            return;
+        }
+
+        target.Add(value.Trim('"', '\''));
     }
 
     private static string? ExtractTitleFromBody(string body)
@@ -488,4 +692,17 @@ internal sealed record ParsedNewTicket(
     string? Type = null,
     string? Parent = null,
     string? TargetColumn = null,
-    string? Estimate = null);
+    string? Estimate = null,
+    IReadOnlyList<string>? BlockedBy = null,
+    IReadOnlyList<string>? Blocks = null);
+
+internal sealed record PendingTicketCreation(
+    string FilePath,
+    string Slug,
+    ParsedNewTicket Parsed,
+    CreateCardRequest Request);
+
+internal sealed record CreatedTicketWithDependencies(
+    CreatedTicketInfo Info,
+    IReadOnlyList<string> BlockedBy,
+    IReadOnlyList<string> Blocks);

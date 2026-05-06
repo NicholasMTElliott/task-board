@@ -11,7 +11,8 @@ public sealed class PollingRunner(
     WorkflowConfig workflowConfig,
     IAgentExecutorResolver executorResolver,
     ILogger<PollingRunner> logger,
-    ShutdownCoordinator? shutdownCoordinator = null)
+    ShutdownCoordinator? shutdownCoordinator = null,
+    DependencyGuard? dependencyGuard = null)
 {
     // Adaptive polling constants
     private const int MaxConsecutiveIdleCycles = 10;   // idle stretch before hitting max delay
@@ -50,7 +51,7 @@ public sealed class PollingRunner(
             try
             {
                 var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalColumnNames());
-                var selectionResult = CardSelector.SelectNext(cards, workflowConfig, executorResolver.AvailableProviders);
+                var selectionResult = CardSelector.SelectAll(cards, workflowConfig, executorResolver.AvailableProviders);
 
                 foreach (var skipped in selectionResult.SkippedDueToProviders)
                 {
@@ -60,7 +61,33 @@ public sealed class PollingRunner(
                         string.Join(", ", skipped.MissingProviders));
                 }
 
-                var selected = selectionResult.Selected;
+                BoardCard? selected = null;
+                if (dependencyGuard is null)
+                {
+                    selected = selectionResult.Eligible.FirstOrDefault();
+                }
+                else
+                {
+                    foreach (var candidate in selectionResult.Eligible)
+                    {
+                        var candidateState = workflowConfig.ResolveState(candidate);
+                        if (candidateState is null)
+                            continue;
+
+                        var dependencyResult = await dependencyGuard.CheckAsync(
+                            candidate, candidateState, "polling", cancellationToken);
+                        if (!dependencyResult.IsBlocked)
+                        {
+                            selected = candidate;
+                            break;
+                        }
+
+                        logger.LogInformation(
+                            "Skipping blocked card {CardId} ({Title}); unresolved blockers: {Blockers}",
+                            candidate.Id, candidate.Title,
+                            string.Join(", ", dependencyResult.UnresolvedBlockers.Select(b => $"#{b.CardId}")));
+                    }
+                }
 
                 if (selected is null)
                 {

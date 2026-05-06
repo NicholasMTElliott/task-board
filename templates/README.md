@@ -25,7 +25,7 @@ Each state runs **one agent per step** (no candidate-evaluation fan-out). The pr
 ## What's deliberately not in these templates
 
 - **Multi-candidate evaluation.** Useful for benchmarking models head-to-head but expensive. Add `candidates` + `evaluator` per step manually if you want it. See `docs/CandidateEvaluation.md`.
-- **Story decomposition (Tasking).** The KvA pipeline doesn't include a Ready-for-Tasking phase. If you want stories to spawn child tasks automatically, add a Tasking state with `generationConfig` — see `workflow.github.example.json` (the column-per-state legacy template).
+- **Story decomposition (Tasking).** The KvA pipeline doesn't include a Ready-for-Tasking phase. If you want stories to spawn child tasks automatically (parent story → children → roll-up estimate / event-driven completion), see `workflow.story-decomposition.example.json` next to `aiboard.exe` for a complete worked pipeline. Diff it against your current `workflow.json` and merge the Tasking + Waiting-for-Tasks states, the `cardTypes` block, the `updateParentSum` / `completeParentIfReady` transition actions, and the type-label filters.
 - **Trello.** All three from-scratch templates assume GitHub Projects. Trello operators should hand-author or extend.
 
 ## Canonical `.gitignore` for `.aiboard/`
@@ -57,18 +57,18 @@ If you renamed the workflow file (e.g. `workflow.github.json`), add a matching `
 A Claude Code skill (`skills/aiboard/SKILL.md`, bundled next to `aiboard.exe`) wraps these templates plus the `init` / `scaffold-board` / `diagnose` / `validation` modes in a slash command. Install it once via:
 
 ```bash
-mkdir -p ~/.claude/skills/aiboard
-cp -r skills/aiboard/* ~/.claude/skills/aiboard/
+aiboard --install
 ```
 
-Then `/aiboard` in any Claude Code conversation routes you through "no `.aiboard/` yet → init", "card stuck → diagnose", "set up board fields → scaffold-board", etc., without needing to memorise CLI flags. See `skills/README.md` for details.
+This copies every bundled skill into `~/.claude/skills/<name>/`. Idempotent — re-run after a new aiboard release to upgrade in place. Then `/aiboard` in any Claude Code conversation routes you through "no `.aiboard/` yet → init", "card stuck → diagnose", "set up board fields → scaffold-board", etc., without needing to memorise CLI flags. See `skills/README.md` for details (including manual install fallbacks).
 
 ## Comparing to the legacy templates
 
 The repo also ships:
 
 - `workflow.github.example.json` — column-per-state shape (one column per workflow state). Use this when you're integrating with an existing GitHub Projects board that already has a column-per-state layout.
-- `workflow.simple.example.json` — small example demonstrating shared-column multi-phase workflows for documentation.
+- `workflow.simple.example.json` — minimal shared-column example (five SDLC phases all on a single `Ready` column, disambiguated by an `Activity` field plus `assignee isEmpty` lock). Same pattern the from-scratch templates use, trimmed to the essentials for reading.
+- `workflow.story-decomposition.example.json` — adds parent-story → child-task decomposition (`generationConfig`, `updateParentSum`, `completeParentIfReady`, type-label filters). Diff against your existing `workflow.json` and merge the decomposition states.
 - `workflow.v1.json` — Trello-flavored legacy reference.
 
 These remain available for reference; new projects should prefer the `from-scratch-*` templates above.

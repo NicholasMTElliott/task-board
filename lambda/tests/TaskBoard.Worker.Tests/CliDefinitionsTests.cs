@@ -268,4 +268,44 @@ public class CliDefinitionsTests
         var report = CliDefinitions.ValidateKnownFlags(["--mode", "polling", "--unsafe=true"]);
         Assert.Empty(report.UnknownFlags);
     }
+
+    // ── --install flag ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void SwitchMappings_InstallFlag_MapsToInstallKey()
+    {
+        Assert.True(CliDefinitions.SwitchMappings.ContainsKey("--install"));
+        Assert.Equal("Install", CliDefinitions.SwitchMappings["--install"]);
+    }
+
+    [Fact]
+    public void BareBooleanFlags_IncludesInstall()
+    {
+        Assert.Contains("--install", CliDefinitions.BareBooleanFlags);
+    }
+
+    [Fact]
+    public void NormalizeBareBooleanFlags_BareInstall_RewrittenToTrue()
+    {
+        var input = new[] { "--install" };
+        var result = CliDefinitions.NormalizeBareBooleanFlags(input);
+        Assert.Equal("--install=true", result[0]);
+    }
+
+    [Fact]
+    public void NormalizeBareBooleanFlags_InstallWithMode_BothPreserved()
+    {
+        var input = new[] { "--install", "--mode", "polling" };
+        var result = CliDefinitions.NormalizeBareBooleanFlags(input);
+        Assert.Equal("--install=true", result[0]);
+        Assert.Equal("--mode", result[1]);
+        Assert.Equal("polling", result[2]);
+    }
+
+    [Fact]
+    public void ValidateKnownFlags_BareInstall_NotRejected()
+    {
+        var report = CliDefinitions.ValidateKnownFlags(["--install"]);
+        Assert.Empty(report.UnknownFlags);
+    }
 }

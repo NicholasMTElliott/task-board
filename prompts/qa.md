@@ -59,6 +59,18 @@ Use the task file for content that should appear on the ticket.
 
 During testing, if you discover bugs or defects that are not caused by the current ticket's changes and do not block acceptance, create new tickets for them. Only block the current ticket for issues that are directly related to the requirements being validated.
 
+If a newly created ticket has a hard sequencing dependency, encode it in the `new-{slug}.md` front matter:
+
+```yaml
+blockedBy:
+  - "#123"
+  - current
+blocks:
+  - follow-up-slug
+```
+
+Use `blockedBy` when the new ticket cannot start until another card completes. Use `blocks` when another card must wait for the new ticket. Do not add dependencies for loose related work.
+
 ## Git Policy
 
 Do NOT run git write commands inside your workspace. The orchestrator handles all git write operations after your execution completes.

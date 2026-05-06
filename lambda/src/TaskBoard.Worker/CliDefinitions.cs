@@ -31,6 +31,12 @@ internal static class CliDefinitions
         // docker-* providers are usable.
         ["--unsafe"] = "Unsafe",
 
+        // Install mode: copy bundled Claude Code skills into ~/.claude/skills/.
+        // Runs first when set; if no other mode is requested, exits cleanly.
+        // When combined with --mode <X>, installs the skill then continues to
+        // the requested mode.
+        ["--install"] = "Install",
+
         // General
         ["--board-provider"] = "BoardProvider",
         ["--agent-executor"] = "AgentExecutor",
@@ -106,6 +112,7 @@ internal static class CliDefinitions
             "--non-interactive",
             "--apply",
             "--unsafe",
+            "--install",
         };
 
     /// <summary>
@@ -210,6 +217,7 @@ internal static class CliDefinitions
         Console.WriteLine("  aiboard --mode validation --board-id 1     (read-only check of workflow vs. board)");
         Console.WriteLine("  aiboard --mode diagnose --card-id 3        (explain why a card isn't being picked up)");
         Console.WriteLine("  aiboard --mode scaffold-board --board-id 1 [--apply]   (create missing fields/labels)");
+        Console.WriteLine("  aiboard --install                            (install bundled Claude Code skill(s) into ~/.claude/skills/)");
         Console.WriteLine("  aiboard --config project-a.json --mode polling");
         Console.WriteLine("  aiboard                               (uses ./.aiboard/appsettings.json + ./.aiboard/workflow.json)");
         Console.WriteLine();
@@ -244,6 +252,7 @@ internal static class CliDefinitions
             ("--worktree-base <path>",    "Base path for git worktrees",                       null),
             ("--poll-interval <secs>",    "Base polling interval in seconds (adaptive backoff scales up on idle/error)", "120"),
             ("--unsafe",                  "Allow host CLI agents (claude-cli, codex) which bypass the Docker sandbox. Off by default — sandboxed (docker-*) agents only.", "off"),
+            ("--install",                 "Install bundled Claude Code skill(s) into ~/.claude/skills/. Runs before any mode dispatch. Combine with --mode <X> to install + continue, or use alone to install + exit.", "off"),
         ], pad);
 
         WriteSection("GitHub Projects", [

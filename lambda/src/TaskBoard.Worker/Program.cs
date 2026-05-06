@@ -118,6 +118,40 @@ configSources.Add($"  cli    command-line arguments  [{(args.Length == 0 ? "none
     }
 }
 
+// ── --install: install bundled Claude Code skills (early, before host build) ─
+// Runs first when --install is set so `aiboard --install --mode <X>` installs
+// the skill and then continues with the requested mode. When --install is the
+// only argument (no Mode resolved from merged config), exits cleanly with 0.
+// On failure, exits with the runner's non-zero exit code without continuing.
+{
+    var installRequested = string.Equals(
+        builder.Configuration["Install"]?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+    if (installRequested)
+    {
+        using var installLoggerFactory = LoggerFactory.Create(b => b.AddSimpleConsole(o =>
+        {
+            o.SingleLine = true;
+            o.TimestampFormat = "HH:mm:ss ";
+        }));
+        var installLogger = installLoggerFactory.CreateLogger("Install");
+        var installRunner = new InstallRunner(installLogger);
+        var installExit = await installRunner.RunAsync(CancellationToken.None);
+        if (installExit != 0)
+        {
+            Environment.ExitCode = installExit;
+            return;
+        }
+
+        // Standalone install (no --mode resolved from any config layer) → exit
+        // cleanly. Otherwise fall through and continue with the requested mode.
+        var requestedMode = builder.Configuration["Mode"]?.Trim();
+        if (string.IsNullOrEmpty(requestedMode))
+        {
+            return;
+        }
+    }
+}
+
 // ── Mode: init (early bail-out before host build) ────────────────────────────
 // Init scaffolds .aiboard/ in the cwd and exits. Runs before WorkflowConfig is
 // registered (no workflow.json yet) and before provider/executor probing (no
@@ -247,6 +281,7 @@ switch (boardProvider)
         builder.Services.Configure<GitHubProjectsOptions>(builder.Configuration.GetSection(GitHubProjectsOptions.SectionName));
         builder.Services.AddSingleton<ITaskBoardClient, GitHubProjectsClient>();
         builder.Services.AddSingleton<ICrossReferenceResolver, GitHubCrossReferenceResolver>();
+        builder.Services.AddSingleton<ICardDependencyClient, GitHubIssueDependencyClient>();
         builder.Services.AddSingleton<IBoardShapeProbe, GitHubProjectShapeProbe>();
         builder.Services.AddSingleton<IBoardShapeApplier, GitHubProjectShapeApplier>();
         break;
@@ -257,6 +292,7 @@ switch (boardProvider)
 }
 
 // Default probe for providers without a dedicated implementation (stub, trello)
+builder.Services.TryAddSingleton<ICardDependencyClient>(NullCardDependencyClient.Instance);
 builder.Services.TryAddSingleton<IBoardShapeProbe, NullBoardShapeProbe>();
 builder.Services.TryAddSingleton<IBoardShapeApplier, NullBoardShapeApplier>();
 
@@ -577,6 +613,7 @@ builder.Services.AddSingleton<RerunPreambleBuilder>();
 builder.Services.Configure<ResourcePoolOptions>(
     builder.Configuration.GetSection(ResourcePoolOptions.SectionName));
 builder.Services.AddSingleton<IResourcePool, ResourcePool>();
+builder.Services.AddSingleton<DependencyGuard>();
 builder.Services.AddSingleton<CandidateExecutor>();
 builder.Services.AddSingleton<AgentRunner>();
 builder.Services.AddSingleton<MergeRunner>();
@@ -589,6 +626,7 @@ if (!string.IsNullOrWhiteSpace(dbConnectionString))
 {
     builder.Services.AddSingleton(NpgsqlDataSource.Create(dbConnectionString));
     builder.Services.AddSingleton<IRunStore, PgRunStore>();
+    builder.Services.AddSingleton<IDependencyWaitStore, PgDependencyWaitStore>();
     builder.Services.AddSingleton<IMetricsStore, PgMetricsStore>();
     builder.Services.AddSingleton<MetricsRunner>();
     builder.Services.Configure<PgmqOptions>(builder.Configuration.GetSection(PgmqOptions.SectionName));
@@ -599,6 +637,7 @@ if (!string.IsNullOrWhiteSpace(dbConnectionString))
 else
 {
     builder.Services.AddSingleton<IRunStore>(NullRunStore.Instance);
+    builder.Services.AddSingleton<IDependencyWaitStore>(NullDependencyWaitStore.Instance);
     builder.Services.AddSingleton<IMetricsStore>(NullMetricsStore.Instance);
     builder.Services.AddSingleton<MetricsRunner>();
 }

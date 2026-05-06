@@ -357,6 +357,34 @@ public static class WorkflowConfigValidator
             }
         }
 
+        if (config.DependencyPolicy is { } dep)
+        {
+            if (dep.EnforcedStates is { Count: > 0 })
+            {
+                foreach (var stateName in dep.EnforcedStates)
+                {
+                    if (!config.States.Any(kvp =>
+                            string.Equals(kvp.Value.Name, stateName, StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(config.GetEffectiveColumn(kvp.Key), stateName, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        errors.Add($"dependencyPolicy.enforcedStates contains '{stateName}' which is not a workflow state name or effective column.");
+                    }
+                }
+            }
+
+            if (dep.SatisfiedColumns is { Count: > 0 })
+            {
+                foreach (var column in dep.SatisfiedColumns)
+                {
+                    if (!config.States.Keys.Any(k =>
+                            string.Equals(config.GetEffectiveColumn(k), column, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        errors.Add($"dependencyPolicy.satisfiedColumns contains '{column}' which is not a known effective column.");
+                    }
+                }
+            }
+        }
+
         if (validatePolling)
             ValidatePollingConfig(config, errors);
 

@@ -275,6 +275,7 @@ The workflow file maps board columns to roles, prompts, and transition actions. 
   "mergeResolution": { "role": "merge_resolver", "providerParams": { "effort": "medium" } },
   "polling":         { "priorityFieldName": "priority", "priorityOrder": ["P0", "P1", "P2"] },
   "estimation":      { "calibrationTicketId": "34", "calibrationSize": 1, "fieldName": "Estimate", "scale": [1, 2, 4, 8] },
+  "dependencyPolicy": { "enabled": false, "enforcedStates": ["Ready for Implementation", "Ready for Test", "Approved"], "satisfiedColumns": ["Done"], "commentOnBlocked": true },
   "cardTypes":       { "<typeKey>": { /* card type definition */ } },
   "cardTypeField":   "Type"   // optional: project field that holds card type (alternative to labels)
 }
@@ -286,8 +287,9 @@ The workflow file maps board columns to roles, prompts, and transition actions. 
 {
   "name": "Ready for Design",
   "column": "Ready for Design",                  // optional; defaults to state key
-  "filters": [                                   // optional; required if multiple states share a column
-    { "field": "Activity", "values": ["Design"] }
+  "filters": [                                   // optional; required if multiple states share a column. AND-combined. See schema below.
+    { "type": "field",    "operator": "equals",  "field": "Activity", "value": "Design" },
+    { "type": "assignee", "operator": "isEmpty" }
   ],
   "gateType": "agent_run",                       // see enum below
   "gitBehavior": "discard",                      // discard | commit_only | commit_and_push
@@ -321,6 +323,21 @@ The workflow file maps board columns to roles, prompts, and transition actions. 
 | `discard` | Worktree changes are dropped after the run (design / test). |
 | `commit_only` | Orchestrator commits but does not push. |
 | `commit_and_push` | Orchestrator commits and pushes the work branch (implementation states). |
+
+**Filter schema** (`filters[]` entries are AND-combined; only evaluated in polling mode):
+
+| `type` | Valid operators | Required fields | Example |
+|---|---|---|---|
+| `field` | `equals`, `notEquals`, `isEmpty`, `isNotEmpty` | `field`, `value` (omit `value` for `isEmpty` / `isNotEmpty`) | `{ "type": "field", "operator": "equals", "field": "Activity", "value": "Design" }` |
+| `assignee` | `equals`, `notEquals`, `isEmpty`, `isNotEmpty` | `value` for `equals` / `notEquals`; none for `isEmpty` / `isNotEmpty` | `{ "type": "assignee", "operator": "isEmpty" }` |
+| `label` | `exists`, `notExists` | `value` (label name) | `{ "type": "label", "operator": "exists", "value": "type:story" }` |
+
+Common patterns:
+- **Activity-discriminated shared columns** — five workflow states all on a `Ready` column, each with `{ "type": "field", "operator": "equals", "field": "Activity", "value": "<phase>" }`. The `Activity` field is updated in COMPLETE transitions to advance the card to the next phase without moving columns.
+- **Assignment-as-WIP-lock** — pair the discriminator filter with `{ "type": "assignee", "operator": "isEmpty" }`, and assign+unassign the agent in IN_PROGRESS / COMPLETE transitions (see §6.5). This prevents two pollers from picking up the same card. The board's filtered view treats "assigned" as in-flight.
+- **Label-gated specialist behavior** — `{ "type": "label", "operator": "exists", "value": "needs-security-review" }` on a state that only fires when an operator manually applies the label.
+
+Direct agent mode (`--mode agent --card-id N`) does not apply filters; use the `--state` flag to pick a specific state when multiple share a column.
 
 ### 6.2 Step definition (within `steps[]`)
 
@@ -408,11 +425,26 @@ A transition value is **either a string** (column name) or an **array of actions
 
 | `type` | Required fields | Effect |
 |---|---|---|
-| `moveToColumn` | `value` (column name) | Move the card. |
+| `moveToColumn` | `value` (column name) | Move the card. **Strict** — failures abort the transition (state-machine integrity). |
 | `setField` | `field`, `value` (supports `{{templateVar}}`) | Set a project field. Skipped with a warning if templates unresolved. |
 | `clearField` | `field` | Clear a project field. |
-| `updateParentSum` | `field` | If card has a parent (via `trackedInIssues`), recompute parent's `field` as the sum across `sub_item` children. |
-| `completeParentIfReady` | (none) | If card's parent has all siblings in terminal states, fire the parent's COMPLETE transition; otherwise upsert a progress comment on the parent. |
+| `assign` | `value` (username; supports `{{agent}}`) | Assign the card to a user. Common pattern: `{ "type": "assign", "value": "{{agent}}" }` in IN_PROGRESS to claim the card so other pollers skip it (paired with an `assignee isEmpty` filter — see §6.1). |
+| `unassign` | `value` (optional username; omit to remove all assignees) | Remove an assignee. Typical use: bare `{ "type": "unassign" }` in COMPLETE / ERROR / GATE_FAIL transitions to release the WIP lock. |
+| `addLabel` | `value` (label name) | Add a label to the card. The label must exist on the repo — `aiboard --mode scaffold-board` can pre-create labels referenced by transition actions. |
+| `removeLabel` | `value` (label name) | Remove a label. Symmetric with `addLabel`; `gh issue edit --remove-label` errors on unknown labels, so the label must already exist. |
+| `updateParentSum` | `field` | If card has a parent (via `trackedInIssues`), recompute parent's `field` as the sum across `sub_item` children. Used to roll up child estimates to the parent story. |
+| `completeParentIfReady` | (none) | If card's parent has all siblings in terminal states, fire the parent's COMPLETE transition; otherwise upsert a progress comment on the parent. Drives event-driven story completion when child tasks finish. |
+
+All actions except `moveToColumn` are **lenient** — failures are logged as warnings and execution continues to the next action.
+
+**Template variables in action `field` / `value`:**
+
+| Variable | Resolved to | Available in |
+|---|---|---|
+| `{{agent}}` | The authenticated board user (e.g. the bot's GitHub username), resolved once per agent run via the board client. Used to make the WIP-lock pattern portable across operator machines. | All transitions; resolves to empty string if the board client can't fetch the current user. |
+| `{{estimation}}` | The numeric estimate captured from the `estimator` role's structured output (`structured_output.estimate`). | Only in COMPLETE transitions of states that actually ran an `estimator` step. Unresolved → action skipped with a warning. |
+
+When templates resolve to placeholders the action can't use (e.g. unresolved `{{estimation}}` because no estimator step ran), `TransitionExecutor` skips the action with a warning rather than failing the transition.
 
 **Outcome keys** (which transition fires):
 
@@ -461,7 +493,18 @@ The `estimator` role sizes the ticket relative to the calibration. Use `{{estima
 - Set `cardTypeField: "Type"` at workflow root → cards' type is read from a project field instead (field-based). Both can coexist.
 - `allowedChildren` → enforces what a story can spawn via `generationConfig`.
 
-See `docs/CardTypesAndGeneration.md` for the full discriminator + `setFields` walkthrough.
+See `docs/CardTypesAndGeneration.md` for the full discriminator, `setFields`, and dependency-front-matter walkthrough.
+
+**End-to-end story-decomposition pipeline.** A complete worked example ships at the install root as `workflow.story-decomposition.example.json`. It demonstrates:
+
+- A `Ready for Tasking` state (story-only, label-filtered) running a `generate_tasks` step with `generationConfig` — the agent writes `new-{slug}.md` files to `.aiboard/updates/` and the orchestrator creates child task cards in `Ready for Design`, copying the parent's `priority` field and writing each child's `estimate` field.
+- Optional `blockedBy` / `blocks` front matter on `new-{slug}.md` files, so generated tasks with hard sequencing constraints are linked before polling picks them up.
+- A `Waiting for Tasks` holding state (story-only) where the parent sits while children proceed through their own pipelines.
+- `updateParentSum` on the design state's COMPLETE transition, so each child's refined estimate rolls up to the parent immediately.
+- `completeParentIfReady` on the task's terminal `Done` transition, so the parent automatically advances when the last sibling completes.
+- Label filters (`{ "type": "label", "operator": "exists", "value": "type:story" }` vs. `"type:task"`) to route stories and tasks to different states sharing the same column key.
+
+This file is a reference, not a template — `aiboard --mode init` doesn't scaffold from it. Operators wanting decomposition should diff it against the `from-scratch-*` templates and merge the relevant states / transitions / `cardTypes` block into their existing `workflow.json`.
 
 ### 6.9 Polling
 
@@ -866,6 +909,14 @@ your-project/                       # any number of projects can use the same in
 ```
 
 The project-local `.aiboard/` files override the install-directory `appsettings.json` silently. If `aiboard` is run from anywhere inside `your-project/`, the project's `.aiboard/` is loaded automatically.
+
+**Optional but recommended: install the bundled Claude Code skill once per machine.** The release ships a `/aiboard` slash-command skill at `{install-dir}/skills/aiboard/`. Installing it gives Claude Code the conversational routing layer (init / scaffold-board / diagnose / validation / agent / polling / metrics) on top of the CLI. Run once after extracting the release:
+
+```bash
+aiboard --install
+```
+
+This copies every bundled skill into `~/.claude/skills/<name>/` (user-scope — available in every Claude Code conversation on this machine). Idempotent: re-running after a new aiboard release upgrades the skill in place. Combine with another mode to do both at once: `aiboard --install --mode init` installs the skill then scaffolds the project's `.aiboard/`.
 
 ### 11.3 Create the project's `.aiboard/` directory
 

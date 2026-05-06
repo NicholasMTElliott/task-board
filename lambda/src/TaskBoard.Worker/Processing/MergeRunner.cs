@@ -11,7 +11,8 @@ public sealed class MergeRunner(
     AgentIdentity agentIdentity,
     ICrossReferenceResolver crossReferenceResolver,
     IAgentExecutorResolver executorResolver,
-    ILogger<MergeRunner> logger)
+    ILogger<MergeRunner> logger,
+    DependencyGuard? dependencyGuard = null)
 {
     private const int DefaultMaxRetries = 3;
 
@@ -51,6 +52,19 @@ public sealed class MergeRunner(
             logger.LogError("Card {CardId} is in state {State} with gateType {GateType}, expected system_merge",
                 cardId, state.Name, state.GateType);
             return new AgentRunResult(AgentOutcome.ERROR, $"State {state.Name} is not a system_merge state");
+        }
+
+        if (dependencyGuard is not null)
+        {
+            var dependencyResult = await dependencyGuard.CheckAsync(
+                card, state, "merge", cancellationToken);
+            if (dependencyResult.IsBlocked)
+            {
+                var blockers = string.Join(", ", dependencyResult.UnresolvedBlockers.Select(b => $"#{b.CardId}"));
+                return new AgentRunResult(
+                    AgentOutcome.NEEDS_INFO,
+                    $"Card is blocked by unresolved dependencies: {blockers}");
+            }
         }
 
         var maxRetries = ParseMaxRetries(state.ProviderParams);

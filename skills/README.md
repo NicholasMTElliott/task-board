@@ -12,7 +12,28 @@ This directory bundles a Claude Code skill that wraps the aiboard CLI. The skill
 
 Skills live under `~/.claude/skills/` (user scope, available everywhere) or `.claude/skills/` (project scope, only in that project's repo).
 
-User-scope install:
+### Recommended: `aiboard --install`
+
+The aiboard binary ships with an installer for the bundled skill(s):
+
+```bash
+aiboard --install
+```
+
+That copies every bundled skill (currently just `aiboard/`) from `{install-dir}/skills/<name>/` into `~/.claude/skills/<name>/` and prints a confirmation. Idempotent — re-running upgrades the skill in place after a new aiboard release. Operator-added files at the destination are preserved (the installer overwrites bundled files but never deletes anything outside the bundle).
+
+You can also combine with another mode to do both at once:
+
+```bash
+aiboard --install --mode init     # install skill, then scaffold .aiboard/
+aiboard --install --mode polling --board-id 4   # install skill, then start polling
+```
+
+After install, reload Claude Code. `/aiboard` should appear in the slash-command list.
+
+### Manual user-scope install
+
+If you'd rather copy by hand (or `aiboard` isn't on PATH yet):
 
 ```powershell
 # Windows PowerShell, from the aiboard distribution directory
@@ -27,14 +48,14 @@ mkdir -p ~/.claude/skills/aiboard
 cp -r ./skills/aiboard/* ~/.claude/skills/aiboard/
 ```
 
-Project-scope install (only that repo gets the skill):
+### Project-scope install (only that repo gets the skill)
 
 ```bash
 mkdir -p .claude/skills/aiboard
 cp -r /path/to/aiboard/skills/aiboard/* .claude/skills/aiboard/
 ```
 
-After install, reload Claude Code. `/aiboard` should appear in the slash-command list.
+The CLI installer only writes user-scope; project-scope is still a manual copy.
 
 ## What the skill does NOT do
 

@@ -76,6 +76,38 @@ Merge order into the final `CreateCardRequest.FieldValues` (later wins):
 
 Typical use: drop children directly into the right pipeline stage by stamping the stage-discriminator field (`Activity`, `Stage`, etc.) so the child is immediately picked up by the corresponding state's filter.
 
+## Adding dependencies when creating tickets
+
+Agents can declare hard sequencing constraints in any `new-*.md` ticket file. This works for structured story decomposition and for incidental tickets created during design, implementation, review, or QA.
+
+```markdown
+---
+title: Add API endpoints
+estimate: 2
+blockedBy:
+  - create-database
+  - "#123"
+blocks:
+  - follow-up-cleanup
+---
+
+## Context
+
+This task depends on the database task.
+```
+
+`blockedBy` means the new ticket cannot start until the referenced card is satisfied. `blocks` means the referenced card cannot start until the new ticket is satisfied.
+
+References may be:
+
+- A same-batch slug, such as `create-database`, matching another `new-create-database.md` file from the same step.
+- An existing ticket number, such as `#123` or `123`.
+- `current`, meaning the source card the agent is working on.
+
+Use dependencies only for hard sequencing. Do not use them for related context, preferred order, or "nice to do first" work.
+
+When `dependencyPolicy.enabled` is true, polling skips blocked cards and selects the next available card. Direct agent and merge runs refuse blocked cards before moving them to an in-progress state.
+
 ## Validation
 
 Run `--mode validation --board-id N` to cross-check the config against the live board:

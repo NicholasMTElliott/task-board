@@ -1,0 +1,288 @@
+{
+  "_comment": "Worked example of the full story-to-task decomposition pipeline. Demonstrates: a story-only Ready for Tasking state with generationConfig that creates child task cards; a Waiting for Tasks holding state where the story sits while children proceed; updateParentSum on the design COMPLETE transition (rolls each child's refined estimate up to the parent); completeParentIfReady on Done (parent auto-advances when last sibling completes); label-based card-type discrimination (type:story vs type:task) used as filters to route the same column to different agent behaviors. This is a REFERENCE — aiboard --mode init does not scaffold from it. Diff against your existing workflow.json and merge the decomposition machinery (the Tasking and Waiting-for-Tasks states, the cardTypes block, the updateParentSum / completeParentIfReady transitions, and the type-label filters) as needed. Optional reviewer catalogs and the full design/test pipelines are intentionally trimmed for readability — see workflow.github.example.json for the comprehensive shape.",
+  "states": {
+    "Backlog": {
+      "name": "Backlog",
+      "gateType": "manual_entry",
+      "transitions": {}
+    },
+    "Ready for Design": {
+      "name": "Ready for Design",
+      "gateType": "agent_run",
+      "pipelineOrder": 1,
+      "gitBehavior": "discard",
+      "providerParams": { "effort": "max" },
+      "steps": [
+        {
+          "name": "review_related_tickets",
+          "role": "board_analyst",
+          "taskPromptFile": "prompts/states/steps/review_related_tickets.md"
+        },
+        {
+          "name": "create_design",
+          "role": "senior_engineer",
+          "taskPromptFile": "prompts/states/ready_for_design.md"
+        },
+        {
+          "name": "estimate_ticket",
+          "role": "estimator",
+          "taskPromptFile": "prompts/states/steps/estimate_ticket.md"
+        }
+      ],
+      "gateCheck": {
+        "role": "gate_checker",
+        "taskPromptFile": "prompts/gates/post_design.md"
+      },
+      "transitions": {
+        "IN_PROGRESS": "Designing",
+        "COMPLETE": [
+          { "type": "moveToColumn",    "value": "Designed" },
+          { "type": "setField",        "field": "Estimate",  "value": "{{estimation}}" },
+          { "type": "updateParentSum", "field": "Estimate" }
+        ],
+        "NEEDS_INFO":     "Design Questions",
+        "ERROR":          "Error",
+        "GATE_FAIL":      "Ready for Design"
+      }
+    },
+    "Designing": {
+      "name": "Designing",
+      "gateType": "in_progress",
+      "transitions": {}
+    },
+    "Design Questions": {
+      "name": "Design Questions",
+      "gateType": "holding",
+      "transitions": {}
+    },
+    "Designed": {
+      "name": "Designed",
+      "gateType": "manual_gate",
+      "transitions": {}
+    },
+    "Ready for Tasking": {
+      "name": "Ready for Tasking",
+      "gateType": "agent_run",
+      "pipelineOrder": 2,
+      "gitBehavior": "discard",
+      "filters": [
+        { "type": "label", "operator": "exists", "value": "type:story" }
+      ],
+      "providerParams": { "effort": "high" },
+      "steps": [
+        {
+          "name": "generate_tasks",
+          "role": "senior_engineer",
+          "taskPromptFile": "prompts/states/steps/generate_children.md",
+          "generationConfig": {
+            "targetType":   "task",
+            "targetColumn": "Ready for Design",
+            "linkToParent": true,
+            "copyFields":   ["priority"]
+          }
+        }
+      ],
+      "transitions": {
+        "IN_PROGRESS": "Tasking",
+        "COMPLETE":    "Waiting for Tasks",
+        "NEEDS_INFO":  "Design Questions",
+        "ERROR":       "Error"
+      }
+    },
+    "Tasking": {
+      "name": "Tasking",
+      "gateType": "in_progress",
+      "transitions": {}
+    },
+    "Waiting for Tasks": {
+      "name": "Waiting for Tasks",
+      "gateType": "holding",
+      "filters": [
+        { "type": "label", "operator": "exists", "value": "type:story" }
+      ],
+      "transitions": {}
+    },
+    "Ready for Implementation": {
+      "name": "Ready for Implementation",
+      "gateType": "agent_run",
+      "pipelineOrder": 3,
+      "gitBehavior": "commit_and_push",
+      "filters": [
+        { "type": "label", "operator": "exists", "value": "type:task" }
+      ],
+      "providerParams": { "effort": "medium" },
+      "steps": [
+        {
+          "name": "implement",
+          "role": "implementer",
+          "taskPromptFile": "prompts/states/ready_for_implementation.md"
+        },
+        {
+          "name": "code_review",
+          "role": "code_reviewer",
+          "taskPromptFile": "prompts/states/steps/code_review.md"
+        }
+      ],
+      "gateCheck": {
+        "role": "gate_checker",
+        "taskPromptFile": "prompts/gates/post_implementation.md"
+      },
+      "transitions": {
+        "IN_PROGRESS":    "Implementing",
+        "COMPLETE":       "Ready for Test",
+        "NEEDS_INFO":     "Implementation Questions",
+        "ERROR":          "Error",
+        "GATE_FAIL":      "Ready for Implementation",
+        "MERGE_CONFLICT": "Ready for Implementation"
+      }
+    },
+    "Implementing": {
+      "name": "Implementing",
+      "gateType": "in_progress",
+      "transitions": {}
+    },
+    "Implementation Questions": {
+      "name": "Implementation Questions",
+      "gateType": "holding",
+      "transitions": {}
+    },
+    "Ready for Test": {
+      "name": "Ready for Test",
+      "gateType": "agent_run",
+      "pipelineOrder": 4,
+      "gitBehavior": "commit_and_push",
+      "filters": [
+        { "type": "label", "operator": "exists", "value": "type:task" }
+      ],
+      "steps": [
+        {
+          "name": "qa_validation",
+          "role": "qa",
+          "taskPromptFile": "prompts/states/ready_for_test.md"
+        }
+      ],
+      "gateCheck": {
+        "role": "gate_checker",
+        "taskPromptFile": "prompts/gates/post_test.md"
+      },
+      "transitions": {
+        "IN_PROGRESS":    "Testing",
+        "COMPLETE":       "Tested",
+        "NEEDS_INFO":     "Implementation Questions",
+        "ERROR":          "Error",
+        "GATE_FAIL":      "Ready for Test"
+      }
+    },
+    "Testing": {
+      "name": "Testing",
+      "gateType": "in_progress",
+      "transitions": {}
+    },
+    "Tested": {
+      "name": "Tested",
+      "gateType": "manual_gate",
+      "transitions": {}
+    },
+    "Approved": {
+      "name": "Approved",
+      "gateType": "system_merge",
+      "pipelineOrder": 5,
+      "filters": [
+        { "type": "label", "operator": "exists", "value": "type:task" }
+      ],
+      "transitions": {
+        "IN_PROGRESS":    "Merging",
+        "COMPLETE":       "Done",
+        "ERROR":          "Error",
+        "MERGE_CONFLICT": "Ready for Implementation"
+      }
+    },
+    "Merging": {
+      "name": "Merging",
+      "gateType": "in_progress",
+      "transitions": {}
+    },
+    "Done": {
+      "name": "Done",
+      "gateType": "terminal",
+      "transitions": {
+        "COMPLETE": [
+          { "type": "completeParentIfReady" }
+        ]
+      }
+    },
+    "Error": {
+      "name": "Error",
+      "gateType": "holding",
+      "transitions": {}
+    }
+  },
+  "roles": {
+    "senior_engineer": {
+      "model": "claude-opus-4-6",
+      "systemPromptFile": "prompts/senior_engineer.md",
+      "sections": ["Technical Design", "Decisions", "Implementation"]
+    },
+    "implementer": {
+      "model": "claude-sonnet-4-6",
+      "systemPromptFile": "prompts/senior_engineer.md",
+      "sections": ["Technical Design", "Decisions", "Implementation"]
+    },
+    "code_reviewer": {
+      "model": "claude-sonnet-4-6",
+      "systemPromptFile": "prompts/code_reviewer.md",
+      "sections": []
+    },
+    "qa": {
+      "model": "claude-opus-4-6",
+      "systemPromptFile": "prompts/qa.md",
+      "sections": ["Test Plan", "Test Results"]
+    },
+    "gate_checker": {
+      "model": "claude-haiku-4-5-20251001",
+      "systemPromptFile": "prompts/gate_checker.md",
+      "sections": []
+    },
+    "estimator": {
+      "model": "claude-haiku-4-5-20251001",
+      "systemPromptFile": "prompts/estimator.md",
+      "sections": []
+    },
+    "board_analyst": {
+      "model": "claude-haiku-4-5-20251001",
+      "systemPromptFile": "prompts/board_analyst.md",
+      "sections": []
+    },
+    "merge_resolver": {
+      "model": "claude-sonnet-4-6",
+      "systemPromptFile": "prompts/merge_resolver.md",
+      "sections": []
+    }
+  },
+  "mergeResolution": {
+    "role": "merge_resolver",
+    "providerParams": { "effort": "medium" }
+  },
+  "polling": {
+    "priorityFieldName": "priority",
+    "priorityOrder": ["P0", "P1", "P2"]
+  },
+  "estimation": {
+    "calibrationTicketId": "1",
+    "calibrationSize": 1,
+    "fieldName": "Estimate",
+    "scale": [1, 2, 4, 8]
+  },
+  "cardTypes": {
+    "story": {
+      "name": "User Story",
+      "labelPrefix": "type",
+      "allowedChildren": ["task"]
+    },
+    "task": {
+      "name": "Task",
+      "labelPrefix": "type",
+      "allowedChildren": []
+    }
+  }
+}

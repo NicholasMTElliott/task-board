@@ -23,6 +23,18 @@ Use the task file for content that should appear on the ticket.
 
 During code review, if you discover pre-existing bugs, code quality issues, or missing test coverage that is unrelated to the current ticket's changes, create new tickets for them rather than blocking the current review. Only block the review for issues directly caused by or related to the current changes.
 
+If a new ticket has a hard dependency, encode it in its `new-{slug}.md` front matter:
+
+```yaml
+blockedBy:
+  - "#123"
+  - current
+blocks:
+  - follow-up-slug
+```
+
+Use dependencies only when the referenced ticket must complete first. Do not use them for loose related-work links.
+
 ## Git Policy
 
 Do NOT run git write commands inside your workspace. The orchestrator handles all git write operations after your execution completes.

@@ -132,6 +132,88 @@ public class UpdateFileProcessorTests : IDisposable
             Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public void ParseNewTicketFile_DependencyFrontMatter_ParsesBlockedByAndBlocks()
+    {
+        var parsed = UpdateFileProcessor.ParseNewTicketFile("""
+            ---
+            title: Add migration runner
+            estimate: 2
+            blockedBy:
+              - create-database
+              - "#123"
+              - current
+            blocks: [follow-up-cleanup, "#456"]
+            ---
+
+            Body.
+            """);
+
+        Assert.NotNull(parsed);
+        Assert.Equal(["create-database", "#123", "current"], parsed!.BlockedBy);
+        Assert.Equal(["follow-up-cleanup", "#456"], parsed.Blocks);
+    }
+
+    [Fact]
+    public async Task ProcessUpdates_NewTicketDependencies_ResolvesSameBatchAndCurrentRefs()
+    {
+        var updatesDir = CreateUpdatesDir();
+        File.WriteAllText(Path.Combine(updatesDir, "new-create-database.md"),
+            "---\ntitle: Create database\n---\n\nBody.");
+        File.WriteAllText(Path.Combine(updatesDir, "new-add-api.md"),
+            "---\ntitle: Add API\nblockedBy:\n  - create-database\nblocks:\n  - current\n---\n\nBody.");
+
+        _boardClient.CreateCardAsync(
+                Arg.Is<CreateCardRequest>(r => r.Title == "Create database"),
+                Arg.Any<CancellationToken>())
+            .Returns("101");
+        _boardClient.CreateCardAsync(
+                Arg.Is<CreateCardRequest>(r => r.Title == "Add API"),
+                Arg.Any<CancellationToken>())
+            .Returns("102");
+
+        var dependencyClient = Substitute.For<ICardDependencyClient>();
+        var processor = new UpdateFileProcessor(
+            _boardClient, _config, _identity, NullLogger<UpdateFileProcessor>.Instance, dependencyClient);
+
+        var result = await processor.ProcessUpdatesAsync(
+            _tempDir, SourceCardId, StepName, [], CancellationToken.None);
+
+        Assert.Equal(2, result.CreatedTickets.Count);
+        await dependencyClient.Received(1).AddBlockedByAsync("102", "101", Arg.Any<CancellationToken>());
+        await dependencyClient.Received(1).AddBlockedByAsync(SourceCardId, "102", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProcessUpdates_NewTicketDependencies_SkipsSelfDependencyAndSimpleCycle()
+    {
+        var updatesDir = CreateUpdatesDir();
+        File.WriteAllText(Path.Combine(updatesDir, "new-a.md"),
+            "---\ntitle: A\nblockedBy:\n  - a\n  - b\n---\n\nBody.");
+        File.WriteAllText(Path.Combine(updatesDir, "new-b.md"),
+            "---\ntitle: B\nblockedBy:\n  - a\n---\n\nBody.");
+
+        _boardClient.CreateCardAsync(
+                Arg.Is<CreateCardRequest>(r => r.Title == "A"),
+                Arg.Any<CancellationToken>())
+            .Returns("201");
+        _boardClient.CreateCardAsync(
+                Arg.Is<CreateCardRequest>(r => r.Title == "B"),
+                Arg.Any<CancellationToken>())
+            .Returns("202");
+
+        var dependencyClient = Substitute.For<ICardDependencyClient>();
+        var processor = new UpdateFileProcessor(
+            _boardClient, _config, _identity, NullLogger<UpdateFileProcessor>.Instance, dependencyClient);
+
+        await processor.ProcessUpdatesAsync(
+            _tempDir, SourceCardId, StepName, [], CancellationToken.None);
+
+        await dependencyClient.DidNotReceive().AddBlockedByAsync("201", "201", Arg.Any<CancellationToken>());
+        await dependencyClient.Received(1).AddBlockedByAsync("201", "202", Arg.Any<CancellationToken>());
+        await dependencyClient.DidNotReceive().AddBlockedByAsync("202", "201", Arg.Any<CancellationToken>());
+    }
+
     // ── New ticket: deduplication ────────────────────────────────────────────
 
     [Fact]
