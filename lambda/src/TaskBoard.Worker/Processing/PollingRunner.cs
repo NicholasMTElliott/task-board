@@ -68,6 +68,9 @@ public sealed class PollingRunner(
                 }
                 else
                 {
+                    // Per-cycle blocker hydration cache: two enforced cards
+                    // sharing a blocker only fetch the blocker's card body once.
+                    var blockerCardCache = new Dictionary<string, BoardCard>(StringComparer.Ordinal);
                     foreach (var candidate in selectionResult.Eligible)
                     {
                         var candidateState = workflowConfig.ResolveState(candidate);
@@ -75,14 +78,18 @@ public sealed class PollingRunner(
                             continue;
 
                         var dependencyResult = await dependencyGuard.CheckAsync(
-                            candidate, candidateState, "polling", cancellationToken);
+                            candidate, candidateState, "polling", cancellationToken, blockerCardCache);
                         if (!dependencyResult.IsBlocked)
                         {
                             selected = candidate;
                             break;
                         }
 
-                        logger.LogInformation(
+                        // Debug, not Info: same card stays blocked across many
+                        // cycles until the blocker resolves. The persistent
+                        // record lives in card_dependency_wait + the upserted
+                        // blocked-comment on the card.
+                        logger.LogDebug(
                             "Skipping blocked card {CardId} ({Title}); unresolved blockers: {Blockers}",
                             candidate.Id, candidate.Title,
                             string.Join(", ", dependencyResult.UnresolvedBlockers.Select(b => $"#{b.CardId}")));

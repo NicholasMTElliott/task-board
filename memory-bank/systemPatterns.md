@@ -151,10 +151,12 @@ Task files can reference other cards (e.g., `#5`, `#12`). The `CrossReferenceRes
 ### Blocking Dependencies
 Provider-agnostic dependency surface:
 - `ICardDependencyClient`: `GetBlockersAsync`, `GetBlockedCardsAsync`, `AddBlockedByAsync`, `RemoveBlockedByAsync`.
-- `DependencyPolicy` config: `enabled` (default false), `enforcedStates` (default Ready for Implementation / Ready for Test / Approved), `satisfiedColumns` (default terminal columns), `commentOnBlocked`.
-- `DependencyGuard`: runs before IN_PROGRESS transition. Polling skips blocked cards and selects the next eligible card. Direct agent and merge runs return `NEEDS_INFO` without moving the card.
-- Satisfaction: blocker column in `satisfiedColumns` OR provider reports closed issue when board column is unavailable.
-- `IDependencyWaitStore`: observational DB writes only; provider remains source of truth.
+- `DependencyPolicy` config: `enabled` (default false), `enforcedStates` (no implicit default — empty/null is a no-op so operators must explicitly list the states/columns to gate), `satisfiedColumns` (default terminal columns), `commentOnBlocked`. `enforcedStates` matches against `state.Name` first and the card's column name as a fallback (column matches are coarser in shared-column workflows). Validator (`WorkflowConfigValidator`) accepts state names OR effective columns for both `enforcedStates` and `satisfiedColumns`.
+- `DependencyGuard`: runs before IN_PROGRESS transition. Polling skips blocked cards and selects the next eligible card. Direct agent and merge runs return `NEEDS_INFO` without moving the card. Per-cycle hydration cache (`Dictionary<string, BoardCard>?` parameter on `CheckAsync`) — `PollingRunner` allocates one per cycle so two enforced cards sharing a blocker only fetch the blocker's card body once. Closed-and-completed blockers short-circuit hydration entirely (column lookup unnecessary). Blocked-comment marker: `<!-- agent-dependency-blocked -->`.
+- Satisfaction: blocker column in `satisfiedColumns` OR provider reports closed-and-completed (closed-as-not_planned still blocks).
+- Failure modes: transient lookup errors (auth, 5xx, network) are caught and treated as "not blocked" so the pipeline keeps moving. **Contract violations** (`DependencyApiContractException` — non-array root from `gh api`, non-JSON body) propagate up unswallowed so operators notice when the upstream API shape changes rather than silently treating every blocked card as clear.
+- `GitHubIssueDependencyClient`: caches issue numeric→database id resolution in a `ConcurrentDictionary<string, long>` for the lifetime of the singleton (immutable mapping); avoids re-shelling `gh api` on every `AddBlockedByAsync`/`RemoveBlockedByAsync` for repeated blockers.
+- `IDependencyWaitStore`: observational DB writes only; provider remains source of truth. `PgDependencyWaitStore` binds the resolution UPDATE's `text[]` parameter explicitly via `NpgsqlDbType.Array | NpgsqlDbType.Text` (Npgsql's inference from `string[]` is brittle).
 
 Ticket creation dependency contract:
 ```yaml
@@ -168,7 +170,7 @@ blocks:
 - `blockedBy`: created ticket waits for referenced cards.
 - `blocks`: referenced cards wait for created ticket.
 - Refs: same-batch `new-{slug}.md`, existing issue number, or `current` source card.
-- `UpdateFileProcessor` parses all `new-*.md` files first, creates cards, resolves slugs, rejects self-dependencies/simple same-batch cycles, then applies links via `ICardDependencyClient`.
+- `UpdateFileProcessor` parses all `new-*.md` files first (sorted alphabetically by filename for deterministic outcome across filesystems — NTFS happens to return name-ordered, ext4 with dir_index does not), creates cards, resolves slugs, rejects self-dependencies and **direct A↔B cycles only** (deeper cycles like A→B→C→A are the provider's responsibility — GitHub Issues rejects them itself), then applies links via `ICardDependencyClient`.
 
 ### Image Downloading
 `ImageDownloader` downloads images referenced in card bodies (markdown `![](url)` and HTML `<img src>`) to `.aiboard/images/{cardId}/` in the worktree. Images are passed to the agent as local files via `TaskFileManager`.

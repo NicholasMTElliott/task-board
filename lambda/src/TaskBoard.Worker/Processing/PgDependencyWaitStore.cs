@@ -1,4 +1,5 @@
 using Npgsql;
+using NpgsqlTypes;
 using TaskBoard.Worker.Clients;
 
 namespace TaskBoard.Worker.Processing;
@@ -56,7 +57,15 @@ public sealed class PgDependencyWaitStore(
         resolve.Parameters.AddWithValue(tenant.Value);
         resolve.Parameters.AddWithValue(cardId);
         resolve.Parameters.AddWithValue(source);
-        resolve.Parameters.AddWithValue(unresolvedBlockers.Select(b => b.CardId).ToArray());
+        // Bind explicitly as text[] — Npgsql infers it from string[] today, but
+        // the inference is brittle (depends on whether a TypeMappingResolver is
+        // registered) and silently falls back to null/unsupported errors. The
+        // table column is text[]; pin the type.
+        resolve.Parameters.Add(new NpgsqlParameter
+        {
+            NpgsqlDbType = NpgsqlDbType.Array | NpgsqlDbType.Text,
+            Value = unresolvedBlockers.Select(b => b.CardId).ToArray(),
+        });
         await resolve.ExecuteNonQueryAsync(ct);
 
         await tx.CommitAsync(ct);

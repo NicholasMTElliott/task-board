@@ -53,9 +53,15 @@ public sealed class UpdateFileProcessor(
         if (!Directory.Exists(updatesDir))
             return UpdateProcessingResult.Empty;
 
+        // Order is significant: same-batch dependency resolution and cycle
+        // detection in TryAddDependencyAsync depend on whichever new-*.md file
+        // is processed first "winning" the directional edge. Sort alphabetically
+        // so the outcome is deterministic across filesystems (NTFS happens to
+        // return name-ordered; ext4 with dir_index does not).
         var files = Directory.GetFiles(updatesDir, "*.md");
         if (files.Length == 0)
             return UpdateProcessingResult.Empty;
+        Array.Sort(files, StringComparer.OrdinalIgnoreCase);
 
         var newTicketFiles = new List<(string FilePath, string Slug)>();
         var createdTickets = new List<CreatedTicketInfo>();
@@ -360,10 +366,13 @@ public sealed class UpdateFileProcessor(
         }
 
         var edge = (blockedCardId, blockerCardId);
+        // Direct A↔B back-references only. Longer cycles (A→B→C→A) are not
+        // detected here; the dependency provider (e.g. GitHub Issues) is the
+        // source of truth and rejects deeper cycles itself.
         if (plannedEdges.Contains((blockerCardId, blockedCardId)))
         {
             logger.LogWarning(
-                "Skipping dependency #{Blocked} blocked by #{Blocker}: would create a simple cycle",
+                "Skipping dependency #{Blocked} blocked by #{Blocker}: would create a direct cycle",
                 blockedCardId, blockerCardId);
             return;
         }

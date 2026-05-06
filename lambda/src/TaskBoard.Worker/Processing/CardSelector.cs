@@ -32,7 +32,10 @@ public static class CardSelector
 
     /// <summary>
     /// Returns ALL eligible cards sorted by priority (same logic as <see cref="SelectNext"/>).
-    /// Used by <see cref="QueueDrivenRunner"/> to process multiple cards concurrently.
+    /// Used by <see cref="QueueDrivenRunner"/> to process multiple cards concurrently
+    /// and by <see cref="PollingRunner"/> when a <c>DependencyGuard</c> is configured —
+    /// the runner walks eligible cards in priority order and picks the first one
+    /// whose blockers are all satisfied.
     /// </summary>
     public static MultiCardSelectionResult SelectAll(
         IReadOnlyList<BoardCard> cards,

@@ -7,6 +7,17 @@ public sealed record CardDependency(
     bool? IsClosed = null,
     string? StateReason = null);
 
+/// <summary>
+/// Thrown when the dependency provider's response shape diverges from the
+/// expected contract (e.g. a list endpoint returned a non-array root).
+/// Treated as fatal by <c>DependencyGuard</c> — propagated to the caller so
+/// the operator notices and can fix the upstream contract change. Distinct
+/// from transient lookup failures (auth, 5xx, network), which are caught and
+/// treated as "not blocked".
+/// </summary>
+public sealed class DependencyApiContractException(string message, Exception? inner = null)
+    : InvalidOperationException(message, inner);
+
 public interface ICardDependencyClient
 {
     Task<IReadOnlyList<CardDependency>> GetBlockersAsync(string cardId, CancellationToken cancellationToken);

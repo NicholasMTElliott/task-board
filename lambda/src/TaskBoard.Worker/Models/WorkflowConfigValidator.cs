@@ -374,12 +374,18 @@ public static class WorkflowConfigValidator
 
             if (dep.SatisfiedColumns is { Count: > 0 })
             {
+                // Accept either a workflow state name or an effective column —
+                // symmetric with the enforcedStates check above. The runtime
+                // ultimately compares against the blocker's column on the board,
+                // so a state-name entry only "works" when its effective column
+                // equals the state name (the common 1:1 case).
                 foreach (var column in dep.SatisfiedColumns)
                 {
-                    if (!config.States.Keys.Any(k =>
-                            string.Equals(config.GetEffectiveColumn(k), column, StringComparison.OrdinalIgnoreCase)))
+                    if (!config.States.Any(kvp =>
+                            string.Equals(kvp.Value.Name, column, StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(config.GetEffectiveColumn(kvp.Key), column, StringComparison.OrdinalIgnoreCase)))
                     {
-                        errors.Add($"dependencyPolicy.satisfiedColumns contains '{column}' which is not a known effective column.");
+                        errors.Add($"dependencyPolicy.satisfiedColumns contains '{column}' which is not a known workflow state name or effective column.");
                     }
                 }
             }
