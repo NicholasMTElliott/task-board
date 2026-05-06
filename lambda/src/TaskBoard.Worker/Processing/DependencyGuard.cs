@@ -55,7 +55,7 @@ public sealed class DependencyGuard(
         WorkflowState state,
         string source,
         CancellationToken ct) =>
-        CheckAsync(card, state, source, ct, boardCardCache: null);
+        CheckAsync(card, state, source, ct, boardCardCache: null, recordSideEffects: true);
 
     /// <summary>
     /// Same as <see cref="CheckAsync(BoardCard, WorkflowState, string, CancellationToken)"/>
@@ -63,12 +63,27 @@ public sealed class DependencyGuard(
     /// of board cards. Two enforced cards on the same poll cycle that share a
     /// blocker only fetch the blocker's card body once.
     /// </summary>
+    public Task<DependencyGuardResult> CheckAsync(
+        BoardCard card,
+        WorkflowState state,
+        string source,
+        CancellationToken ct,
+        Dictionary<string, BoardCard>? boardCardCache) =>
+        CheckAsync(card, state, source, ct, boardCardCache, recordSideEffects: true);
+
+    /// <summary>
+    /// Full-control variant. Set <paramref name="recordSideEffects"/> to
+    /// <c>false</c> for read-only diagnostics (e.g. <c>--mode diagnose</c>):
+    /// the result is returned without writing to <c>card_dependency_wait</c>,
+    /// posting the blocked-comment, or logging the blocking decision.
+    /// </summary>
     public async Task<DependencyGuardResult> CheckAsync(
         BoardCard card,
         WorkflowState state,
         string source,
         CancellationToken ct,
-        Dictionary<string, BoardCard>? boardCardCache)
+        Dictionary<string, BoardCard>? boardCardCache,
+        bool recordSideEffects)
     {
         var policy = workflowConfig.DependencyPolicy;
         if (policy?.Enabled != true || !IsEnforced(card, state, policy))
@@ -104,20 +119,24 @@ public sealed class DependencyGuard(
             unresolved.Add(hydrated);
         }
 
-        await waitStore.RecordBlockedAsync(card.Id, unresolved, source, ct);
+        if (recordSideEffects)
+            await waitStore.RecordBlockedAsync(card.Id, unresolved, source, ct);
 
         if (unresolved.Count == 0)
             return DependencyGuardResult.NotBlocked;
 
-        if (policy.CommentOnBlocked)
+        if (recordSideEffects && policy.CommentOnBlocked)
         {
             await boardClient.UpsertAgentCommentAsync(
                 card.Id, BuildBlockedComment(unresolved), BlockedCommentMarker, ct);
         }
 
-        logger.LogInformation(
-            "Card {CardId} is blocked by {Count} unresolved dependency/dependencies",
-            card.Id, unresolved.Count);
+        if (recordSideEffects)
+        {
+            logger.LogInformation(
+                "Card {CardId} is blocked by {Count} unresolved dependency/dependencies",
+                card.Id, unresolved.Count);
+        }
         return new DependencyGuardResult(true, unresolved);
     }
 

@@ -86,6 +86,7 @@ The user mentions a card by ID and says it's stuck, ignored, sitting in Ready, e
 2. The output is structured. Translate the headline into one short next-action sentence:
    - `Pickup result: SKIPPED (no state filter passes)` with `Most likely cause: card is assigned` → tell the user to unassign (the output even prints the exact `gh issue edit ... --remove-assignee ...` command — surface that command verbatim).
    - `Most likely cause: a field value doesn't match` → tell them which field and what to set it to.
+   - `Pickup result: BLOCKED BY DEPENDENCIES` → the card matches its state filters but has unresolved blockers (`dependencyPolicy.enabled` is on for this state). The output lists each blocker with column. Tell the user to drive the blockers to a satisfied column, close them as completed, or remove the dependency link if it was declared in error (the output prints the exact `gh api -X DELETE …` command — surface that verbatim).
    - `Pickup result: HOLDING / DONE / ENTRY / IN PROGRESS / WAITING ON HUMAN` → describe what that means and the next move.
    - `NOT IN WORKFLOW` → suggest moving the card to one of the listed columns.
 

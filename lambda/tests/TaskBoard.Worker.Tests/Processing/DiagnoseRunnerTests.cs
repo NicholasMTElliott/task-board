@@ -383,6 +383,130 @@ public class DiagnoseRunnerTests
         Assert.DoesNotContain("Most likely cause: a label", output);
     }
 
+    /// <summary>
+    /// Stub dependency client returning a fixed blocker list. Sufficient for
+    /// driving DependencyGuard in diagnose's read-only mode (no AddBlockedBy /
+    /// RemoveBlockedBy calls reach it).
+    /// </summary>
+    private sealed class CannedDependencyClient(IReadOnlyList<CardDependency> blockers) : ICardDependencyClient
+    {
+        public Task<IReadOnlyList<CardDependency>> GetBlockersAsync(string cardId, CancellationToken ct)
+            => Task.FromResult(blockers);
+        public Task<IReadOnlyList<CardDependency>> GetBlockedCardsAsync(string cardId, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<CardDependency>>([]);
+        public Task AddBlockedByAsync(string blockedCardId, string blockerCardId, CancellationToken ct)
+            => throw new InvalidOperationException("AddBlockedBy must not be called from diagnose");
+        public Task RemoveBlockedByAsync(string blockedCardId, string blockerCardId, CancellationToken ct)
+            => throw new InvalidOperationException("RemoveBlockedBy must not be called from diagnose");
+    }
+
+    [Fact]
+    public async Task DependencyBlockedCard_ReportsBlockedAndListsUnresolvedBlockers()
+    {
+        // Card is otherwise eligible (Activity=Design, unassigned), but a
+        // dependency policy is enabled and the blocker (#5) is not in a
+        // satisfied column. Pre-fix, diagnose would say ELIGIBLE — confusing
+        // because polling silently skips the card.
+        var workflow = BuildKvaShapeWorkflow() with
+        {
+            DependencyPolicy = new DependencyPolicy(
+                Enabled: true,
+                EnforcedStates: ["Design", "Implementation"],
+                SatisfiedColumns: ["Done"]),
+        };
+        var card = new BoardCard(
+            Id: "10", Title: "Blocked but otherwise eligible", Body: "...", ColumnId: "Ready",
+            Metadata: new Dictionary<string, string> { ["Activity"] = "Design" },
+            Assignees: []);
+
+        var board = new CannedBoard(card);
+        var deps = new CannedDependencyClient(
+            [new CardDependency("5", Title: "Create database", ColumnId: "Ready", IsClosed: false)]);
+        var guard = new DependencyGuard(
+            board, deps, workflow,
+            NullDependencyWaitStore.Instance,
+            NullLogger<DependencyGuard>.Instance);
+
+        var stdout = new StringWriter();
+        var runner = new DiagnoseRunner(board, workflow, NullLogger.Instance, stdout, guard);
+        var exit = await runner.RunAsync(card.Id, CancellationToken.None);
+        var output = stdout.ToString();
+
+        Assert.Equal(0, exit);
+        Assert.Contains("BLOCKED BY DEPENDENCIES", output);
+        Assert.Contains("#5", output);
+        Assert.Contains("Create database", output);
+        // Must NOT report ELIGIBLE — that was the pre-fix confusion path.
+        Assert.DoesNotContain("Pickup result: ELIGIBLE", output);
+    }
+
+    [Fact]
+    public async Task DependencyBlockedCard_NoSideEffectsToBoard()
+    {
+        // Diagnose is read-only. DependencyGuard.CheckAsync's blocked-comment
+        // upsert and waitStore write must NOT fire from the diagnose path.
+        var workflow = BuildKvaShapeWorkflow() with
+        {
+            DependencyPolicy = new DependencyPolicy(
+                Enabled: true,
+                EnforcedStates: ["Design"],
+                SatisfiedColumns: ["Done"],
+                CommentOnBlocked: true),
+        };
+        var card = new BoardCard(
+            Id: "10", Title: "Blocked", Body: "...", ColumnId: "Ready",
+            Metadata: new Dictionary<string, string> { ["Activity"] = "Design" },
+            Assignees: []);
+
+        var commentCalls = 0;
+        var board = new CommentRecordingBoard(card, () => commentCalls++);
+        var deps = new CannedDependencyClient(
+            [new CardDependency("5", Title: "Blocker", ColumnId: "Ready", IsClosed: false)]);
+        var waitStore = new RecordingWaitStore();
+        var guard = new DependencyGuard(
+            board, deps, workflow, waitStore, NullLogger<DependencyGuard>.Instance);
+
+        var runner = new DiagnoseRunner(board, workflow, NullLogger.Instance, new StringWriter(), guard);
+        await runner.RunAsync(card.Id, CancellationToken.None);
+
+        Assert.Equal(0, commentCalls);
+        Assert.Equal(0, waitStore.Calls);
+    }
+
+    private sealed class CommentRecordingBoard(BoardCard card, Action onComment) : ITaskBoardClient
+    {
+        public Task<BoardCard> GetCardAsync(string cardId, CancellationToken ct) => Task.FromResult(card);
+        public Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken ct, IReadOnlyList<string>? excludeStatuses = null)
+            => Task.FromResult<IReadOnlyList<BoardCard>>([card]);
+        public Task UpdateCardBodyAsync(string cardId, string body, CancellationToken ct) => Task.CompletedTask;
+        public Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken ct) => Task.CompletedTask;
+        public Task UpsertAgentCommentAsync(string cardId, string body, string marker, CancellationToken ct)
+        {
+            onComment();
+            return Task.CompletedTask;
+        }
+        public Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<CardComment>>([]);
+        public Task<string> CreateCardAsync(CreateCardRequest request, CancellationToken ct) => Task.FromResult("0");
+        public Task AddLabelAsync(string cardId, string labelName, CancellationToken ct) => Task.CompletedTask;
+        public Task RemoveLabelAsync(string cardId, string labelName, CancellationToken ct) => Task.CompletedTask;
+        public Task AssignAsync(string cardId, string username, CancellationToken ct) => Task.CompletedTask;
+        public Task UnassignAsync(string cardId, string? username, CancellationToken ct) => Task.CompletedTask;
+        public Task SetFieldAsync(string cardId, string fieldName, string value, CancellationToken ct) => Task.CompletedTask;
+        public Task ClearFieldAsync(string cardId, string fieldName, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> GetCurrentUserAsync(CancellationToken ct) => Task.FromResult("agent-bot");
+    }
+
+    private sealed class RecordingWaitStore : IDependencyWaitStore
+    {
+        public int Calls { get; private set; }
+        public Task RecordBlockedAsync(string cardId, IReadOnlyList<CardDependency> unresolvedBlockers, string source, CancellationToken ct)
+        {
+            Calls++;
+            return Task.CompletedTask;
+        }
+    }
+
     [Fact]
     public async Task CardNotFound_ReturnsNonZeroExitFromBoardError()
     {

@@ -27,17 +27,20 @@ public sealed class DiagnoseRunner
     private readonly WorkflowConfig workflow;
     private readonly ILogger logger;
     private readonly TextWriter stdout;
+    private readonly DependencyGuard? dependencyGuard;
 
     public DiagnoseRunner(
         ITaskBoardClient board,
         WorkflowConfig workflow,
         ILogger logger,
-        TextWriter? stdout = null)
+        TextWriter? stdout = null,
+        DependencyGuard? dependencyGuard = null)
     {
         this.board = board;
         this.workflow = workflow;
         this.logger = logger;
         this.stdout = stdout ?? Console.Out;
+        this.dependencyGuard = dependencyGuard;
     }
 
     public async Task<int> RunAsync(string cardId, CancellationToken cancellationToken)
@@ -89,6 +92,24 @@ public sealed class DiagnoseRunner
 
         if (resolved is not null)
         {
+            // Dependency policy gates only actionable states, and only when
+            // the operator opted in. Surface "blocked by dependencies" before
+            // the generic ELIGIBLE verdict so a blocked-but-otherwise-clean
+            // card doesn't read as "looks fine, why isn't polling picking it
+            // up?". `recordSideEffects: false` keeps the check read-only —
+            // diagnose must not write to card_dependency_wait or post the
+            // blocked-comment.
+            if (dependencyGuard is not null && IsActionable(resolved.GateType))
+            {
+                var dep = await dependencyGuard.CheckAsync(
+                    card, resolved, "diagnose", cancellationToken,
+                    boardCardCache: null, recordSideEffects: false);
+                if (dep.IsBlocked)
+                {
+                    WriteDependencyBlocked(resolved, dep.UnresolvedBlockers);
+                    return 0;
+                }
+            }
             WriteResolvedState(resolved, card.Id);
             return 0;
         }
@@ -163,6 +184,32 @@ public sealed class DiagnoseRunner
                 stdout.WriteLine($"    - {col}{note}");
             }
         }
+    }
+
+    private void WriteDependencyBlocked(
+        WorkflowState state, IReadOnlyList<CardDependency> unresolved)
+    {
+        var gateType = state.GateType ?? "(none)";
+        stdout.WriteLine($"Resolved state: {state.Name} (gateType={gateType})");
+        stdout.WriteLine();
+        stdout.WriteLine("Pickup result: BLOCKED BY DEPENDENCIES");
+        stdout.WriteLine();
+        stdout.WriteLine($"  This card matches an actionable state, but {unresolved.Count} dependency/dependencies");
+        stdout.WriteLine("  are unresolved. Polling skips blocked cards; direct agent and merge runs refuse them.");
+        stdout.WriteLine();
+        stdout.WriteLine("  Unresolved blockers:");
+        foreach (var b in unresolved)
+        {
+            var title = string.IsNullOrWhiteSpace(b.Title) ? "" : $" — {b.Title}";
+            var column = string.IsNullOrWhiteSpace(b.ColumnId) ? "" : $" ({b.ColumnId})";
+            stdout.WriteLine($"    - #{b.CardId}{title}{column}");
+        }
+        stdout.WriteLine();
+        stdout.WriteLine("  Action:");
+        stdout.WriteLine("    - Drive each blocker to a satisfied column (`dependencyPolicy.satisfiedColumns`),");
+        stdout.WriteLine("      OR close it as completed on the upstream provider.");
+        stdout.WriteLine("    - Or, if the dependency was declared in error, remove the link via:");
+        stdout.WriteLine("      gh api -X DELETE repos/<owner>/<repo>/issues/<this>/dependencies/blocked_by/<blocker-id>");
     }
 
     private void WriteResolvedState(WorkflowState state, string cardId)

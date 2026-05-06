@@ -1103,7 +1103,12 @@ if (mode == "diagnose")
     var boardClient = scope.ServiceProvider.GetRequiredService<ITaskBoardClient>();
     var workflowCfg = scope.ServiceProvider.GetRequiredService<WorkflowConfig>();
     var diagnoseLogger = scope.ServiceProvider.GetRequiredService<ILogger<DiagnoseRunner>>();
-    var diagnoseRunner = new DiagnoseRunner(boardClient, workflowCfg, diagnoseLogger);
+    // DependencyGuard is registered unconditionally (with a Null waitStore when
+    // no DB connection is configured), so we always pass it. CheckAsync is a
+    // no-op when DependencyPolicy.Enabled is false.
+    var depGuard = scope.ServiceProvider.GetService<DependencyGuard>();
+    var diagnoseRunner = new DiagnoseRunner(boardClient, workflowCfg, diagnoseLogger,
+        dependencyGuard: depGuard);
 
     var exitCode = await diagnoseRunner.RunAsync(cardId, CancellationToken.None);
     Environment.ExitCode = exitCode;

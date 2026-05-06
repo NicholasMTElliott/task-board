@@ -142,8 +142,46 @@ Other branches:
 | `ENTRY` | Manual-entry column (e.g. Backlog) — move the card to a Ready column to trigger work. |
 | `NOT IN WORKFLOW` | Card's column isn't part of the workflow at all. The output lists the actionable columns to move toward. |
 | `SKIPPED (no state filter passes)` | Per-state filter walk follows. |
+| `BLOCKED BY DEPENDENCIES` | Card otherwise matches an actionable state, but has unresolved blockers under the workflow's `dependencyPolicy`. Output lists each blocker with column and prints an exact `gh api -X DELETE …` command if the link was declared in error. |
 
 Filter walk surfaces the *first failing predicate per state* in priority order: assignee → field → label. A "Most likely cause" headline picks the highest-priority failure across all states.
+
+---
+
+## Optional: enabling dependency policy
+
+By default the from-scratch templates do not enforce ticket dependencies — every card is pickable as long as it matches a state filter. If your workflow has hard sequencing (e.g. an API task that can't start until a database task is done), you can opt in.
+
+**1. The repo-side prerequisite.** Ticket dependencies live in GitHub Issues' built-in sub-issues / dependencies feature. Most repos have it on by default; if you don't see "Dependencies" in the Issue side panel, enable it in the repo's Settings → Features.
+
+**2. Edit `.aiboard/workflow.json` to enable the policy.** Add (or uncomment) a `dependencyPolicy` block alongside `polling` / `estimation`:
+
+```json
+"dependencyPolicy": {
+  "enabled": true,
+  "enforcedStates": ["Ready for Implementation", "Ready for Test", "Approved"],
+  "satisfiedColumns": ["Done"],
+  "commentOnBlocked": true
+}
+```
+
+- `enforcedStates` — the workflow state names (or shared-column names) where blocking is checked. Polling, direct agent runs, and merge runs all consult the policy before transitioning a card to in-progress.
+- `satisfiedColumns` — a blocker counts as satisfied when it lands in any of these columns (or when the upstream issue is closed-as-completed). Defaults to your terminal columns if omitted, but listing it explicitly is recommended.
+- `commentOnBlocked` — when true, blocked cards get an upserted `<!-- agent-dependency-blocked -->` comment listing the unresolved blockers.
+
+There is no in-code default for `enforcedStates`: enabling the policy without listing any states is a no-op. List the states you want gated.
+
+**3. Declare dependencies on individual cards.** Two paths:
+
+- **Manually**, from the GitHub Issue UI (Add → Add a dependency → search for the blocking issue), or via `gh`:
+  ```bash
+  gh api -X POST repos/<owner>/<repo>/issues/<blocked>/dependencies/blocked_by -f issue_id=<blocker-database-id>
+  ```
+- **From an agent**, by writing dependency front matter into a `new-{slug}.md` file in `.aiboard/updates/`. The orchestrator parses `blockedBy` and `blocks` lists when it creates the new ticket. See [docs/CardTypesAndGeneration.md](CardTypesAndGeneration.md) for the front-matter syntax.
+
+**4. Diagnose blocked cards.** A card whose blockers aren't satisfied will report `Pickup result: BLOCKED BY DEPENDENCIES` from `aiboard --mode diagnose --card-id N` rather than the generic `ELIGIBLE`. The output lists each unresolved blocker so you can either drive it forward, close it, or remove the link.
+
+**5. No migration step needed.** The observational `card_dependency_wait` table (V23) is applied automatically by Flyway on `docker compose up -d`.
 
 ---
 
