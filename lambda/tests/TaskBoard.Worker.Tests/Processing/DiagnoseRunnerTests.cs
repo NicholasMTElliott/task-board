@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Processing;
 
@@ -423,7 +424,7 @@ public class DiagnoseRunnerTests
         var deps = new CannedDependencyClient(
             [new CardDependency("5", Title: "Create database", ColumnId: "Ready", IsClosed: false)]);
         var guard = new DependencyGuard(
-            board, deps, workflow,
+            board, deps, TestWorkflowConfigProvider.Create(workflow),
             NullDependencyWaitStore.Instance,
             NullLogger<DependencyGuard>.Instance);
 
@@ -464,7 +465,7 @@ public class DiagnoseRunnerTests
             [new CardDependency("5", Title: "Blocker", ColumnId: "Ready", IsClosed: false)]);
         var waitStore = new RecordingWaitStore();
         var guard = new DependencyGuard(
-            board, deps, workflow, waitStore, NullLogger<DependencyGuard>.Instance);
+            board, deps, TestWorkflowConfigProvider.Create(workflow), waitStore, NullLogger<DependencyGuard>.Instance);
 
         var runner = new DiagnoseRunner(board, workflow, NullLogger.Instance, new StringWriter(), guard);
         await runner.RunAsync(card.Id, CancellationToken.None);

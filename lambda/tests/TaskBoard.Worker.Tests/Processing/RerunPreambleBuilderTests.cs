@@ -309,10 +309,165 @@ public class RerunPreambleBuilderTests
         Assert.DoesNotContain($"<!-- {Marker} -->", preamble);
     }
 
+    // ── claim verification tests ───────────────────────────────────────────
+
+    [Fact]
+    public async Task PriorBodyCitesNonexistentTicket_PreambleSuppressed()
+    {
+        // The KvA / eve failure shape: an agent's previous run wrote files
+        // without the `new-` prefix → UpdateFileProcessor silently skipped
+        // them → no GitHub issues created → but the verdict comment still
+        // says "Created #43, #44". On re-run, the fast-path preamble
+        // would inject "prior output created #43, #44; confirm" — and an
+        // unsuspecting agent could blindly confirm fictional work.
+        // The verifier must catch this and suppress the preamble so the
+        // step runs fresh.
+        var store = new StubRunStore(records: [PriorStep(StepName, AgentOutcome.COMPLETE)]);
+        var board = new StubBoardClient(existingCardIds: new HashSet<string> { "8" }); // story exists, #43/#44 don't
+        var builder = NewBuilder(store, board);
+        var comments = OneCommentWithMarker(Marker,
+            body: "Decomposition complete.\n\n- Created #43 — Add tests\n- Created #44 — Apply theme");
+
+        var preamble = await builder.TryBuildPreambleAsync(
+            CardId, StateName, StepName, Marker, CurrentRun,
+            existingComments: comments,
+            variant: PreambleVariant.TaskPrompt,
+            cancellationToken: CancellationToken.None);
+
+        Assert.Null(preamble);
+        Assert.True(board.CallCount > 0, "Should have attempted at least one ticket lookup");
+    }
+
+    [Fact]
+    public async Task PriorBodyCitesAllRealTickets_PreambleStillEmitted()
+    {
+        var store = new StubRunStore(records: [PriorStep(StepName, AgentOutcome.COMPLETE)]);
+        var board = new StubBoardClient(existingCardIds: new HashSet<string> { "43", "44" });
+        var builder = NewBuilder(store, board);
+        var comments = OneCommentWithMarker(Marker,
+            body: "Decomposition complete.\n\n- Created #43 — Add tests\n- Created #44 — Apply theme");
+
+        var preamble = await builder.TryBuildPreambleAsync(
+            CardId, StateName, StepName, Marker, CurrentRun,
+            existingComments: comments,
+            variant: PreambleVariant.TaskPrompt,
+            cancellationToken: CancellationToken.None);
+
+        Assert.NotNull(preamble);
+        Assert.Contains("RE-RUN OF PREVIOUSLY COMPLETED STEP", preamble);
+        Assert.Equal(2, board.CallCount);
+    }
+
+    [Fact]
+    public async Task PriorBodyHasNoTicketCitations_VerifierIsNoOp()
+    {
+        var store = new StubRunStore(records: [PriorStep(StepName, AgentOutcome.COMPLETE)]);
+        var board = new StubBoardClient(existingCardIds: new HashSet<string>());
+        var builder = NewBuilder(store, board);
+        var comments = OneCommentWithMarker(Marker,
+            body: "Reviewed related tickets; no conflicts found.");
+
+        var preamble = await builder.TryBuildPreambleAsync(
+            CardId, StateName, StepName, Marker, CurrentRun,
+            existingComments: comments,
+            variant: PreambleVariant.TaskPrompt,
+            cancellationToken: CancellationToken.None);
+
+        // No "Created #N" claims → no verification calls → preamble emitted normally.
+        Assert.NotNull(preamble);
+        Assert.Equal(0, board.CallCount);
+    }
+
+    [Fact]
+    public async Task PriorBodyMixesRealAndFictionalTickets_PreambleSuppressed()
+    {
+        var store = new StubRunStore(records: [PriorStep(StepName, AgentOutcome.COMPLETE)]);
+        var board = new StubBoardClient(existingCardIds: new HashSet<string> { "43" });
+        var builder = NewBuilder(store, board);
+        var comments = OneCommentWithMarker(Marker,
+            body: "- Created #43 — exists\n- Created #44 — fictional");
+
+        var preamble = await builder.TryBuildPreambleAsync(
+            CardId, StateName, StepName, Marker, CurrentRun,
+            existingComments: comments,
+            variant: PreambleVariant.TaskPrompt,
+            cancellationToken: CancellationToken.None);
+
+        // Even one missing citation poisons the trust — suppress.
+        Assert.Null(preamble);
+    }
+
+    [Fact]
+    public async Task BoardClientNull_VerifierDisabled_PreambleEmittedAsBefore()
+    {
+        // Backward compatibility: tests / call sites that don't pass an
+        // ITaskBoardClient should see the legacy behaviour (preamble always
+        // emits when the marker + DB record are present).
+        var store = new StubRunStore(records: [PriorStep(StepName, AgentOutcome.COMPLETE)]);
+        var builder = NewBuilder(store); // no board client
+        var comments = OneCommentWithMarker(Marker,
+            body: "- Created #43 — would be fictional but verifier disabled");
+
+        var preamble = await builder.TryBuildPreambleAsync(
+            CardId, StateName, StepName, Marker, CurrentRun,
+            existingComments: comments,
+            variant: PreambleVariant.TaskPrompt,
+            cancellationToken: CancellationToken.None);
+
+        Assert.NotNull(preamble);
+    }
+
+    [Fact]
+    public async Task PriorBodyCitesSameTicketMultipleTimes_DedupesLookups()
+    {
+        var store = new StubRunStore(records: [PriorStep(StepName, AgentOutcome.COMPLETE)]);
+        var board = new StubBoardClient(existingCardIds: new HashSet<string> { "43" });
+        var builder = NewBuilder(store, board);
+        var comments = OneCommentWithMarker(Marker,
+            body: "Created #43, then later: Created #43 again. Note: ticket #43 is the one.");
+
+        var preamble = await builder.TryBuildPreambleAsync(
+            CardId, StateName, StepName, Marker, CurrentRun,
+            existingComments: comments,
+            variant: PreambleVariant.TaskPrompt,
+            cancellationToken: CancellationToken.None);
+
+        Assert.NotNull(preamble);
+        // Two "Created #43" mentions but only one lookup (deduped via HashSet).
+        Assert.Equal(1, board.CallCount);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
-    private static RerunPreambleBuilder NewBuilder(StubRunStore store)
-        => new(store, NullLogger<RerunPreambleBuilder>.Instance);
+    private static RerunPreambleBuilder NewBuilder(StubRunStore store, StubBoardClient? board = null)
+        => new(store, NullLogger<RerunPreambleBuilder>.Instance, board);
+
+    private sealed class StubBoardClient(HashSet<string> existingCardIds) : ITaskBoardClient
+    {
+        public int CallCount { get; private set; }
+        public Task<BoardCard> GetCardAsync(string cardId, CancellationToken cancellationToken)
+        {
+            CallCount++;
+            if (existingCardIds.Contains(cardId))
+                return Task.FromResult(new BoardCard(cardId, $"Card {cardId}", "body", "ColumnA"));
+            throw new InvalidOperationException($"Card {cardId} not found");
+        }
+
+        // Unused by the rerun preamble path — minimal stubs.
+        public Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken cancellationToken, IReadOnlyList<string>? excludeStatuses = null) => throw new NotImplementedException();
+        public Task UpdateCardBodyAsync(string cardId, string body, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task UpsertAgentCommentAsync(string cardId, string commentBody, string commentMarker, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<string> CreateCardAsync(CreateCardRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task AddLabelAsync(string cardId, string labelName, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task RemoveLabelAsync(string cardId, string labelName, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task AssignAsync(string cardId, string username, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task UnassignAsync(string cardId, string? username, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task SetFieldAsync(string cardId, string fieldName, string value, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task ClearFieldAsync(string cardId, string fieldName, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<string> GetCurrentUserAsync(CancellationToken cancellationToken) => throw new NotImplementedException();
+    }
 
     private static CardComment[] OneCommentWithMarker(string marker, string body)
         => [new CardComment("agent", $"<!-- {marker} -->\n{body}", DateTimeOffset.UtcNow)];

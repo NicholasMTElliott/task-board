@@ -50,8 +50,9 @@ public class ShutdownPollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestWorkflowConfigProvider.Create(TestConfig),
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, TestWorkflowConfigProvider.Create(TestConfig), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, TestWorkflowConfigProvider.Create(TestConfig), new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -60,8 +61,8 @@ public class ShutdownPollingRunnerTests
         var mergeRunner = new MergeRunner(
             boardClient,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
-            TestConfig,
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            TestWorkflowConfigProvider.Create(TestConfig),
+            new AgentIdentity("Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
             Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
@@ -70,8 +71,8 @@ public class ShutdownPollingRunnerTests
             boardClient,
             agentRunner,
             mergeRunner,
-            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
-            TestConfig,
+            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), TestWorkflowConfigProvider.Create(TestConfig), new AgentIdentity("Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
+            TestWorkflowConfigProvider.Create(TestConfig),
             AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             NullLogger<PollingRunner>.Instance,
             coordinator);

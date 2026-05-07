@@ -278,8 +278,9 @@ public class DependencyGuardTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestWorkflowConfigProvider.Create(config),
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "machine"),
-            new UpdateFileProcessor(board, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Test", "Agent", "machine"), NullLogger<UpdateFileProcessor>.Instance),
+            new AgentIdentity("Agent", "machine"),
+            new UpdateFileProcessor(board, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Agent", "machine"), NullLogger<UpdateFileProcessor>.Instance),
+
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -324,8 +325,8 @@ public class DependencyGuardTests
         var runner = new MergeRunner(
             board,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
-            config,
-            new AgentIdentity("Test", "Agent", "machine"),
+            TestWorkflowConfigProvider.Create(config),
+            new AgentIdentity("Agent", "machine"),
             new StubCrossReferenceResolver(),
             AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             NullLogger<MergeRunner>.Instance,

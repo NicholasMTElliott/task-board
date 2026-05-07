@@ -88,7 +88,6 @@ public sealed class DependencyGuard(
         Dictionary<string, BoardCard>? boardCardCache,
         bool recordSideEffects)
     {
-        workflowConfig = workflowConfigProvider.Current;
         var policy = workflowConfig.DependencyPolicy;
         if (policy?.Enabled != true || !IsEnforced(card, state, policy))
             return DependencyGuardResult.NotBlocked;

@@ -703,9 +703,10 @@ public class DockerClaudeMountBuilderTests : IDisposable
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestWorkflowConfigProvider.Create(config),
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Mounts", "TestMachine"),
+            new AgentIdentity("Mounts", "TestMachine"),
             new UpdateFileProcessor(boardClient, TestWorkflowConfigProvider.Create(config),
-                new AgentIdentity("Test", "Mounts", "TestMachine"),
+                new AgentIdentity("Mounts", "TestMachine"),
+
                 NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),

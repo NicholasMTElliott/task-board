@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 
 # Board provider
 $env:BoardProvider = "github"
-$env:AgentExecutor = "claude-cli"
+$env:AgentExecutor = "docker-claude-cli"
 $env:WorkflowConfigPath = "$PSScriptRoot\..\workflow.github.json"
 
 # GitHub Projects config

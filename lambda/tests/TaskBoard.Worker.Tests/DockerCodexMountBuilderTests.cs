@@ -319,14 +319,15 @@ public class DockerCodexMountBuilderTests : IDisposable
     public async Task BuildAsync_AllCredentialFiles_CopiedAndMountedRo()
     {
         // Pin every entry in the credential allowlist: auth.json, config.toml,
-        // cap_sid, installation_id, version.json, .personality_migration.
+        // cap_sid, version.json, .personality_migration.
         // Each must be staged and mounted RO at /home/agent/.codex/<name>.
+        // installation_id is intentionally NOT in the allowlist — see
+        // BuildAsync_InstallationId_NotMounted_RegressionGuard.
         var hostCredDir = Path.Combine(_tempDir, ".codex");
         Directory.CreateDirectory(hostCredDir);
         await File.WriteAllTextAsync(Path.Combine(hostCredDir, "auth.json"), "{}");
         await File.WriteAllTextAsync(Path.Combine(hostCredDir, "config.toml"), "");
         await File.WriteAllTextAsync(Path.Combine(hostCredDir, "cap_sid"), "x");
-        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "installation_id"), "x");
         await File.WriteAllTextAsync(Path.Combine(hostCredDir, "version.json"), "{}");
         await File.WriteAllTextAsync(Path.Combine(hostCredDir, ".personality_migration"), "");
 
@@ -338,12 +339,38 @@ public class DockerCodexMountBuilderTests : IDisposable
         Assert.Contains($"{DockerCodexMountBuilder.DefaultCredentialMountPoint}/auth.json", paths);
         Assert.Contains($"{DockerCodexMountBuilder.DefaultCredentialMountPoint}/config.toml", paths);
         Assert.Contains($"{DockerCodexMountBuilder.DefaultCredentialMountPoint}/cap_sid", paths);
-        Assert.Contains($"{DockerCodexMountBuilder.DefaultCredentialMountPoint}/installation_id", paths);
         Assert.Contains($"{DockerCodexMountBuilder.DefaultCredentialMountPoint}/version.json", paths);
         Assert.Contains($"{DockerCodexMountBuilder.DefaultCredentialMountPoint}/.personality_migration", paths);
 
         Assert.All(CredentialFileMounts(ctx),
             m => Assert.True(m.ReadOnly, "Credential mounts must be RO"));
+    }
+
+    [Fact]
+    public async Task BuildAsync_InstallationId_NotMounted_RegressionGuard()
+    {
+        // Codex CLI 0.128.0+ rewrites ~/.codex/installation_id during
+        // thread/start session init. Mounting it RO produced
+        // "codex_core::session: Failed to create session: Read-only file system
+        // (os error 30)" at startup, killing every Codex candidate before any
+        // agent work began. Letting Codex regenerate a fresh per-run UUID
+        // avoids the EROFS. This guard fires if anyone re-adds installation_id
+        // to the allowlist.
+        var hostCredDir = Path.Combine(_tempDir, ".codex");
+        Directory.CreateDirectory(hostCredDir);
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "auth.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "installation_id"), "abc-123");
+
+        var options = new DockerCodexAgentOptions { CredentialPath = hostCredDir };
+
+        await using var ctx = await Builder.BuildAsync(_tempDir, options);
+
+        var stagedDir = ctx.TempDirectories.Single(d => d.Contains("aiboard-codex-"));
+        Assert.False(File.Exists(Path.Combine(stagedDir, "installation_id")),
+            "installation_id must not be staged — Codex 0.128.0+ rewrites it during session init");
+
+        var paths = CredentialFileMounts(ctx).Select(m => m.ContainerPath).ToList();
+        Assert.DoesNotContain(paths, p => p.EndsWith("/installation_id", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -362,11 +389,12 @@ public class DockerCodexMountBuilderTests : IDisposable
         await File.WriteAllTextAsync(Path.Combine(hostCredDir, "auth.json"), "{}");
         await File.WriteAllTextAsync(Path.Combine(hostCredDir, "config.toml"), "");
         await File.WriteAllTextAsync(Path.Combine(hostCredDir, "cap_sid"), "x");
-        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "installation_id"), "x");
         await File.WriteAllTextAsync(Path.Combine(hostCredDir, "version.json"), "{}");
         await File.WriteAllTextAsync(Path.Combine(hostCredDir, ".personality_migration"), "");
 
-        // Runtime state (must NOT be mounted):
+        // Runtime state (must NOT be mounted) — including installation_id,
+        // which Codex 0.128.0+ rewrites at session init:
+        await File.WriteAllTextAsync(Path.Combine(hostCredDir, "installation_id"), "x");
         await File.WriteAllTextAsync(Path.Combine(hostCredDir, "models_cache.json"), "{}");
         await File.WriteAllTextAsync(Path.Combine(hostCredDir, "state_5.sqlite"), "");
         await File.WriteAllTextAsync(Path.Combine(hostCredDir, "state_5.sqlite-shm"), "");
@@ -382,10 +410,11 @@ public class DockerCodexMountBuilderTests : IDisposable
         await using var ctx = await Builder.BuildAsync(_tempDir, options);
 
         var paths = CredentialFileMounts(ctx).Select(m => m.ContainerPath).ToList();
-        Assert.Equal(6, paths.Count);
+        Assert.Equal(5, paths.Count);
 
         // Headline regression guard: none of the files Codex needs to write
         // at startup may appear in the mount list.
+        Assert.DoesNotContain(paths, p => p.EndsWith("/installation_id", StringComparison.Ordinal));
         Assert.DoesNotContain(paths, p => p.EndsWith("/models_cache.json", StringComparison.Ordinal));
         Assert.DoesNotContain(paths, p => p.Contains("/state_", StringComparison.Ordinal));
         Assert.DoesNotContain(paths, p => p.Contains("/logs_", StringComparison.Ordinal));
@@ -403,5 +432,59 @@ public class DockerCodexMountBuilderTests : IDisposable
 
         Assert.True(ctx.EnvironmentVariables.TryGetValue("GIT_OPTIONAL_LOCKS", out var value));
         Assert.Equal("0", value);
+    }
+
+    [Fact]
+    public async Task BuildAsync_SetsCodexInstallationIdEnvVar()
+    {
+        // Phase 2: aiboard's per-host installation_id is passed to the
+        // sandbox via env var; the entrypoint script writes it into
+        // ~/.codex/installation_id agent-owned, sidestepping the EROFS
+        // bind-mount problem.
+        await using var ctx = await Builder.BuildAsync(_tempDir, new DockerCodexAgentOptions
+        {
+            CredentialPath = Path.Combine(_tempDir, "missing"),
+        });
+
+        Assert.True(ctx.EnvironmentVariables.TryGetValue("CODEX_INSTALLATION_ID", out var value));
+        Assert.True(Guid.TryParse(value, out _),
+            $"CODEX_INSTALLATION_ID must be a valid UUID, got '{value}'");
+    }
+
+    [Fact]
+    public void ResolveInstallationId_ExplicitOverride_TakesPrecedence()
+    {
+        var explicitId = "11111111-2222-3333-4444-555555555555";
+        var resolved = DockerCodexMountBuilder.ResolveInstallationId(
+            new DockerCodexAgentOptions { InstallationId = explicitId });
+
+        Assert.Equal(explicitId, resolved);
+    }
+
+    [Fact]
+    public void ResolveInstallationId_InvalidExplicitOverride_FallsBackToCacheOrFresh()
+    {
+        // Garbage in InstallationId shouldn't propagate to the env var —
+        // the entrypoint would reject it anyway, but rejecting earlier means
+        // a clearer log line and cache-backed continuity.
+        var resolved = DockerCodexMountBuilder.ResolveInstallationId(
+            new DockerCodexAgentOptions { InstallationId = "not-a-uuid" });
+
+        Assert.True(Guid.TryParse(resolved, out _));
+    }
+
+    [Fact]
+    public void ResolveInstallationId_NoOverride_StableAcrossInvocations()
+    {
+        // Two back-to-back calls must return the same UUID — that's the
+        // whole point of "stable per-host". The cache file at
+        // <UserProfile>/.aiboard/codex_installation_id ensures continuity
+        // across aiboard process restarts too, but at minimum within one
+        // process the value must be identical.
+        var first = DockerCodexMountBuilder.ResolveInstallationId(new DockerCodexAgentOptions());
+        var second = DockerCodexMountBuilder.ResolveInstallationId(new DockerCodexAgentOptions());
+
+        Assert.Equal(first, second);
+        Assert.True(Guid.TryParse(first, out _));
     }
 }

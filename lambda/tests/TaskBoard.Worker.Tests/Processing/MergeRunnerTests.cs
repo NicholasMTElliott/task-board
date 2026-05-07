@@ -217,7 +217,8 @@ public class MergeRunnerTests : IDisposable
                 ["se"] = new("model", "prompt", new List<string>()),
             });
 
-        var runner = new MergeRunner(_boardClient, _gitManager, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Test", "Agent", "TestMachine"), Substitute.For<ICrossReferenceResolver>(), Substitute.For<IAgentExecutorResolver>(), NullLogger<MergeRunner>.Instance);
+        var runner = new MergeRunner(_boardClient, _gitManager, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Agent", "TestMachine"), Substitute.For<ICrossReferenceResolver>(), Substitute.For<IAgentExecutorResolver>(), NullLogger<MergeRunner>.Instance);
+
         var result = await runner.ExecuteAsync(CardId, BoardId, "C:/fake/path", CancellationToken.None);
 
         Assert.Equal(AgentOutcome.ERROR, result.Outcome);
@@ -255,7 +256,8 @@ public class MergeRunnerTests : IDisposable
     private const string ReadyForImplCol = "ReadyForImpl";
 
     private MergeRunner CreateRunner(IAgentExecutorResolver? executorResolver = null) =>
-        new(_boardClient, _gitManager, TestWorkflowConfigProvider.Create(_config), new AgentIdentity("Test", "Agent", "TestMachine"),
+        new(_boardClient, _gitManager, TestWorkflowConfigProvider.Create(_config), new AgentIdentity("Agent", "TestMachine"),
+
             Substitute.For<ICrossReferenceResolver>(),
             executorResolver ?? Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);

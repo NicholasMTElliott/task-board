@@ -85,8 +85,9 @@ public class AgentRunnerRateLimitTests : IDisposable
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestWorkflowConfigProvider.Create(config),
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+
             runStore ?? NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,

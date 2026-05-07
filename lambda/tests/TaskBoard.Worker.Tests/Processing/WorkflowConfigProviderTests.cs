@@ -109,7 +109,7 @@ public class WorkflowConfigProviderTests : IDisposable
         var initial = MakeMinimalConfig();
         using var provider = CreateProvider(initial);
 
-        Assert.Same(initial.Normalised().GetType(), provider.Current.GetType());
+        Assert.Same(initial, provider.Current);
         Assert.True(provider.Current.States.ContainsKey("Ready"));
     }
 

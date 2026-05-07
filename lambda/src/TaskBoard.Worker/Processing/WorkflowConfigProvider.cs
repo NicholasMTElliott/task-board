@@ -43,6 +43,7 @@ public sealed class WorkflowConfigProvider : IDisposable
 
     // volatile so reads from any thread see the latest swap without a lock
     private volatile WorkflowConfig _current;
+    private volatile bool _disposed;
 
     public WorkflowConfigProvider(
         string filePath,
@@ -87,6 +88,12 @@ public sealed class WorkflowConfigProvider : IDisposable
     /// <summary>Returns the most-recent successfully validated config.</summary>
     public WorkflowConfig Current => _current;
 
+    /// <summary>
+    /// Directly sets <see cref="Current"/> without going through the file-reload
+    /// pipeline. For use in unit tests only.
+    /// </summary>
+    internal void SetCurrentForTesting(WorkflowConfig config) => _current = config;
+
     private void OnFileEvent(object sender, FileSystemEventArgs e)
     {
         ScheduleReload();
@@ -111,6 +118,7 @@ public sealed class WorkflowConfigProvider : IDisposable
 
     private void ReloadNow()
     {
+        if (_disposed) return;
         try
         {
             if (!File.Exists(_filePath))
@@ -160,6 +168,7 @@ public sealed class WorkflowConfigProvider : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
         _watcher?.Dispose();
         lock (_timerLock)
         {

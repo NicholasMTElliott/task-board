@@ -48,8 +48,9 @@ public class AgentRunnerTests : IDisposable
             _gitWorkspaceManager,
             TestWorkflowConfigProvider.Create(_workflowConfig),
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(_workflowConfig), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(_workflowConfig), new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -263,8 +264,9 @@ public class AgentRunnerTests : IDisposable
 
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(throwingExecutor), _taskFileManager, _gitWorkspaceManager,
-            TestWorkflowConfigProvider.Create(BuildWorkflowConfig().Normalised()), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(BuildWorkflowConfig().Normalised()), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            TestWorkflowConfigProvider.Create(BuildWorkflowConfig().Normalised()), new StubCrossReferenceResolver(), new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(BuildWorkflowConfig().Normalised()), new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -616,8 +618,9 @@ public class AgentRunnerTests : IDisposable
 
         var runner = new AgentRunner(
             _trelloClient, resolver, _taskFileManager, _gitWorkspaceManager,
-            TestWorkflowConfigProvider.Create(config), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            TestWorkflowConfigProvider.Create(config), new StubCrossReferenceResolver(), new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -646,8 +649,9 @@ public class AgentRunnerTests : IDisposable
     {
         return new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(_agentExecutor), _taskFileManager, _gitWorkspaceManager,
-            TestWorkflowConfigProvider.Create(config), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            TestWorkflowConfigProvider.Create(config), new StubCrossReferenceResolver(), new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -658,8 +662,9 @@ public class AgentRunnerTests : IDisposable
     {
         return new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(_agentExecutor), _taskFileManager, _gitWorkspaceManager,
-            TestWorkflowConfigProvider.Create(config), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            TestWorkflowConfigProvider.Create(config), new StubCrossReferenceResolver(), new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+
             runStore,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -675,9 +680,10 @@ public class AgentRunnerTests : IDisposable
             _gitWorkspaceManager,
             TestWorkflowConfigProvider.Create(_workflowConfig),
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(_workflowConfig),
-                new AgentIdentity("Test", "Agent", "TestMachine"),
+                new AgentIdentity("Agent", "TestMachine"),
+
                 NullLogger<UpdateFileProcessor>.Instance),
             runStore,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
@@ -800,8 +806,9 @@ public class AgentRunnerTests : IDisposable
         var config = BuildMultiStepWorkflowConfig().Normalised();
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(sequencedExecutor), _taskFileManager, _gitWorkspaceManager,
-            TestWorkflowConfigProvider.Create(config), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            TestWorkflowConfigProvider.Create(config), new StubCrossReferenceResolver(), new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -833,8 +840,9 @@ public class AgentRunnerTests : IDisposable
         var config = BuildMultiStepWorkflowConfig().Normalised();
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(errorExecutor), _taskFileManager, _gitWorkspaceManager,
-            TestWorkflowConfigProvider.Create(config), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            TestWorkflowConfigProvider.Create(config), new StubCrossReferenceResolver(), new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -988,8 +996,9 @@ public class AgentRunnerTests : IDisposable
 
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
-            TestWorkflowConfigProvider.Create(_workflowConfig), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(_workflowConfig), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            TestWorkflowConfigProvider.Create(_workflowConfig), new StubCrossReferenceResolver(), new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(_workflowConfig), new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -1037,8 +1046,9 @@ public class AgentRunnerTests : IDisposable
 
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
-            TestWorkflowConfigProvider.Create(_workflowConfig), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(_workflowConfig), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            TestWorkflowConfigProvider.Create(_workflowConfig), new StubCrossReferenceResolver(), new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(_workflowConfig), new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -1181,8 +1191,9 @@ public class AgentRunnerTests : IDisposable
         var mockRunStore = Substitute.For<IRunStore>();
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(throwingExecutor), _taskFileManager, _gitWorkspaceManager,
-            TestWorkflowConfigProvider.Create(_workflowConfig), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(_workflowConfig), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            TestWorkflowConfigProvider.Create(_workflowConfig), new StubCrossReferenceResolver(), new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(_workflowConfig), new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+
             mockRunStore,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -1206,8 +1217,9 @@ public class AgentRunnerTests : IDisposable
         var mockRunStore = Substitute.For<IRunStore>();
         var runner = new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(throwingExecutor), _taskFileManager, _gitWorkspaceManager,
-            TestWorkflowConfigProvider.Create(_workflowConfig), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(_workflowConfig), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            TestWorkflowConfigProvider.Create(_workflowConfig), new StubCrossReferenceResolver(), new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(_workflowConfig), new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+
             mockRunStore,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,

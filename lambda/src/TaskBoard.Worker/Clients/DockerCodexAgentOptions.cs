@@ -48,6 +48,20 @@ public sealed class DockerCodexAgentOptions : DockerAgentOptionsBase
     public string? CredentialMountPoint { get; set; }
 
     /// <summary>
+    /// Optional explicit override for the Codex CLI's <c>installation_id</c>
+    /// (the UUID Codex sends as the <c>x-codex-installation-id</c> header on
+    /// API calls). When null (default), <see cref="DockerCodexMountBuilder"/>
+    /// reads or generates a stable UUID at
+    /// <c>&lt;UserProfile&gt;/.aiboard/codex_installation_id</c>. Set to a
+    /// fixed UUID to share one identity across a fleet of identical
+    /// aiboard hosts. The value is passed to the sandbox via the
+    /// <c>CODEX_INSTALLATION_ID</c> env var; the entrypoint script writes it
+    /// into <c>~/.codex/installation_id</c> agent-owned, sidestepping the
+    /// EROFS/EPERM problems of bind-mounting the host file.
+    /// </summary>
+    public string? InstallationId { get; set; }
+
+    /// <summary>
     /// When true (default), passes <c>--yolo</c> to <c>codex exec</c>. The
     /// container itself provides filesystem isolation (per the
     /// <c>docker-codex</c> design rationale), so disabling Codex's own

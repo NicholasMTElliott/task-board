@@ -90,9 +90,10 @@ public class AgentRunnerFailureReasonTests : IDisposable
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestWorkflowConfigProvider.Create(config),
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(config),
-                new AgentIdentity("Test", "Agent", "TestMachine"),
+                new AgentIdentity("Agent", "TestMachine"),
+
                 NullLogger<UpdateFileProcessor>.Instance),
             _runStore,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(),

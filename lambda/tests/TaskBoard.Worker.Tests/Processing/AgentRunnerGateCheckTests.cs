@@ -505,8 +505,9 @@ public class AgentRunnerGateCheckTests : IDisposable
         return new AgentRunner(
             _boardClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
             TestWorkflowConfigProvider.Create(normalisedConfig), new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(normalisedConfig), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(normalisedConfig), new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+
             runStore ?? NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,

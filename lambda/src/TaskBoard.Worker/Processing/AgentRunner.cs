@@ -361,6 +361,23 @@ public sealed partial class AgentRunner(
 
             double? capturedEstimate = null;
 
+            // Accumulator for tickets created across all steps. Forwarded to the
+            // gate check as {CreatedTickets} so the gate sees what was actually
+            // accomplished even after UpdateFileProcessor deletes the source
+            // .aiboard/updates/new-*.md files. Without this, gate checks for
+            // discard-mode generation states (story decomposition, epic
+            // decomposition) inspect an empty updates dir and falsely conclude
+            // "no work was done".
+            var allCreatedTickets = new List<CreatedTicketInfo>();
+
+            // Accumulator for `.md` files in `.aiboard/updates/` that didn't
+            // match any recognized pattern (most commonly: agent forgot the
+            // `new-` prefix on what was supposed to be a new-ticket file).
+            // Surfaced to the gate as {UnrecognizedFiles} so the gate can
+            // ERROR when the agent says "I made tickets" but actually wrote
+            // unparseable filenames.
+            var allUnrecognizedFiles = new List<UnrecognizedUpdateFile>();
+
             for (var stepIndex = 0; stepIndex < state.Steps.Count; stepIndex++)
             {
                 // Inter-step shutdown check: if graceful shutdown was requested after at least one step
@@ -659,6 +676,24 @@ public sealed partial class AgentRunner(
                         capturedEstimate, updateResult.CreatedTickets.Count);
                 }
 
+                // 6d-ii-c. Accumulate created tickets so the gate check (which
+                //          runs after UpdateFileProcessor deletes the source
+                //          new-*.md files) can see what was actually produced.
+                if (updateResult.CreatedTickets.Count > 0)
+                {
+                    allCreatedTickets.AddRange(updateResult.CreatedTickets);
+                }
+
+                // 6d-ii-d. Accumulate unrecognized .md files for the gate so it
+                //          can detect the silent-failure mode where the agent
+                //          produced files with bad filenames (e.g. missing
+                //          `new-` prefix) and the orchestrator silently skipped
+                //          them.
+                if (updateResult.UnrecognizedFilesList.Count > 0)
+                {
+                    allUnrecognizedFiles.AddRange(updateResult.UnrecognizedFilesList);
+                }
+
                 // 6d-iii. Save step result to DB.
                 // Skip when the step ran as a candidate group: CandidateExecutor
                 // already persisted N candidate rows + 1 evaluator row, and a
@@ -717,7 +752,7 @@ public sealed partial class AgentRunner(
                 // 6e. Upsert step-specific comment (augmented with update file summary if applicable)
                 // Build a per-step prefix so the comment header attributes the actual role that ran,
                 // rather than always reporting the first step's role for a multi-step state.
-                var stepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role);
+                var stepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role, stepRole.Provider, stepRole.Model);
                 var stepMarker = $"<!-- agent-step:{step.Name} -->";
                 var stepComment = $"{stepPrefix}\n\n**Step: {step.Name}**\n\n{FormatComment(lastResult, includeConversationLog: runStore is NullRunStore)}";
                 if (updateResult.HasUpdates)
@@ -779,7 +814,7 @@ public sealed partial class AgentRunner(
             // 7. Run gate check if configured
             var gateCheckResult = await RunGateCheckAsync(
                 session, state, lastResult!, worktreePath, targetCard, cardId, runId,
-                runStartCanonicalSha, cancellationToken);
+                runStartCanonicalSha, allCreatedTickets, allUnrecognizedFiles, cancellationToken);
 
             if (gateCheckResult.BlockingResult is not null)
             {
@@ -1159,6 +1194,8 @@ public sealed partial class AgentRunner(
         string cardId,
         string runId,
         string? runStartCanonicalSha,
+        IReadOnlyList<CreatedTicketInfo> createdTickets,
+        IReadOnlyList<UnrecognizedUpdateFile> unrecognizedFiles,
         CancellationToken cancellationToken)
     {
         if (state.GateCheck is null)
@@ -1200,11 +1237,71 @@ public sealed partial class AgentRunner(
                 : "";
         }
 
-        // Skip gate check if no changes
-        if (string.IsNullOrWhiteSpace(changes))
+        // Skip gate check if no changes AND no tickets created AND no
+        // unrecognized files (the third case is the silent-failure shape we
+        // explicitly want to surface — running the gate so it can ERROR on it).
+        // For decomposition / generation states the per-step new-*.md files
+        // have already been deleted by UpdateFileProcessor by the time we get
+        // here, so the only artifact of work done is the createdTickets list
+        // and the unrecognizedFiles list.
+        if (string.IsNullOrWhiteSpace(changes)
+            && createdTickets.Count == 0
+            && unrecognizedFiles.Count == 0)
         {
             logger.LogWarning("Gate check skipped: no changes detected for card {CardId}", cardId);
             return new GateCheckResult(null, null);
+        }
+
+        // Build a {CreatedTickets} block for the gate prompt. Format chosen so
+        // it reads naturally inside a markdown prompt section.
+        string createdTicketsBlock;
+        if (createdTickets.Count == 0)
+        {
+            createdTicketsBlock = "_(no tickets created during this run)_";
+        }
+        else
+        {
+            var sb = new StringBuilder();
+            foreach (var t in createdTickets)
+            {
+                sb.Append("- #").Append(t.NewCardId).Append(' ').Append(t.Title);
+                if (!string.IsNullOrEmpty(t.Slug))
+                {
+                    sb.Append(" (slug: `").Append(t.Slug).Append("`)");
+                }
+                if (t.Estimate.HasValue)
+                {
+                    sb.Append(" — est ").Append(t.Estimate.Value.ToString("0.##", CultureInfo.InvariantCulture));
+                }
+                sb.AppendLine();
+            }
+            createdTicketsBlock = sb.ToString().TrimEnd();
+        }
+
+        // Build a {UnrecognizedFiles} block. Empty case is the cheery "all
+        // good" message; non-empty is a flagged failure with rename hints.
+        string unrecognizedFilesBlock;
+        if (unrecognizedFiles.Count == 0)
+        {
+            unrecognizedFilesBlock = "_(all `.md` files in `.aiboard/updates/` were recognized — none rejected)_";
+        }
+        else
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("**FAILURE SIGNAL**: ").Append(unrecognizedFiles.Count)
+                .AppendLine(" `.md` file(s) in `.aiboard/updates/` were not recognized by the orchestrator and were silently skipped:");
+            foreach (var u in unrecognizedFiles)
+            {
+                sb.Append("- `").Append(u.FileName).Append('`');
+                if (u.LikelyMissingNewPrefix)
+                {
+                    sb.Append(" — looks like the agent forgot the `new-` prefix; should have been `new-").Append(u.FileName).Append('`');
+                }
+                sb.AppendLine();
+            }
+            sb.AppendLine();
+            sb.AppendLine("If the agent's self-report claims work that should have produced these files, this is a silent-failure mode. Return `outcome=ERROR` so the operator can re-run.");
+            unrecognizedFilesBlock = sb.ToString().TrimEnd();
         }
 
         // Build gate prompt
@@ -1230,7 +1327,9 @@ public sealed partial class AgentRunner(
         gatePrompt = gatePrompt
             .Replace("{TaskBody}", targetCard.Body ?? "")
             .Replace("{Diff}", changes)
-            .Replace("{AgentReport}", agentReport);
+            .Replace("{AgentReport}", agentReport)
+            .Replace("{CreatedTickets}", createdTicketsBlock)
+            .Replace("{UnrecognizedFiles}", unrecognizedFilesBlock);
 
         // Re-run fast-path for the gate check: if a prior run completed this gate with COMPLETE
         // and the canonical gate-check comment is still on the card, prepend a "confirm or update"
@@ -1351,7 +1450,7 @@ public sealed partial class AgentRunner(
         {
             // Gate check infrastructure failure is non-blocking
             logger.LogError(ex, "Gate check failed to execute for card {CardId} — proceeding without verification", cardId);
-            var gateIdentity = $"(via {agentIdentity.DisplayName})";
+            var gateIdentity = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
             var warningComment = $"<!-- gate-check:{state.Name} -->\n\n" +
                 $"## Gate Check Warning {gateIdentity}\n\nGate check failed to execute: {ex.Message}\nProceeding without verification.";
             await boardClient.UpsertAgentCommentAsync(cardId, warningComment,
@@ -1370,7 +1469,7 @@ public sealed partial class AgentRunner(
             case AgentOutcome.NEEDS_INFO:
             {
                 // CONCERNS — route to questions column
-                var gateIdentityConcerns = $"(via {agentIdentity.DisplayName})";
+                var gateIdentityConcerns = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
                 var comment = $"<!-- gate-check:{state.Name} -->\n\n" +
                     $"## Gate Check: Concerns {gateIdentityConcerns}\n\n{gateResult.Detail ?? "The gate check raised concerns."}";
                 await boardClient.UpsertAgentCommentAsync(cardId, comment,
@@ -1412,7 +1511,7 @@ public sealed partial class AgentRunner(
                     // Escalate to NEEDS_INFO for human intervention
                     logger.LogWarning("Gate check for card {CardId} has failed {Count} times — escalating to NEEDS_INFO",
                         cardId, previousFailures + 1);
-                    var gateIdentityEscalate = $"(via {agentIdentity.DisplayName})";
+                    var gateIdentityEscalate = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
                     var escalateComment = $"<!-- gate-check:{state.Name} result:ERROR attempt:{previousFailures + 1} -->\n\n" +
                         $"## Gate Check: Escalated to Human Review {gateIdentityEscalate}\n\n" +
                         $"The gate check has failed {previousFailures + 1} consecutive times. Escalating for human review.\n\n" +
@@ -1430,7 +1529,7 @@ public sealed partial class AgentRunner(
                 }
 
                 // Route via GATE_FAIL (re-trigger) or fall back to ERROR
-                var gateIdentityFail = $"(via {agentIdentity.DisplayName})";
+                var gateIdentityFail = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
                 var failComment = $"<!-- gate-check:{state.Name} result:ERROR attempt:{previousFailures + 1} -->\n\n" +
                     $"## Gate Check: Failed {gateIdentityFail}\n\n{gateResult.Detail ?? "The gate check detected issues with the agent's output."}";
                 await boardClient.UpsertAgentCommentAsync(cardId, failComment,
@@ -1594,7 +1693,7 @@ public sealed partial class AgentRunner(
 
             // Post step-specific comment with optional: prefix to avoid marker collision.
             // Build a per-step prefix so the header reflects the actual specialist-reviewer role.
-            var optionalStepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role);
+            var optionalStepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role, stepRole.Provider, stepRole.Model);
             var stepMarker = $"<!-- agent-step:optional:{step.Name} -->";
             var stepComment = $"{optionalStepPrefix}\n\n**Optional Step: {step.Name}**\n\n{FormatComment(result, includeConversationLog: runStore is NullRunStore)}";
             await boardClient.UpsertAgentCommentAsync(cardId, stepComment, stepMarker, cancellationToken);
@@ -2305,7 +2404,7 @@ public sealed partial class AgentRunner(
         return ResolvePromptPlaceholders(template, card, extraContext);
     }
 
-    private static string BuildCommentPrefix(WorkflowState state, WorkflowConfig config, AgentIdentity identity, string? roleOverride = null)
+    private static string BuildCommentPrefix(WorkflowState state, WorkflowConfig config, AgentIdentity identity, string? roleOverride = null, string? providerKey = null, string? model = null)
     {
         var activeStateName = state.Transitions.TryGetValue(TransitionKeys.InProgress, out var inProgressTarget)
             && inProgressTarget.Column is string inProgressCol
@@ -2318,7 +2417,8 @@ public sealed partial class AgentRunner(
         var roleName = roleOverride
             ?? (state.Steps is { Count: > 0 } ? state.Steps[0].Role : state.Role)
             ?? "agent";
-        return $"**{roleName} in {activeStateName} ({identity.DisplayName}):**";
+        var agentName = identity.FormatAgentName(providerKey, model);
+        return $"**{roleName} in {activeStateName} ({agentName}):**";
     }
 
     internal static string FormatUpdateSummary(UpdateProcessingResult result)

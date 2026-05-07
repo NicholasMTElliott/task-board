@@ -123,9 +123,10 @@ public class AgentRunnerInitFileTests : IDisposable
             _boardClient, AgentExecutorResolver.ForSingleExecutor(executor),
             _taskFileManager, _gitWorkspaceManager,
             TestWorkflowConfigProvider.Create(normalisedConfig), new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(normalisedConfig),
-                new AgentIdentity("Test", "Agent", "TestMachine"),
+                new AgentIdentity("Agent", "TestMachine"),
+
                 NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),

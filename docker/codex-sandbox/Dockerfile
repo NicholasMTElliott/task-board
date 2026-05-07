@@ -70,10 +70,22 @@ RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}"
 # This is the default mount target used by the Docker executor.
 RUN mkdir -p /workspace && chown agent:agent /workspace
 
+# Install entrypoint that writes the operator-supplied $CODEX_INSTALLATION_ID
+# into an agent-owned ~/.codex/installation_id before exec'ing the command.
+# See entrypoint.sh comments for the EROFS/EPERM rationale.
+COPY entrypoint.sh /usr/local/bin/aiboard-codex-entrypoint
+RUN chmod 0755 /usr/local/bin/aiboard-codex-entrypoint
+
 WORKDIR /workspace
 USER agent
 
-# No ENTRYPOINT — the executor invokes `codex exec ...` directly so
-# both `docker run` (per-step) and `docker exec` (container reuse)
-# patterns work without a wrapper.
+# ENTRYPOINT runs as the first PID (after `--init`'s tini reaper) and exec's
+# whatever command/args the executor passed after the image name. So
+# `docker run aiboard-codex-sandbox:latest codex exec --json ...` becomes
+# `aiboard-codex-entrypoint codex exec --json ...`. The codex executor does
+# not use container reuse (each step spawns a fresh container — see
+# DockerCodexAgentExecutor / CLAUDE.md), so first-process-only entrypoint
+# semantics are fine. Any future docker-exec calls would also see the file
+# already written by the initial entrypoint run.
+ENTRYPOINT ["/usr/local/bin/aiboard-codex-entrypoint"]
 CMD ["bash"]

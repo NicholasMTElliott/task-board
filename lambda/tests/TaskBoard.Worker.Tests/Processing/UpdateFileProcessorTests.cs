@@ -40,8 +40,9 @@ public class UpdateFileProcessorTests : IDisposable
                 ["story"] = new("User Story", "type", ["task"]),
             });
 
-        _identity = new AgentIdentity("Bot", "TestBot", "machine");
+        _identity = new AgentIdentity("TestBot", "machine");
         _processor = new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(_config), _identity,
+
             NullLogger<UpdateFileProcessor>.Instance);
     }
 
@@ -1291,6 +1292,80 @@ public class UpdateFileProcessorTests : IDisposable
             NullLogger<UpdateFileProcessor>.Instance);
 
         Assert.Null(processor.BuildTypeLabel("task"));
+    }
+
+    // ── Unrecognized-file warnings ───────────────────────────────────────────
+
+    [Fact]
+    public async Task ProcessUpdates_FileMissingNewPrefix_NotCreated_AndSurfacedAsUnrecognized()
+    {
+        var updatesDir = CreateUpdatesDir();
+        // The KvA / eve failure shape: agent forgets the `new-` prefix.
+        File.WriteAllText(Path.Combine(updatesDir, "apply-theme-class.md"),
+            "---\ntitle: Apply themeClass\n---\n\nbody");
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, SourceCardId, StepName, [], CancellationToken.None);
+
+        Assert.Empty(result.CreatedTickets);
+        Assert.False(result.HasUpdates);
+        Assert.Single(result.UnrecognizedFilesList);
+        Assert.Equal("apply-theme-class.md", result.UnrecognizedFilesList[0].FileName);
+        Assert.True(result.UnrecognizedFilesList[0].LikelyMissingNewPrefix,
+            "filename matches slug-shape heuristic — should be flagged as 'likely missing new- prefix'");
+
+        await _boardClient.DidNotReceive().CreateCardAsync(Arg.Any<CreateCardRequest>(), Arg.Any<CancellationToken>());
+
+        // File is NOT deleted — operator can manually rename and re-trigger.
+        Assert.True(File.Exists(Path.Combine(updatesDir, "apply-theme-class.md")));
+    }
+
+    [Fact]
+    public async Task ProcessUpdates_NewPrefixFile_NotFlaggedAsUnrecognized()
+    {
+        var updatesDir = CreateUpdatesDir();
+        File.WriteAllText(Path.Combine(updatesDir, "new-good.md"), "---\ntitle: Good\n---");
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, SourceCardId, StepName, [], CancellationToken.None);
+
+        Assert.Empty(result.UnrecognizedFilesList);
+    }
+
+    [Fact]
+    public async Task ProcessUpdates_MixOfRecognizedAndUnrecognized_BothSurfaced()
+    {
+        var updatesDir = CreateUpdatesDir();
+        File.WriteAllText(Path.Combine(updatesDir, "new-real-task.md"),
+            "---\ntitle: A real task\n---");
+        File.WriteAllText(Path.Combine(updatesDir, "stray-file.md"),
+            "---\ntitle: Stray\n---");
+        File.WriteAllText(Path.Combine(updatesDir, "another-orphan.md"),
+            "---\ntitle: Another\n---");
+
+        var result = await _processor.ProcessUpdatesAsync(
+            _tempDir, SourceCardId, StepName, [], CancellationToken.None);
+
+        Assert.Single(result.CreatedTickets);
+        Assert.Equal(2, result.UnrecognizedFilesList.Count);
+        Assert.All(result.UnrecognizedFilesList, u =>
+            Assert.True(u.LikelyMissingNewPrefix,
+                $"{u.FileName} should be flagged as 'likely missing new- prefix' (slug-shape filename)"));
+    }
+
+    [Theory]
+    [InlineData("apply-theme-class.md", true)]
+    [InlineData("create-entry-points.md", true)]
+    [InlineData("multi-word-slug.md", true)]
+    [InlineData("new-correct-prefix.md", false)] // already has prefix
+    [InlineData("123-comment.md", false)]         // matches comment pattern
+    [InlineData("123-reference.md", false)]       // matches reference pattern
+    [InlineData("noslug.md", false)]              // single word, no hyphen
+    [InlineData("readme.txt", false)]             // wrong extension
+    [InlineData(".md", false)]                    // edge case, too short
+    public void LooksLikeMissingNewPrefix_HeuristicCases(string fileName, bool expected)
+    {
+        Assert.Equal(expected, UpdateFileProcessor.LooksLikeMissingNewPrefix(fileName));
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
