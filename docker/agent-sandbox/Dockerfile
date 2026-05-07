@@ -8,14 +8,25 @@
 #   BASE_IMAGE        - Base Docker image (default: node:22-slim)
 #   AGENT_UID         - UID for the non-root agent user (default: 1000)
 #   AGENT_GID         - GID for the non-root agent group (default: 1000)
-#   CLAUDE_CLI_VERSION - npm version spec for @anthropic-ai/claude-code (default: latest)
+#   CLAUDE_CLI_VERSION - npm version spec for @anthropic-ai/claude-code.
+#                        Default is pinned to a specific version we have
+#                        validated against — bleeding-edge defaults bit us
+#                        repeatedly with silent wire-shape changes (see
+#                        memory-bank/systemPatterns.md "Codex Executor Defensive
+#                        Diagnostics" and the eve issue #9 ~/.claude.json
+#                        regression). Bumping requires the version-pin dance
+#                        documented in docs/CliVersionTesting.md: capture
+#                        fixture, run parser-corpus tests, bump
+#                        CliVersionPolicy.MaxKnown, then bump THIS default.
+#                        The DockerfilePolicyDriftTests guard fails CI if
+#                        this default drifts ahead of CliVersionPolicy.
 
 ARG BASE_IMAGE=node:22-slim
 FROM ${BASE_IMAGE}
 
 ARG AGENT_UID=1000
 ARG AGENT_GID=1000
-ARG CLAUDE_CLI_VERSION=latest
+ARG CLAUDE_CLI_VERSION=2.1.126
 
 # Install system dependencies:
 #   git             - required for worktree operations

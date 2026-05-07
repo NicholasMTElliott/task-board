@@ -2,11 +2,11 @@
 
 aiboard's runtime depends on three external CLIs: **Codex** (`codex exec --json`), **Claude Code** (`claude --output-format stream-json`), and **OpenCode** (free-form stdout). Each CLI is on its own release cadence, and a wire-shape change in any of them can silently break our parsers — that's exactly what happened with Codex CLI 0.125.0, which dropped top-level `structured_output` events in favour of `agent_message` items inside `item.completed` events.
 
-This document describes the three layers of defence we maintain against that class of breakage and how to extend them when a new CLI version drops.
+This document describes the **four** layers of defence we maintain against that class of breakage and how to extend them when a new CLI version drops.
 
 ---
 
-## The three layers
+## The four layers
 
 ### 1. `CliVersionPolicy.KnownGood` — single source of truth
 
@@ -30,7 +30,17 @@ Test classes [`CodexParserCorpusTests`](../lambda/tests/TaskBoard.Worker.Tests/C
 
 **The whole point**: when a future CLI version changes the wire shape, capture a sample of its stdout into a new `{version}/` directory. If parser-corpus tests pass, you have permanent regression coverage for that shape. If they fail, fix the parser first and add the new fixture to pin the new shape.
 
-### 3. Live smoke tests — pre-release version validation
+### 3. Dockerfile pin guard — sandboxed-CLI build-time enforcement
+
+Each sandbox Dockerfile (`docker/{agent,codex,opencode}-sandbox/Dockerfile`) pins the CLI it bakes via an `ARG ${X}_CLI_VERSION=<concrete-version>` default. The PowerShell build wrappers under `scripts/build-{X}-sandbox.ps1` mirror the same defaults. A unit test, [`DockerfilePolicyDriftTests`](../lambda/tests/TaskBoard.Worker.Tests/Validation/DockerfilePolicyDriftTests.cs), reads each Dockerfile's `ARG` default and asserts:
+
+- The pin is a concrete SemVer (not `latest` — bleeding-edge defaults bit us repeatedly).
+- The pin is **≤** `CliVersionPolicy.KnownGood[<cli>].MaxKnown`. Drifting ahead means a Dockerfile is shipping a CLI version we haven't captured a fixture for. CI fails on drift.
+- A second informational test asserts the Dockerfile pin and `MaxKnown` agree on the **exact** version (looser correctness rule than the first test, but it surfaces "policy moved without Docker bumping" mismatches).
+
+Running [`scripts/check-cli-versions.ps1`](../scripts/check-cli-versions.ps1) hits the npm registry and prints a punch list of CLIs whose pinned version is older than what's currently published — your "should we schedule a fixture-capture sprint?" signal. Use `-FailIfDrifted` in CI to nag (does not block the build).
+
+### 4. Live smoke tests — pre-release version validation
 
 [`CodexAgentExecutorLiveTests`](../lambda/tests/TaskBoard.Worker.Tests/Clients/CodexAgentExecutorLiveTests.cs) and [`ClaudeAgentExecutorLiveTests`](../lambda/tests/TaskBoard.Worker.Tests/Clients/ClaudeAgentExecutorLiveTests.cs) invoke the real installed CLI against a trivial prompt and assert the parser extracts an outcome. These confirm the *currently installed* CLI version is end-to-end compatible — the layer that catches "my Codex CLI auto-updated yesterday and now production is broken."
 
@@ -100,7 +110,19 @@ Bump `MinSupported` only when a NEW version drops support for an old wire shape 
 
 Bump `MaxKnown` whenever you've validated a new version with the parser-corpus tests.
 
-### Step 4 (recommended): Run the live smoke test
+### Step 4: Bump the Dockerfile and build-script defaults
+
+For sandboxed CLIs (Codex, Claude, OpenCode — currently all of them), bump the `ARG` default in the matching Dockerfile and the corresponding `[string]$XCliVersion = "..."` default in the build script. The values must agree with `CliVersionPolicy.KnownGood[<cli>].MaxKnown`; `DockerfilePolicyDriftTests` will fail if they drift apart.
+
+| CLI       | Dockerfile                                 | Build script                            |
+|-----------|---------------------------------------------|-----------------------------------------|
+| Claude    | `docker/agent-sandbox/Dockerfile`          | `scripts/build-sandbox.ps1`             |
+| Codex     | `docker/codex-sandbox/Dockerfile`          | `scripts/build-codex-sandbox.ps1`       |
+| OpenCode  | `docker/opencode-sandbox/Dockerfile`       | `scripts/build-opencode-sandbox.ps1`    |
+
+After bumping, rebuild the image (`scripts/build-{X}-sandbox.ps1`). The `aiboard-{X}-sandbox:latest` tag now bakes the new version. Run the live smoke test (next step) to confirm end-to-end.
+
+### Step 5 (recommended): Run the live smoke test
 
 ```bash
 AIBOARD_TEST_LIVE_CLI=1 dotnet test --filter "FullyQualifiedName~LiveTests"
@@ -108,15 +130,31 @@ AIBOARD_TEST_LIVE_CLI=1 dotnet test --filter "FullyQualifiedName~LiveTests"
 
 End-to-end confirmation that the installed CLI + the parser + the version policy all line up. Costs a few cents in LLM API calls; worth running before a release.
 
-### Step 5: Commit
+### Step 6: Commit
 
 ```
 test(cli-version): pin Codex CLI {NEW_VERSION}
 
-Adds Fixtures/Cli/codex/{NEW_VERSION}/agent-message-complete.ndjson and
-bumps CliVersionPolicy.KnownGood[codex].MaxKnown. Parser-corpus tests
-green; live smoke test green against {NEW_VERSION}.
+Adds Fixtures/Cli/codex/{NEW_VERSION}/agent-message-complete.ndjson,
+bumps CliVersionPolicy.KnownGood[codex].MaxKnown, bumps the Dockerfile
+ARG default (and build script default), and rebuilds the sandbox image.
+Parser-corpus tests green; live smoke test green; DockerfilePolicyDriftTests
+green.
 ```
+
+---
+
+## Spotting drift before it bites
+
+Run [`scripts/check-cli-versions.ps1`](../scripts/check-cli-versions.ps1) periodically to see which CLIs have newer releases than what we've pinned:
+
+```bash
+pwsh ./scripts/check-cli-versions.ps1
+```
+
+Output flags `current` / `drifted` / `ahead` / `unpinned` per CLI, with the npm-latest version. Use `-FailIfDrifted` in CI to nag (exit 1 on drift; does not block the build).
+
+The drift report is the trigger for the bump dance above — when a CLI shows `drifted`, schedule a fixture-capture session.
 
 ---
 

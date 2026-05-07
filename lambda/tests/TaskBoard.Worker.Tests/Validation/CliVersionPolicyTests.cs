@@ -87,16 +87,13 @@ public class CliVersionPolicyTests
         Assert.Contains("CliVersionPolicy.MaxKnown", result.Message);
     }
 
-    [Fact]
-    public void Check_UnpinnedPolicy_ReturnsUnknown()
-    {
-        // Claude policy is currently unpinned (MinSupported=null, MaxKnown=null)
-        // — any version returns Unknown rather than Old/Newer/Supported.
-        var result = CliVersionPolicy.Check(CliKey.Claude, "1.0.34");
-        Assert.Equal(CliVersionStatus.Unknown, result.Status);
-        Assert.Equal(new SemVer(1, 0, 34), result.ParsedVersion);
-        Assert.Contains("No version range pinned", result.Message);
-    }
+    // Note: a previous test (`Check_UnpinnedPolicy_ReturnsUnknown`) covered
+    // the "policy entry exists but MinSupported and MaxKnown are both null"
+    // branch in CliVersionPolicy.Check. That branch is currently unreachable
+    // via production data — every CLI in KnownGood has a non-null MaxKnown
+    // since the Dockerfile-pin guard rolled out. Re-add the test if a CLI is
+    // ever stubbed back to null/null. The "no entry in dict" path is still
+    // covered by Check_UnknownCliKey_ReturnsUnknown below.
 
     [Fact]
     public void Check_UnparseableVersionString_ReturnsUnknown()
