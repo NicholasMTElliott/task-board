@@ -7,11 +7,11 @@ namespace TaskBoard.Worker.Processing;
 
 public sealed class CardClaimService(
     NpgsqlDataSource dataSource,
-    IOptions<PgmqOptions> options,
+    IOptionsMonitor<PgmqOptions> options,
     ITenantIdentifier tenant,
     ILogger<CardClaimService> logger) : ICardClaimService
 {
-    private readonly int _staleMinutes = options.Value.StaleClaimMinutes;
+    private readonly int _staleMinutes = options.CurrentValue.StaleClaimMinutes;
 
     public async Task<bool> TryClaimAsync(string cardId, string agentId, CancellationToken cancellationToken)
     {

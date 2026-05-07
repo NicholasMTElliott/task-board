@@ -48,7 +48,7 @@ builder.Configuration.Sources.Clear();
 var configSources = new List<string>();
 void AddJsonLayer(string path)
 {
-    builder.Configuration.AddJsonFile(path, optional: true, reloadOnChange: false);
+    builder.Configuration.AddJsonFile(path, optional: true, reloadOnChange: true);
     configSources.Add($"  json   {path}  [{(File.Exists(path) ? "exists" : "missing")}]");
 }
 
@@ -87,7 +87,7 @@ if (!cwdIsExeDir)
 if (configFilePath is not null)
 {
     var resolvedConfig = CliDefinitions.ResolvePath(configFilePath);
-    builder.Configuration.AddJsonFile(resolvedConfig, optional: false, reloadOnChange: false);
+    builder.Configuration.AddJsonFile(resolvedConfig, optional: false, reloadOnChange: true);
     configSources.Add($"  json   {resolvedConfig}  [--config; required]");
 }
 
@@ -200,9 +200,11 @@ else
     workflowPath = Array.Find(workflowProbed, File.Exists);
 }
 
-builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
+builder.Services.AddSingleton<WorkflowConfigProvider>(serviceProvider =>
 {
-    var logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("WorkflowConfig");
+    var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
+    var providerLogger = loggerFactory.CreateLogger<WorkflowConfigProvider>();
+    var configLogger = loggerFactory.CreateLogger("WorkflowConfig");
 
     if (workflowPath is null || !File.Exists(workflowPath))
     {
@@ -212,7 +214,7 @@ builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
             "\nSet WorkflowConfigPath in appsettings.json, env var, or --workflow-config.");
     }
 
-    logger.LogInformation("Loading workflow config from {WorkflowPath}", workflowPath);
+    configLogger.LogInformation("Loading workflow config from {WorkflowPath}", workflowPath);
     var workflowJson = File.ReadAllText(workflowPath);
     var config = JsonSerializer.Deserialize<WorkflowConfig>(workflowJson, new JsonSerializerOptions
     {
@@ -241,13 +243,13 @@ builder.Services.AddSingleton<WorkflowConfig>(serviceProvider =>
     // operator intent (e.g. Codex role without an explicit sandbox policy).
     foreach (var warning in WorkflowConfigValidator.Audit(config))
     {
-        logger.LogWarning("Workflow audit: {Warning}", warning);
+        configLogger.LogWarning("Workflow audit: {Warning}", warning);
     }
 
     // Set prompt resolution base directory
     config.ConfigDirectory = promptBaseDir;
 
-    return config;
+    return new WorkflowConfigProvider(workflowPath, promptBaseDir, config, providerLogger);
 });
 
 // ── 5. Board provider selection ──────────────────────────────────────────────
@@ -716,7 +718,7 @@ void LogMissingConfig(string requiredKeys)
         return;
     }
 
-    var config = host.Services.GetRequiredService<WorkflowConfig>();
+    var config = host.Services.GetRequiredService<WorkflowConfigProvider>().Current;
 
     // ── --unsafe gating ──────────────────────────────────────────────────────
     // Host CLI executors (claude-cli, codex) bypass the Docker filesystem
@@ -902,7 +904,7 @@ if (mode == "agent")
 
     // Determine dispatch: fetch card to check if it's in a system_merge state
     var boardClientInstance = scope.ServiceProvider.GetRequiredService<ITaskBoardClient>();
-    var workflowConfigInstance = scope.ServiceProvider.GetRequiredService<WorkflowConfig>();
+    var workflowConfigInstance = scope.ServiceProvider.GetRequiredService<WorkflowConfigProvider>().Current;
     var boardCards = await boardClientInstance.GetBoardCardsAsync(boardId, CancellationToken.None, workflowConfigInstance.GetTerminalColumnNames());
     var targetCard = boardCards.FirstOrDefault(c => c.Id == cardId);
 
@@ -967,7 +969,7 @@ if (mode == "polling")
 
     // Validate polling-specific config requirements
     var pollingErrors = WorkflowConfigValidator.Validate(
-        host.Services.GetRequiredService<WorkflowConfig>(), validatePolling: true);
+        host.Services.GetRequiredService<WorkflowConfigProvider>().Current, validatePolling: true);
     if (pollingErrors.Count > 0)
     {
         logger.LogError("Workflow config polling validation failed:\n{Errors}",
@@ -1029,7 +1031,7 @@ if (mode == "queue")
 
     // Validate polling-specific config (queue mode reuses the same validation)
     var queueErrors = WorkflowConfigValidator.Validate(
-        host.Services.GetRequiredService<WorkflowConfig>(), validatePolling: true);
+        host.Services.GetRequiredService<WorkflowConfigProvider>().Current, validatePolling: true);
     if (queueErrors.Count > 0)
     {
         logger.LogError("Workflow config validation failed:\n{Errors}",
@@ -1078,7 +1080,7 @@ if (mode == "validation")
     }
 
     using var scope = host.Services.CreateScope();
-    var workflowCfg = scope.ServiceProvider.GetRequiredService<WorkflowConfig>();
+    var workflowCfg = scope.ServiceProvider.GetRequiredService<WorkflowConfigProvider>().Current;
     var probe = scope.ServiceProvider.GetRequiredService<IBoardShapeProbe>();
     var dockerImageProbe = scope.ServiceProvider.GetRequiredService<IDockerImageProbe>();
     var runnerLogger = scope.ServiceProvider.GetRequiredService<ILogger<ValidationRunner>>();
@@ -1101,7 +1103,7 @@ if (mode == "diagnose")
 
     using var scope = host.Services.CreateScope();
     var boardClient = scope.ServiceProvider.GetRequiredService<ITaskBoardClient>();
-    var workflowCfg = scope.ServiceProvider.GetRequiredService<WorkflowConfig>();
+    var workflowCfg = scope.ServiceProvider.GetRequiredService<WorkflowConfigProvider>().Current;
     var diagnoseLogger = scope.ServiceProvider.GetRequiredService<ILogger<DiagnoseRunner>>();
     // DependencyGuard is registered unconditionally (with a Null waitStore when
     // no DB connection is configured), so we always pass it. CheckAsync is a
@@ -1127,7 +1129,7 @@ if (mode == "scaffold-board")
         StringComparison.OrdinalIgnoreCase);
 
     using var scope = host.Services.CreateScope();
-    var workflowCfg = scope.ServiceProvider.GetRequiredService<WorkflowConfig>();
+    var workflowCfg = scope.ServiceProvider.GetRequiredService<WorkflowConfigProvider>().Current;
     var probe = scope.ServiceProvider.GetRequiredService<IBoardShapeProbe>();
     var applier = scope.ServiceProvider.GetRequiredService<IBoardShapeApplier>();
     var scaffoldLogger = scope.ServiceProvider.GetRequiredService<ILogger<ScaffoldBoardRunner>>();

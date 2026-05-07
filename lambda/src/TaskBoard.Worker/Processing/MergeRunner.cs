@@ -7,7 +7,7 @@ namespace TaskBoard.Worker.Processing;
 public sealed class MergeRunner(
     ITaskBoardClient boardClient,
     GitWorkspaceManager gitWorkspaceManager,
-    WorkflowConfig workflowConfig,
+    WorkflowConfigProvider workflowConfigProvider,
     AgentIdentity agentIdentity,
     ICrossReferenceResolver crossReferenceResolver,
     IAgentExecutorResolver executorResolver,
@@ -16,9 +16,14 @@ public sealed class MergeRunner(
 {
     private const int DefaultMaxRetries = 3;
 
+    // Mutable snapshot: refreshed at phase entry.
+    private WorkflowConfig workflowConfig = workflowConfigProvider.Current;
+
     public async Task<AgentRunResult> ExecuteAsync(
         string cardId, string boardId, string workspacePath, CancellationToken cancellationToken)
     {
+        workflowConfig = workflowConfigProvider.Current;
+
         var runId = $"merge-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Random.Shared.Next(0x10000):x4}";
         var runMarker = $"<!-- merge-run:{runId} -->";
 

@@ -4,6 +4,7 @@ using NSubstitute.ExceptionExtensions;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
+using TaskBoard.Worker.Tests.Helpers;
 using static TaskBoard.Worker.Tests.Helpers.TestGitHelper;
 
 namespace TaskBoard.Worker.Tests.Processing;
@@ -107,10 +108,10 @@ public class AgentRunnerShutdownTests : IDisposable
             AgentExecutorResolver.ForSingleExecutor(executor),
             new TaskFileManager(NullLogger<TaskFileManager>.Instance),
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
-            config,
+            TestWorkflowConfigProvider.Create(config),
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(config), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,

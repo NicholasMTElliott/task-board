@@ -18,13 +18,16 @@ namespace TaskBoard.Worker.Processing;
 /// </summary>
 public sealed class UpdateFileProcessor(
     ITaskBoardClient boardClient,
-    WorkflowConfig workflowConfig,
+    WorkflowConfigProvider workflowConfigProvider,
     AgentIdentity agentIdentity,
     ILogger<UpdateFileProcessor> logger,
     ICardDependencyClient? dependencyClient = null)
 {
     private readonly ICardDependencyClient _dependencyClient =
         dependencyClient ?? NullCardDependencyClient.Instance;
+
+    // Mutable snapshot: refreshed at ProcessUpdatesAsync entry.
+    private WorkflowConfig workflowConfig = workflowConfigProvider.Current;
 
     internal const string UpdatesRelativePath = ".aiboard/updates";
 
@@ -49,6 +52,7 @@ public sealed class UpdateFileProcessor(
         CancellationToken cancellationToken,
         GenerationConfig? generationConfig = null)
     {
+        workflowConfig = workflowConfigProvider.Current;
         var updatesDir = Path.Combine(workspacePath, UpdatesRelativePath);
         if (!Directory.Exists(updatesDir))
             return UpdateProcessingResult.Empty;

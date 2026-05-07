@@ -9,13 +9,13 @@ namespace TaskBoard.Worker.Clients;
 /// <see cref="ClaudeAgentExecutor.IsRateLimited"/> for rate-limit detection.
 /// </summary>
 public sealed class DockerClaudeAgentExecutor(
-    IOptions<DockerClaudeAgentOptions> options,
+    IOptionsMonitor<DockerClaudeAgentOptions> options,
     ITenantIdentifier tenant,
     ILogger<DockerClaudeAgentExecutor> logger,
     DockerClaudeMountBuilder? mountBuilder = null,
     ProcessRunnerDelegate? processRunner = null) : IAgentExecutor
 {
-    private readonly DockerClaudeAgentOptions _options = options.Value;
+    private readonly DockerClaudeAgentOptions _options = options.CurrentValue;
     private readonly ProcessRunnerDelegate _runProcess = processRunner ?? ProcessRunner.RunProcessAsync;
 
     private const string DockerExecutable = "docker";

@@ -22,11 +22,11 @@ public sealed class GitHubProjectShapeApplier : IBoardShapeApplier
     private readonly ProcessRunner _runner;
 
     public GitHubProjectShapeApplier(
-        IOptions<GitHubProjectsOptions> options,
+        IOptionsMonitor<GitHubProjectsOptions> options,
         ILogger<GitHubProjectShapeApplier> logger,
         ProcessRunner? runner = null)
     {
-        _options = options.Value;
+        _options = options.CurrentValue;
         _logger = logger;
         _runner = runner ?? DefaultRunner;
     }

@@ -6,10 +6,10 @@ namespace TaskBoard.Worker.Clients;
 
 public sealed class PgmqPingQueueClient(
     NpgsqlDataSource dataSource,
-    IOptions<PgmqOptions> options,
+    IOptionsMonitor<PgmqOptions> options,
     ILogger<PgmqPingQueueClient> logger) : IPingQueueClient
 {
-    private readonly PgmqOptions _options = options.Value;
+    private readonly PgmqOptions _options = options.CurrentValue;
 
     public async Task<IReadOnlyList<PingMessage>> ReadPingsAsync(CancellationToken cancellationToken)
     {

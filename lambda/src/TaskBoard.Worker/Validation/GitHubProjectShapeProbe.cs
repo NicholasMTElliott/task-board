@@ -10,10 +10,10 @@ namespace TaskBoard.Worker.Validation;
 /// project fields + single-select options, and repository labels.
 /// </summary>
 public sealed class GitHubProjectShapeProbe(
-    IOptions<GitHubProjectsOptions> options,
+    IOptionsMonitor<GitHubProjectsOptions> options,
     ILogger<GitHubProjectShapeProbe> logger) : IBoardShapeProbe
 {
-    private readonly GitHubProjectsOptions _options = options.Value;
+    private readonly GitHubProjectsOptions _options = options.CurrentValue;
 
     public async Task<BoardShape?> ProbeAsync(string boardId, CancellationToken ct)
     {

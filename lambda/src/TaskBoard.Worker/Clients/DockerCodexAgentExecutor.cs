@@ -28,13 +28,13 @@ namespace TaskBoard.Worker.Clients;
 /// </para>
 /// </remarks>
 public sealed class DockerCodexAgentExecutor(
-    IOptions<DockerCodexAgentOptions> options,
+    IOptionsMonitor<DockerCodexAgentOptions> options,
     ITenantIdentifier tenant,
     ILogger<DockerCodexAgentExecutor> logger,
     DockerCodexMountBuilder? mountBuilder = null,
     ProcessRunnerDelegate? processRunner = null) : IAgentExecutor
 {
-    private readonly DockerCodexAgentOptions _options = options.Value;
+    private readonly DockerCodexAgentOptions _options = options.CurrentValue;
     private readonly ProcessRunnerDelegate _runProcess = processRunner ?? ProcessRunner.RunProcessAsync;
 
     private const string DockerExecutable = "docker";

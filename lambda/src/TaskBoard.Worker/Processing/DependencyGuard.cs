@@ -44,11 +44,14 @@ public sealed record DependencyGuardResult(
 public sealed class DependencyGuard(
     ITaskBoardClient boardClient,
     ICardDependencyClient dependencyClient,
-    WorkflowConfig workflowConfig,
+    WorkflowConfigProvider workflowConfigProvider,
     IDependencyWaitStore waitStore,
     ILogger<DependencyGuard> logger)
 {
     private const string BlockedCommentMarker = "<!-- agent-dependency-blocked -->";
+
+    // Mutable snapshot: refreshed at each CheckAsync entry.
+    private WorkflowConfig workflowConfig = workflowConfigProvider.Current;
 
     public Task<DependencyGuardResult> CheckAsync(
         BoardCard card,
@@ -85,6 +88,7 @@ public sealed class DependencyGuard(
         Dictionary<string, BoardCard>? boardCardCache,
         bool recordSideEffects)
     {
+        workflowConfig = workflowConfigProvider.Current;
         var policy = workflowConfig.DependencyPolicy;
         if (policy?.Enabled != true || !IsEnforced(card, state, policy))
             return DependencyGuardResult.NotBlocked;

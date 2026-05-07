@@ -4,11 +4,11 @@ using Microsoft.Extensions.Options;
 namespace TaskBoard.Worker.Clients;
 
 public sealed class ClaudeAgentExecutor(
-    IOptions<ClaudeCliLlmOptions> options,
+    IOptionsMonitor<ClaudeCliLlmOptions> options,
     ILogger<ClaudeAgentExecutor> logger,
     ProcessRunnerDelegate? processRunner = null) : IAgentExecutor
 {
-    private readonly ClaudeCliLlmOptions _options = options.Value;
+    private readonly ClaudeCliLlmOptions _options = options.CurrentValue;
     private readonly ProcessRunnerDelegate _runProcess = processRunner ?? ProcessRunner.RunProcessAsync;
 
     public async Task<AgentResult> ExecuteAsync(

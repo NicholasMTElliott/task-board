@@ -8,7 +8,7 @@ namespace TaskBoard.Worker.Clients;
 
 public sealed partial class TrelloCrossReferenceResolver(
     HttpClient httpClient,
-    IOptions<TrelloClientOptions> options,
+    IOptionsMonitor<TrelloClientOptions> options,
     ILogger<TrelloCrossReferenceResolver> logger) : ICrossReferenceResolver
 {
     private static readonly JsonSerializerOptions JsonOptions = new()

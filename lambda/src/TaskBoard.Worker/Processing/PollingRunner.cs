@@ -8,7 +8,7 @@ public sealed class PollingRunner(
     AgentRunner agentRunner,
     MergeRunner mergeRunner,
     CompletionRunner completionRunner,
-    WorkflowConfig workflowConfig,
+    WorkflowConfigProvider workflowConfigProvider,
     IAgentExecutorResolver executorResolver,
     ILogger<PollingRunner> logger,
     ShutdownCoordinator? shutdownCoordinator = null,
@@ -16,6 +16,10 @@ public sealed class PollingRunner(
 {
     // Adaptive polling constants
     private const int MaxConsecutiveIdleCycles = 10;   // idle stretch before hitting max delay
+
+    // Mutable snapshot: refreshed each poll cycle so config changes take
+    // effect at cycle boundaries without disturbing an in-flight run.
+    private WorkflowConfig workflowConfig = workflowConfigProvider.Current;
     private const double IdleBackoffMultiplier = 1.5;  // each idle cycle multiplies delay
     private const int MaxIdleDelaySeconds = 600;       // cap: 10 minutes
     private const int MaxErrorDelaySeconds = 300;      // cap: 5 minutes
@@ -47,6 +51,10 @@ public sealed class PollingRunner(
 
         while (!cancellationToken.IsCancellationRequested && shutdownCoordinator?.IsShutdownRequested != true)
         {
+            // Refresh config snapshot at cycle start — picks up any workflow
+            // file reloads that happened since the previous cycle.
+            workflowConfig = workflowConfigProvider.Current;
+
             totalCycles++;
             try
             {

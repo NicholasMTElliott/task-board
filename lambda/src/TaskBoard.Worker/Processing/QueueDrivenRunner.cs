@@ -13,24 +13,28 @@ public sealed class QueueDrivenRunner(
     ITaskBoardClient boardClient,
     AgentRunner agentRunner,
     MergeRunner mergeRunner,
-    WorkflowConfig workflowConfig,
+    WorkflowConfigProvider workflowConfigProvider,
     IAgentExecutorResolver executorResolver,
     IPingQueueClient pingQueue,
     ICardClaimService cardClaim,
     AgentIdentity agentIdentity,
-    IOptions<PgmqOptions> pgmqOptions,
+    IOptionsMonitor<PgmqOptions> pgmqOptions,
     ILogger<QueueDrivenRunner> logger,
     ShutdownCoordinator? shutdownCoordinator = null)
 {
     private static readonly TimeSpan QueuePollInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan FallbackBoardPollInterval = TimeSpan.FromMinutes(10);
 
+    // Mutable snapshot: refreshed at phase entry.
+    private WorkflowConfig workflowConfig = workflowConfigProvider.Current;
+
     public async Task RunAsync(
         string boardId,
         string workspacePath,
         CancellationToken cancellationToken)
     {
-        var options = pgmqOptions.Value;
+        workflowConfig = workflowConfigProvider.Current;
+        var options = pgmqOptions.CurrentValue;
         var maxConcurrent = options.MaxConcurrentAgents;
         using var semaphore = maxConcurrent > 0 ? new SemaphoreSlim(maxConcurrent) : null;
 

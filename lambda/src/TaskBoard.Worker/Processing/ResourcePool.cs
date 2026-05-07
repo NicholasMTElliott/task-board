@@ -52,10 +52,10 @@ public sealed class ResourcePool : IResourcePool, IDisposable
     private readonly ILogger<ResourcePool> _logger;
     private bool _disposed;
 
-    public ResourcePool(IOptions<ResourcePoolOptions> options, ILogger<ResourcePool> logger)
+    public ResourcePool(IOptionsMonitor<ResourcePoolOptions> options, ILogger<ResourcePool> logger)
     {
         _logger = logger;
-        var opts = options.Value;
+        var opts = options.CurrentValue;
 
         _semaphores = new Dictionary<string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, def) in opts.Pools)

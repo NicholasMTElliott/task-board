@@ -7,10 +7,10 @@ using TaskBoard.Worker.Models;
 namespace TaskBoard.Worker.Clients;
 
 public sealed partial class GitHubCrossReferenceResolver(
-    IOptions<GitHubProjectsOptions> options,
+    IOptionsMonitor<GitHubProjectsOptions> options,
     ILogger<GitHubCrossReferenceResolver> logger) : ICrossReferenceResolver
 {
-    private readonly GitHubProjectsOptions _options = options.Value;
+    private readonly GitHubProjectsOptions _options = options.CurrentValue;
 
     [GeneratedRegex(@"#(\d+)")]
     private static partial Regex IssueReferencePattern();

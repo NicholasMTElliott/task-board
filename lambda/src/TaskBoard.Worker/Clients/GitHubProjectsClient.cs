@@ -14,10 +14,10 @@ namespace TaskBoard.Worker.Clients;
 /// boardId format: "{projectNumber}" — owner comes from GitHubProjectsOptions.
 /// </summary>
 public sealed class GitHubProjectsClient(
-    IOptions<GitHubProjectsOptions> options,
+    IOptionsMonitor<GitHubProjectsOptions> options,
     ILogger<GitHubProjectsClient> logger) : ITaskBoardClient
 {
-    private readonly GitHubProjectsOptions _options = options.Value;
+    private readonly GitHubProjectsOptions _options = options.CurrentValue;
 
     public async Task<BoardCard> GetCardAsync(string cardId, CancellationToken cancellationToken)
     {

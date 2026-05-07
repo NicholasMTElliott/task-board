@@ -11,7 +11,7 @@ public sealed partial class AgentRunner(
     IAgentExecutorResolver executorResolver,
     TaskFileManager taskFileManager,
     GitWorkspaceManager gitWorkspaceManager,
-    WorkflowConfig workflowConfig,
+    WorkflowConfigProvider workflowConfigProvider,
     ICrossReferenceResolver crossReferenceResolver,
     AgentIdentity agentIdentity,
     UpdateFileProcessor updateFileProcessor,
@@ -34,6 +34,10 @@ public sealed partial class AgentRunner(
 
     private const string CommitFilePath = ".aiboard/commit.md";
 
+    // Mutable snapshot: refreshed at phase entry so in-flight runs are
+    // not disturbed by concurrent workflow file reloads.
+    private WorkflowConfig workflowConfig = workflowConfigProvider.Current;
+
     /// <summary>
     /// Maximum length for reference content before truncation.
     /// Matches the pattern used for conversation log truncation (50k) but with a higher limit
@@ -44,6 +48,9 @@ public sealed partial class AgentRunner(
     public async Task<AgentRunResult> ExecuteAsync(
         string cardId, string boardId, string workspacePath, CancellationToken cancellationToken)
     {
+        // Snapshot at phase entry — mid-phase file changes are deferred to the next run.
+        workflowConfig = workflowConfigProvider.Current;
+
         var runId = $"run-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Random.Shared.Next(0x10000):x4}";
         var runMarker = $"<!-- agent-run:{runId} -->";
 

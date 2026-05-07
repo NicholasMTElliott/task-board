@@ -4,6 +4,7 @@ using NSubstitute.ExceptionExtensions;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Processing;
 
@@ -37,7 +38,7 @@ public class DependencyGuardTests
         board.GetCardAsync("5", Arg.Any<CancellationToken>())
             .Returns(new BoardCard("5", "Create database", "", "Ready for Implementation"));
 
-        var guard = new DependencyGuard(board, deps, Config(), store, NullLogger<DependencyGuard>.Instance);
+        var guard = new DependencyGuard(board, deps, TestWorkflowConfigProvider.Create(Config()), store, NullLogger<DependencyGuard>.Instance);
 
         var result = await guard.CheckAsync(card, state, "test", CancellationToken.None);
 
@@ -70,7 +71,7 @@ public class DependencyGuardTests
         board.GetCardAsync("5", Arg.Any<CancellationToken>())
             .Returns(new BoardCard("5", "Create database", "", "Done"));
 
-        var guard = new DependencyGuard(board, deps, config, store, NullLogger<DependencyGuard>.Instance);
+        var guard = new DependencyGuard(board, deps, TestWorkflowConfigProvider.Create(config), store, NullLogger<DependencyGuard>.Instance);
 
         var result = await guard.CheckAsync(card, state, "test", CancellationToken.None);
 
@@ -97,7 +98,7 @@ public class DependencyGuardTests
         var card = new BoardCard("10", "Implement API", "", "Ready for Implementation");
         var state = config.ResolveState(card)!;
 
-        var guard = new DependencyGuard(board, deps, config, store, NullLogger<DependencyGuard>.Instance);
+        var guard = new DependencyGuard(board, deps, TestWorkflowConfigProvider.Create(config), store, NullLogger<DependencyGuard>.Instance);
 
         var result = await guard.CheckAsync(card, state, "test", CancellationToken.None);
 
@@ -119,7 +120,7 @@ public class DependencyGuardTests
         deps.GetBlockersAsync("10", Arg.Any<CancellationToken>())
             .Returns([new CardDependency("5", "Done blocker", IsClosed: true, StateReason: "completed")]);
 
-        var guard = new DependencyGuard(board, deps, Config(), store, NullLogger<DependencyGuard>.Instance);
+        var guard = new DependencyGuard(board, deps, TestWorkflowConfigProvider.Create(Config()), store, NullLogger<DependencyGuard>.Instance);
 
         var result = await guard.CheckAsync(card, state, "test", CancellationToken.None);
 
@@ -144,7 +145,7 @@ public class DependencyGuardTests
         board.GetCardAsync("5", Arg.Any<CancellationToken>())
             .Returns(new BoardCard("5", "Abandoned", "", "Backlog"));
 
-        var guard = new DependencyGuard(board, deps, Config(), store, NullLogger<DependencyGuard>.Instance);
+        var guard = new DependencyGuard(board, deps, TestWorkflowConfigProvider.Create(Config()), store, NullLogger<DependencyGuard>.Instance);
 
         var result = await guard.CheckAsync(card, state, "test", CancellationToken.None);
 
@@ -167,7 +168,7 @@ public class DependencyGuardTests
         deps.GetBlockersAsync("10", Arg.Any<CancellationToken>())
             .ThrowsAsync(new DependencyApiContractException("API shape changed"));
 
-        var guard = new DependencyGuard(board, deps, Config(), store, NullLogger<DependencyGuard>.Instance);
+        var guard = new DependencyGuard(board, deps, TestWorkflowConfigProvider.Create(Config()), store, NullLogger<DependencyGuard>.Instance);
 
         await Assert.ThrowsAsync<DependencyApiContractException>(() =>
             guard.CheckAsync(card, state, "test", CancellationToken.None));
@@ -187,7 +188,7 @@ public class DependencyGuardTests
         deps.GetBlockersAsync("10", Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("gh exited with code 1"));
 
-        var guard = new DependencyGuard(board, deps, Config(), store, NullLogger<DependencyGuard>.Instance);
+        var guard = new DependencyGuard(board, deps, TestWorkflowConfigProvider.Create(Config()), store, NullLogger<DependencyGuard>.Instance);
 
         var result = await guard.CheckAsync(card, state, "test", CancellationToken.None);
 
@@ -211,7 +212,7 @@ public class DependencyGuardTests
         board.GetCardAsync("5", Arg.Any<CancellationToken>())
             .Returns(new BoardCard("5", "Shared", "", "Ready for Implementation"));
 
-        var guard = new DependencyGuard(board, deps, Config(), store, NullLogger<DependencyGuard>.Instance);
+        var guard = new DependencyGuard(board, deps, TestWorkflowConfigProvider.Create(Config()), store, NullLogger<DependencyGuard>.Instance);
         var cache = new Dictionary<string, BoardCard>(StringComparer.Ordinal);
 
         await guard.CheckAsync(card1, state, "polling", CancellationToken.None, cache);
@@ -230,7 +231,7 @@ public class DependencyGuardTests
         var card = new BoardCard("10", "Implement API", "", "Ready for Implementation");
         var state = config.ResolveState(card)!;
 
-        var guard = new DependencyGuard(board, deps, config, store, NullLogger<DependencyGuard>.Instance);
+        var guard = new DependencyGuard(board, deps, TestWorkflowConfigProvider.Create(config), store, NullLogger<DependencyGuard>.Instance);
 
         var result = await guard.CheckAsync(card, state, "test", CancellationToken.None);
 
@@ -269,7 +270,7 @@ public class DependencyGuardTests
         board.GetCardAsync("5", Arg.Any<CancellationToken>())
             .Returns(new BoardCard("5", "Create database", "", "Ready for Implementation"));
 
-        var guard = new DependencyGuard(board, deps, config, store, NullLogger<DependencyGuard>.Instance);
+        var guard = new DependencyGuard(board, deps, TestWorkflowConfigProvider.Create(config), store, NullLogger<DependencyGuard>.Instance);
         var runner = new AgentRunner(
             board,
             AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
@@ -319,7 +320,7 @@ public class DependencyGuardTests
         board.GetCardAsync("5", Arg.Any<CancellationToken>())
             .Returns(new BoardCard("5", "Create database", "", "Approved"));
 
-        var guard = new DependencyGuard(board, deps, config, store, NullLogger<DependencyGuard>.Instance);
+        var guard = new DependencyGuard(board, deps, TestWorkflowConfigProvider.Create(config), store, NullLogger<DependencyGuard>.Instance);
         var runner = new MergeRunner(
             board,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),

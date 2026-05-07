@@ -17,13 +17,18 @@ namespace TaskBoard.Worker.Processing;
 public sealed class CompletionRunner(
     ITaskBoardClient boardClient,
     ICrossReferenceResolver crossReferenceResolver,
-    WorkflowConfig workflowConfig,
+    WorkflowConfigProvider workflowConfigProvider,
     AgentIdentity agentIdentity,
     ILogger<CompletionRunner> logger)
 {
+    // Mutable snapshot: refreshed at phase entry.
+    private WorkflowConfig workflowConfig = workflowConfigProvider.Current;
+
     public async Task<AgentRunResult> ExecuteAsync(
         string cardId, string boardId, string workspacePath, CancellationToken ct)
     {
+        workflowConfig = workflowConfigProvider.Current;
+
         var runId = $"completion-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Random.Shared.Next(0x10000):x4}";
         var runMarker = $"<!-- completion-check:{runId} -->";
 

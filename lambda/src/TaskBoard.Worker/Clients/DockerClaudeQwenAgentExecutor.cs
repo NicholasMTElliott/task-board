@@ -23,13 +23,13 @@ namespace TaskBoard.Worker.Clients;
 /// failure modes rather than real-Anthropic ones.</para>
 /// </remarks>
 public sealed class DockerClaudeQwenAgentExecutor(
-    IOptions<DockerClaudeQwenAgentOptions> options,
+    IOptionsMonitor<DockerClaudeQwenAgentOptions> options,
     ITenantIdentifier tenant,
     ILogger<DockerClaudeQwenAgentExecutor> logger,
     DockerClaudeQwenMountBuilder? mountBuilder = null,
     ProcessRunnerDelegate? processRunner = null) : IAgentExecutor
 {
-    private readonly DockerClaudeQwenAgentOptions _options = options.Value;
+    private readonly DockerClaudeQwenAgentOptions _options = options.CurrentValue;
     private readonly ProcessRunnerDelegate _runProcess = processRunner ?? ProcessRunner.RunProcessAsync;
 
     private const string DockerExecutable = "docker";

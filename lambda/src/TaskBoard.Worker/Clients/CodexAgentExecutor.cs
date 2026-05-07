@@ -9,11 +9,11 @@ namespace TaskBoard.Worker.Clients;
 /// Uses <c>codex exec --json --output-schema &lt;file&gt;</c> for structured non-interactive output.
 /// </summary>
 public sealed class CodexAgentExecutor(
-    IOptions<CodexCliLlmOptions> options,
+    IOptionsMonitor<CodexCliLlmOptions> options,
     ILogger<CodexAgentExecutor> logger,
     ProcessRunnerDelegate? processRunner = null) : IAgentExecutor
 {
-    private readonly CodexCliLlmOptions _options = options.Value;
+    private readonly CodexCliLlmOptions _options = options.CurrentValue;
     private readonly ProcessRunnerDelegate _runProcess = processRunner ?? ProcessRunner.RunProcessAsync;
 
     public async Task<AgentResult> ExecuteAsync(

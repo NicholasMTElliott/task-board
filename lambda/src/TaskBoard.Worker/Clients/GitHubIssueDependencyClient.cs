@@ -5,11 +5,11 @@ using Microsoft.Extensions.Options;
 namespace TaskBoard.Worker.Clients;
 
 public sealed class GitHubIssueDependencyClient(
-    IOptions<GitHubProjectsOptions> options,
+    IOptionsMonitor<GitHubProjectsOptions> options,
     ILogger<GitHubIssueDependencyClient> logger,
     ProcessRunnerDelegate? processRunner = null) : ICardDependencyClient
 {
-    private readonly GitHubProjectsOptions _options = options.Value;
+    private readonly GitHubProjectsOptions _options = options.CurrentValue;
     private readonly ProcessRunnerDelegate _runProcess = processRunner ?? ProcessRunner.RunProcessAsync;
 
     // GitHub issue numeric → database id resolution is immutable for the lifetime

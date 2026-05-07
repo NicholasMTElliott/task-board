@@ -8,10 +8,10 @@ namespace TaskBoard.Worker.Validation;
 /// name and runs <c>docker image inspect</c> to verify presence.
 /// </summary>
 public sealed class DockerImageProbe(
-    IOptions<DockerClaudeAgentOptions> claudeOpts,
-    IOptions<DockerOpenCodeAgentOptions> openCodeOpts,
-    IOptions<DockerClaudeQwenAgentOptions> claudeQwenOpts,
-    IOptions<DockerCodexAgentOptions> codexOpts) : IDockerImageProbe
+    IOptionsMonitor<DockerClaudeAgentOptions> claudeOpts,
+    IOptionsMonitor<DockerOpenCodeAgentOptions> openCodeOpts,
+    IOptionsMonitor<DockerClaudeQwenAgentOptions> claudeQwenOpts,
+    IOptionsMonitor<DockerCodexAgentOptions> codexOpts) : IDockerImageProbe
 {
     public async Task<IReadOnlyList<DockerImageCheck>> CheckAsync(
         IReadOnlySet<string> providerKeys, CancellationToken ct)
@@ -20,10 +20,10 @@ public sealed class DockerImageProbe(
         // appear here; other keys (codex, claude-cli, stub) are skipped.
         var providerToImage = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["docker-claude-cli"]  = claudeOpts.Value.ImageName,
-            ["docker-opencode"]    = openCodeOpts.Value.ImageName,
-            ["docker-claude-qwen"] = claudeQwenOpts.Value.ImageName,
-            ["docker-codex"]       = codexOpts.Value.ImageName,
+            ["docker-claude-cli"]  = claudeOpts.CurrentValue.ImageName,
+            ["docker-opencode"]    = openCodeOpts.CurrentValue.ImageName,
+            ["docker-claude-qwen"] = claudeQwenOpts.CurrentValue.ImageName,
+            ["docker-codex"]       = codexOpts.CurrentValue.ImageName,
         };
 
         var results = new List<DockerImageCheck>();

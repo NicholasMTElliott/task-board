@@ -5,7 +5,7 @@ namespace TaskBoard.Worker.Clients;
 
 public sealed class TrelloClient(
     HttpClient httpClient,
-    IOptions<TrelloClientOptions> options,
+    IOptionsMonitor<TrelloClientOptions> options,
     ILogger<TrelloClient> logger) : ITaskBoardClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -14,7 +14,7 @@ public sealed class TrelloClient(
     };
 
     private readonly HttpClient _httpClient = httpClient;
-    private readonly TrelloClientOptions _options = options.Value;
+    private readonly TrelloClientOptions _options = options.CurrentValue;
     private readonly ILogger<TrelloClient> _logger = logger;
 
     private sealed record TrelloCard(
