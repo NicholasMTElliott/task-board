@@ -3,6 +3,7 @@ using NSubstitute;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
+using TaskBoard.Worker.Tests.Helpers;
 using static TaskBoard.Worker.Tests.Helpers.TestGitHelper;
 
 namespace TaskBoard.Worker.Tests;
@@ -160,8 +161,8 @@ public class AgentRunnerDesignTests : IDisposable
     {
         return new AgentRunner(
             _trelloClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
-            _workflowConfig, new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_trelloClient, _workflowConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            TestWorkflowConfigProvider.Create(_workflowConfig), new StubCrossReferenceResolver(), new AgentIdentity("Test", "Agent", "TestMachine"),
+            new UpdateFileProcessor(_trelloClient, TestWorkflowConfigProvider.Create(_workflowConfig), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,

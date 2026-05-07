@@ -4,6 +4,7 @@ using NSubstitute.ExceptionExtensions;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Processing;
 
@@ -40,7 +41,7 @@ public class UpdateFileProcessorTests : IDisposable
             });
 
         _identity = new AgentIdentity("Bot", "TestBot", "machine");
-        _processor = new UpdateFileProcessor(_boardClient, _config, _identity,
+        _processor = new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(_config), _identity,
             NullLogger<UpdateFileProcessor>.Instance);
     }
 
@@ -174,7 +175,7 @@ public class UpdateFileProcessorTests : IDisposable
 
         var dependencyClient = Substitute.For<ICardDependencyClient>();
         var processor = new UpdateFileProcessor(
-            _boardClient, _config, _identity, NullLogger<UpdateFileProcessor>.Instance, dependencyClient);
+            _boardClient, TestWorkflowConfigProvider.Create(_config), _identity, NullLogger<UpdateFileProcessor>.Instance, dependencyClient);
 
         var result = await processor.ProcessUpdatesAsync(
             _tempDir, SourceCardId, StepName, [], CancellationToken.None);
@@ -204,7 +205,7 @@ public class UpdateFileProcessorTests : IDisposable
 
         var dependencyClient = Substitute.For<ICardDependencyClient>();
         var processor = new UpdateFileProcessor(
-            _boardClient, _config, _identity, NullLogger<UpdateFileProcessor>.Instance, dependencyClient);
+            _boardClient, TestWorkflowConfigProvider.Create(_config), _identity, NullLogger<UpdateFileProcessor>.Instance, dependencyClient);
 
         await processor.ProcessUpdatesAsync(
             _tempDir, SourceCardId, StepName, [], CancellationToken.None);
@@ -1208,7 +1209,7 @@ public class UpdateFileProcessorTests : IDisposable
             },
             CardTypeField: "Type");
 
-        var processor = new UpdateFileProcessor(_boardClient, config, _identity,
+        var processor = new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(config), _identity,
             NullLogger<UpdateFileProcessor>.Instance);
 
         var updatesDir = CreateUpdatesDir();
@@ -1247,7 +1248,7 @@ public class UpdateFileProcessorTests : IDisposable
             },
             CardTypeField: "Type");
 
-        var processor = new UpdateFileProcessor(_boardClient, config, _identity,
+        var processor = new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(config), _identity,
             NullLogger<UpdateFileProcessor>.Instance);
 
         _boardClient.GetCardAsync("20", Arg.Any<CancellationToken>())
@@ -1286,7 +1287,7 @@ public class UpdateFileProcessorTests : IDisposable
                 ["task"] = new("Task", LabelPrefix: null, AllowedChildren: []),
             });
 
-        var processor = new UpdateFileProcessor(_boardClient, config, _identity,
+        var processor = new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(config), _identity,
             NullLogger<UpdateFileProcessor>.Instance);
 
         Assert.Null(processor.BuildTypeLabel("task"));

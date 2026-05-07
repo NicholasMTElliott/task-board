@@ -3,6 +3,7 @@ using NSubstitute;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
+using TaskBoard.Worker.Tests.Helpers;
 using static TaskBoard.Worker.Tests.Helpers.TestGitHelper;
 
 namespace TaskBoard.Worker.Tests;
@@ -142,10 +143,10 @@ public class AgentRunnerSessionTests : IDisposable
             resolver,
             _taskFileManager,
             _gitWorkspaceManager,
-            config,
+            TestWorkflowConfigProvider.Create(config),
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Session", "TestMachine"),
-            new UpdateFileProcessor(_boardClient, config,
+            new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(config),
                 new AgentIdentity("Test", "Session", "TestMachine"),
                 NullLogger<UpdateFileProcessor>.Instance),
             _runStore,
@@ -776,10 +777,10 @@ public class AgentRunnerSessionIntegrationTests : IDisposable
             resolver,
             _taskFileManager,
             _gitWorkspaceManager,
-            config,
+            TestWorkflowConfigProvider.Create(config),
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Integ", "TestMachine"),
-            new UpdateFileProcessor(_boardClient, config,
+            new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(config),
                 new AgentIdentity("Test", "Integ", "TestMachine"),
                 NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,

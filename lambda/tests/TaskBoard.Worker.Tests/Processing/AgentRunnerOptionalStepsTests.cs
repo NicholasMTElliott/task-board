@@ -4,6 +4,7 @@ using NSubstitute.ExceptionExtensions;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
+using TaskBoard.Worker.Tests.Helpers;
 using static TaskBoard.Worker.Tests.Helpers.TestGitHelper;
 
 namespace TaskBoard.Worker.Tests.Processing;
@@ -482,9 +483,9 @@ public class AgentRunnerOptionalStepsTests : IDisposable
         var normalisedConfig = config.Normalised();
         return new AgentRunner(
             _boardClient, AgentExecutorResolver.ForSingleExecutor(executor), _taskFileManager, _gitWorkspaceManager,
-            normalisedConfig, new StubCrossReferenceResolver(),
+            TestWorkflowConfigProvider.Create(normalisedConfig), new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(_boardClient, normalisedConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(_boardClient, TestWorkflowConfigProvider.Create(normalisedConfig), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,

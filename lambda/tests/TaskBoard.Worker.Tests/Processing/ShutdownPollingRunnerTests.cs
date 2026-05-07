@@ -3,6 +3,7 @@ using NSubstitute;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Processing;
 
@@ -47,10 +48,10 @@ public class ShutdownPollingRunnerTests
             AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             new TaskFileManager(NullLogger<TaskFileManager>.Instance),
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
-            TestConfig,
+            TestWorkflowConfigProvider.Create(TestConfig),
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new UpdateFileProcessor(boardClient, TestWorkflowConfigProvider.Create(TestConfig), new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,

@@ -4,6 +4,7 @@ using NSubstitute;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
+using TaskBoard.Worker.Tests.Helpers;
 using static TaskBoard.Worker.Tests.Helpers.TestGitHelper;
 
 namespace TaskBoard.Worker.Tests;
@@ -700,10 +701,10 @@ public class DockerClaudeMountBuilderTests : IDisposable
             resolver,
             new TaskFileManager(NullLogger<TaskFileManager>.Instance),
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
-            config,
+            TestWorkflowConfigProvider.Create(config),
             new StubCrossReferenceResolver(),
             new AgentIdentity("Test", "Mounts", "TestMachine"),
-            new UpdateFileProcessor(boardClient, config,
+            new UpdateFileProcessor(boardClient, TestWorkflowConfigProvider.Create(config),
                 new AgentIdentity("Test", "Mounts", "TestMachine"),
                 NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
