@@ -710,7 +710,7 @@ public sealed partial class AgentRunner(
                 // 6e. Upsert step-specific comment (augmented with update file summary if applicable)
                 // Build a per-step prefix so the comment header attributes the actual role that ran,
                 // rather than always reporting the first step's role for a multi-step state.
-                var stepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role);
+                var stepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role, stepRole.Provider, stepRole.Model);
                 var stepMarker = $"<!-- agent-step:{step.Name} -->";
                 var stepComment = $"{stepPrefix}\n\n**Step: {step.Name}**\n\n{FormatComment(lastResult, includeConversationLog: runStore is NullRunStore)}";
                 if (updateResult.HasUpdates)
@@ -1344,7 +1344,7 @@ public sealed partial class AgentRunner(
         {
             // Gate check infrastructure failure is non-blocking
             logger.LogError(ex, "Gate check failed to execute for card {CardId} — proceeding without verification", cardId);
-            var gateIdentity = $"(via {agentIdentity.DisplayName})";
+            var gateIdentity = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
             var warningComment = $"<!-- gate-check:{state.Name} -->\n\n" +
                 $"## Gate Check Warning {gateIdentity}\n\nGate check failed to execute: {ex.Message}\nProceeding without verification.";
             await boardClient.UpsertAgentCommentAsync(cardId, warningComment,
@@ -1363,7 +1363,7 @@ public sealed partial class AgentRunner(
             case AgentOutcome.NEEDS_INFO:
             {
                 // CONCERNS — route to questions column
-                var gateIdentityConcerns = $"(via {agentIdentity.DisplayName})";
+                var gateIdentityConcerns = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
                 var comment = $"<!-- gate-check:{state.Name} -->\n\n" +
                     $"## Gate Check: Concerns {gateIdentityConcerns}\n\n{gateResult.Detail ?? "The gate check raised concerns."}";
                 await boardClient.UpsertAgentCommentAsync(cardId, comment,
@@ -1405,7 +1405,7 @@ public sealed partial class AgentRunner(
                     // Escalate to NEEDS_INFO for human intervention
                     logger.LogWarning("Gate check for card {CardId} has failed {Count} times — escalating to NEEDS_INFO",
                         cardId, previousFailures + 1);
-                    var gateIdentityEscalate = $"(via {agentIdentity.DisplayName})";
+                    var gateIdentityEscalate = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
                     var escalateComment = $"<!-- gate-check:{state.Name} result:ERROR attempt:{previousFailures + 1} -->\n\n" +
                         $"## Gate Check: Escalated to Human Review {gateIdentityEscalate}\n\n" +
                         $"The gate check has failed {previousFailures + 1} consecutive times. Escalating for human review.\n\n" +
@@ -1423,7 +1423,7 @@ public sealed partial class AgentRunner(
                 }
 
                 // Route via GATE_FAIL (re-trigger) or fall back to ERROR
-                var gateIdentityFail = $"(via {agentIdentity.DisplayName})";
+                var gateIdentityFail = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
                 var failComment = $"<!-- gate-check:{state.Name} result:ERROR attempt:{previousFailures + 1} -->\n\n" +
                     $"## Gate Check: Failed {gateIdentityFail}\n\n{gateResult.Detail ?? "The gate check detected issues with the agent's output."}";
                 await boardClient.UpsertAgentCommentAsync(cardId, failComment,
@@ -1587,7 +1587,7 @@ public sealed partial class AgentRunner(
 
             // Post step-specific comment with optional: prefix to avoid marker collision.
             // Build a per-step prefix so the header reflects the actual specialist-reviewer role.
-            var optionalStepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role);
+            var optionalStepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role, stepRole.Provider, stepRole.Model);
             var stepMarker = $"<!-- agent-step:optional:{step.Name} -->";
             var stepComment = $"{optionalStepPrefix}\n\n**Optional Step: {step.Name}**\n\n{FormatComment(result, includeConversationLog: runStore is NullRunStore)}";
             await boardClient.UpsertAgentCommentAsync(cardId, stepComment, stepMarker, cancellationToken);
@@ -2298,7 +2298,7 @@ public sealed partial class AgentRunner(
         return ResolvePromptPlaceholders(template, card, extraContext);
     }
 
-    private static string BuildCommentPrefix(WorkflowState state, WorkflowConfig config, AgentIdentity identity, string? roleOverride = null)
+    private static string BuildCommentPrefix(WorkflowState state, WorkflowConfig config, AgentIdentity identity, string? roleOverride = null, string? providerKey = null, string? model = null)
     {
         var activeStateName = state.Transitions.TryGetValue(TransitionKeys.InProgress, out var inProgressTarget)
             && inProgressTarget.Column is string inProgressCol
@@ -2311,7 +2311,8 @@ public sealed partial class AgentRunner(
         var roleName = roleOverride
             ?? (state.Steps is { Count: > 0 } ? state.Steps[0].Role : state.Role)
             ?? "agent";
-        return $"**{roleName} in {activeStateName} ({identity.DisplayName}):**";
+        var agentName = identity.FormatAgentName(providerKey, model);
+        return $"**{roleName} in {activeStateName} ({agentName}):**";
     }
 
     internal static string FormatUpdateSummary(UpdateProcessingResult result)

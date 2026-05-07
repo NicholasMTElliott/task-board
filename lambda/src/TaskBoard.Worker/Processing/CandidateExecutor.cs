@@ -44,7 +44,8 @@ public sealed class CandidateExecutor(
     ITaskBoardClient boardClient,
     ILogger<CandidateExecutor> logger,
     RerunPreambleBuilder? rerunPreambleBuilder = null,
-    IResourcePool? resourcePool = null)
+    IResourcePool? resourcePool = null,
+    AgentIdentity? agentIdentity = null)
 {
     /// <summary>
     /// Backward-compatible single-slot entry. Treats the request's step as a
@@ -1810,7 +1811,10 @@ public sealed class CandidateExecutor(
             var marker = $"<!-- agent-step:{stepName}{slotInfix}:cand-{i}:{SlugifyProvider(e.Provider)} -->";
             var won = verdict.WinnerIndex is int w && w == i;
             var sb = new StringBuilder();
-            sb.AppendLine($"**Candidate {i}** — provider `{e.Provider}`, model `{e.Model}` {(won ? "🏆" : "")}".TrimEnd());
+            var candidateAgentName = agentIdentity is not null
+                ? $" ({agentIdentity.FormatAgentName(e.Provider, e.Model)})"
+                : "";
+            sb.AppendLine($"**Candidate {i}** — provider `{e.Provider}`, model `{e.Model}`{candidateAgentName} {(won ? "🏆" : "")}".TrimEnd());
             sb.AppendLine();
             sb.AppendLine($"Outcome: `{e.AgentResult.Outcome}`");
 

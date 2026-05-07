@@ -76,8 +76,8 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -87,7 +87,7 @@ public class PollingRunnerTests
             boardClient,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
             Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
@@ -96,7 +96,7 @@ public class PollingRunnerTests
             boardClient,
             agentRunner,
             mergeRunner,
-            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
+            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), TestConfig, new AgentIdentity("Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
             TestConfig,
             AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             NullLogger<PollingRunner>.Instance);
@@ -129,8 +129,8 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -140,7 +140,7 @@ public class PollingRunnerTests
             boardClient,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
             Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
@@ -149,7 +149,7 @@ public class PollingRunnerTests
             boardClient,
             agentRunner,
             mergeRunner,
-            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
+            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), TestConfig, new AgentIdentity("Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
             TestConfig,
             AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             NullLogger<PollingRunner>.Instance);
@@ -188,8 +188,8 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -199,7 +199,7 @@ public class PollingRunnerTests
             boardClient,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
             Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
@@ -208,7 +208,7 @@ public class PollingRunnerTests
             boardClient,
             agentRunner,
             mergeRunner,
-            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
+            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), TestConfig, new AgentIdentity("Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
             TestConfig,
             AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             NullLogger<PollingRunner>.Instance);
@@ -266,8 +266,8 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             config,
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, config, new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -277,7 +277,7 @@ public class PollingRunnerTests
             boardClient,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             config,
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
             Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
@@ -295,7 +295,7 @@ public class PollingRunnerTests
             boardClient,
             agentRunner,
             mergeRunner,
-            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
+            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), config, new AgentIdentity("Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
             config,
             resolverWithClaudeOnly,
             warningLogger);
@@ -353,8 +353,8 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             config,
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, config, new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -364,7 +364,7 @@ public class PollingRunnerTests
             boardClient,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             config,
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
             Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
@@ -379,7 +379,7 @@ public class PollingRunnerTests
             boardClient,
             agentRunner,
             mergeRunner,
-            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
+            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), config, new AgentIdentity("Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
             config,
             resolverWithClaudeOnly,
             NullLogger<PollingRunner>.Instance);
@@ -436,8 +436,8 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -447,7 +447,7 @@ public class PollingRunnerTests
             boardClient,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
             Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
@@ -456,7 +456,7 @@ public class PollingRunnerTests
             boardClient,
             new StubCrossReferenceResolver(),
             TestConfig,
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             NullLogger<CompletionRunner>.Instance);
 
         var fakeLogger = new FakeLogger<PollingRunner>();
@@ -492,8 +492,8 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -503,7 +503,7 @@ public class PollingRunnerTests
             boardClient,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
             Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
@@ -512,7 +512,7 @@ public class PollingRunnerTests
             boardClient,
             new StubCrossReferenceResolver(),
             TestConfig,
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             NullLogger<CompletionRunner>.Instance);
 
         var fakeLogger = new FakeLogger<PollingRunner>();
@@ -548,8 +548,8 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, TestConfig, new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -559,7 +559,7 @@ public class PollingRunnerTests
             boardClient,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             TestConfig,
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
             Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
@@ -570,7 +570,7 @@ public class PollingRunnerTests
             boardClient,
             agentRunner,
             mergeRunner,
-            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), TestConfig, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
+            new CompletionRunner(boardClient, new StubCrossReferenceResolver(), TestConfig, new AgentIdentity("Agent", "TestMachine"), NullLogger<CompletionRunner>.Instance),
             TestConfig,
             AgentExecutorResolver.ForSingleExecutor(new StubAgentExecutor(NullLogger<StubAgentExecutor>.Instance)),
             fakeLogger);
@@ -629,8 +629,8 @@ public class PollingRunnerTests
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             config,
             new StubCrossReferenceResolver(),
-            new AgentIdentity("Test", "Agent", "TestMachine"),
-            new UpdateFileProcessor(boardClient, config, new AgentIdentity("Test", "Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
+            new AgentIdentity("Agent", "TestMachine"),
+            new UpdateFileProcessor(boardClient, config, new AgentIdentity("Agent", "TestMachine"), NullLogger<UpdateFileProcessor>.Instance),
             NullRunStore.Instance,
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -640,7 +640,7 @@ public class PollingRunnerTests
             boardClient,
             new GitWorkspaceManager(NullLogger<GitWorkspaceManager>.Instance),
             config,
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             Substitute.For<ICrossReferenceResolver>(),
             Substitute.For<IAgentExecutorResolver>(),
             NullLogger<MergeRunner>.Instance);
@@ -649,7 +649,7 @@ public class PollingRunnerTests
             boardClient,
             new StubCrossReferenceResolver(), // returns empty → ERROR (no children)
             config,
-            new AgentIdentity("Test", "Agent", "TestMachine"),
+            new AgentIdentity("Agent", "TestMachine"),
             NullLogger<CompletionRunner>.Instance);
 
         var pollingRunner = new PollingRunner(
