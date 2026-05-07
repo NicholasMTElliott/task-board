@@ -354,6 +354,23 @@ public sealed partial class AgentRunner(
 
             double? capturedEstimate = null;
 
+            // Accumulator for tickets created across all steps. Forwarded to the
+            // gate check as {CreatedTickets} so the gate sees what was actually
+            // accomplished even after UpdateFileProcessor deletes the source
+            // .aiboard/updates/new-*.md files. Without this, gate checks for
+            // discard-mode generation states (story decomposition, epic
+            // decomposition) inspect an empty updates dir and falsely conclude
+            // "no work was done".
+            var allCreatedTickets = new List<CreatedTicketInfo>();
+
+            // Accumulator for `.md` files in `.aiboard/updates/` that didn't
+            // match any recognized pattern (most commonly: agent forgot the
+            // `new-` prefix on what was supposed to be a new-ticket file).
+            // Surfaced to the gate as {UnrecognizedFiles} so the gate can
+            // ERROR when the agent says "I made tickets" but actually wrote
+            // unparseable filenames.
+            var allUnrecognizedFiles = new List<UnrecognizedUpdateFile>();
+
             for (var stepIndex = 0; stepIndex < state.Steps.Count; stepIndex++)
             {
                 // Inter-step shutdown check: if graceful shutdown was requested after at least one step
@@ -652,6 +669,24 @@ public sealed partial class AgentRunner(
                         capturedEstimate, updateResult.CreatedTickets.Count);
                 }
 
+                // 6d-ii-c. Accumulate created tickets so the gate check (which
+                //          runs after UpdateFileProcessor deletes the source
+                //          new-*.md files) can see what was actually produced.
+                if (updateResult.CreatedTickets.Count > 0)
+                {
+                    allCreatedTickets.AddRange(updateResult.CreatedTickets);
+                }
+
+                // 6d-ii-d. Accumulate unrecognized .md files for the gate so it
+                //          can detect the silent-failure mode where the agent
+                //          produced files with bad filenames (e.g. missing
+                //          `new-` prefix) and the orchestrator silently skipped
+                //          them.
+                if (updateResult.UnrecognizedFilesList.Count > 0)
+                {
+                    allUnrecognizedFiles.AddRange(updateResult.UnrecognizedFilesList);
+                }
+
                 // 6d-iii. Save step result to DB.
                 // Skip when the step ran as a candidate group: CandidateExecutor
                 // already persisted N candidate rows + 1 evaluator row, and a
@@ -772,7 +807,7 @@ public sealed partial class AgentRunner(
             // 7. Run gate check if configured
             var gateCheckResult = await RunGateCheckAsync(
                 session, state, lastResult!, worktreePath, targetCard, cardId, runId,
-                runStartCanonicalSha, cancellationToken);
+                runStartCanonicalSha, allCreatedTickets, allUnrecognizedFiles, cancellationToken);
 
             if (gateCheckResult.BlockingResult is not null)
             {
@@ -1152,6 +1187,8 @@ public sealed partial class AgentRunner(
         string cardId,
         string runId,
         string? runStartCanonicalSha,
+        IReadOnlyList<CreatedTicketInfo> createdTickets,
+        IReadOnlyList<UnrecognizedUpdateFile> unrecognizedFiles,
         CancellationToken cancellationToken)
     {
         if (state.GateCheck is null)
@@ -1193,11 +1230,71 @@ public sealed partial class AgentRunner(
                 : "";
         }
 
-        // Skip gate check if no changes
-        if (string.IsNullOrWhiteSpace(changes))
+        // Skip gate check if no changes AND no tickets created AND no
+        // unrecognized files (the third case is the silent-failure shape we
+        // explicitly want to surface — running the gate so it can ERROR on it).
+        // For decomposition / generation states the per-step new-*.md files
+        // have already been deleted by UpdateFileProcessor by the time we get
+        // here, so the only artifact of work done is the createdTickets list
+        // and the unrecognizedFiles list.
+        if (string.IsNullOrWhiteSpace(changes)
+            && createdTickets.Count == 0
+            && unrecognizedFiles.Count == 0)
         {
             logger.LogWarning("Gate check skipped: no changes detected for card {CardId}", cardId);
             return new GateCheckResult(null, null);
+        }
+
+        // Build a {CreatedTickets} block for the gate prompt. Format chosen so
+        // it reads naturally inside a markdown prompt section.
+        string createdTicketsBlock;
+        if (createdTickets.Count == 0)
+        {
+            createdTicketsBlock = "_(no tickets created during this run)_";
+        }
+        else
+        {
+            var sb = new StringBuilder();
+            foreach (var t in createdTickets)
+            {
+                sb.Append("- #").Append(t.NewCardId).Append(' ').Append(t.Title);
+                if (!string.IsNullOrEmpty(t.Slug))
+                {
+                    sb.Append(" (slug: `").Append(t.Slug).Append("`)");
+                }
+                if (t.Estimate.HasValue)
+                {
+                    sb.Append(" — est ").Append(t.Estimate.Value.ToString("0.##", CultureInfo.InvariantCulture));
+                }
+                sb.AppendLine();
+            }
+            createdTicketsBlock = sb.ToString().TrimEnd();
+        }
+
+        // Build a {UnrecognizedFiles} block. Empty case is the cheery "all
+        // good" message; non-empty is a flagged failure with rename hints.
+        string unrecognizedFilesBlock;
+        if (unrecognizedFiles.Count == 0)
+        {
+            unrecognizedFilesBlock = "_(all `.md` files in `.aiboard/updates/` were recognized — none rejected)_";
+        }
+        else
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("**FAILURE SIGNAL**: ").Append(unrecognizedFiles.Count)
+                .AppendLine(" `.md` file(s) in `.aiboard/updates/` were not recognized by the orchestrator and were silently skipped:");
+            foreach (var u in unrecognizedFiles)
+            {
+                sb.Append("- `").Append(u.FileName).Append('`');
+                if (u.LikelyMissingNewPrefix)
+                {
+                    sb.Append(" — looks like the agent forgot the `new-` prefix; should have been `new-").Append(u.FileName).Append('`');
+                }
+                sb.AppendLine();
+            }
+            sb.AppendLine();
+            sb.AppendLine("If the agent's self-report claims work that should have produced these files, this is a silent-failure mode. Return `outcome=ERROR` so the operator can re-run.");
+            unrecognizedFilesBlock = sb.ToString().TrimEnd();
         }
 
         // Build gate prompt
@@ -1223,7 +1320,9 @@ public sealed partial class AgentRunner(
         gatePrompt = gatePrompt
             .Replace("{TaskBody}", targetCard.Body ?? "")
             .Replace("{Diff}", changes)
-            .Replace("{AgentReport}", agentReport);
+            .Replace("{AgentReport}", agentReport)
+            .Replace("{CreatedTickets}", createdTicketsBlock)
+            .Replace("{UnrecognizedFiles}", unrecognizedFilesBlock);
 
         // Re-run fast-path for the gate check: if a prior run completed this gate with COMPLETE
         // and the canonical gate-check comment is still on the card, prepend a "confirm or update"

@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 
@@ -44,8 +45,20 @@ public enum PreambleVariant
 /// </remarks>
 public sealed class RerunPreambleBuilder(
     IRunStore runStore,
-    ILogger<RerunPreambleBuilder> logger)
+    ILogger<RerunPreambleBuilder> logger,
+    ITaskBoardClient? boardClient = null)
 {
+    /// <summary>
+    /// Matches `Created #NN` (with various capitalisations) inside the prior
+    /// comment body. The orchestrator emits `- Created #{id} — {title}` from
+    /// <see cref="AgentRunner.FormatUpdateSummary"/>; agents commonly echo the
+    /// same shape ("Created #43") in their verdict. Anything that looks like a
+    /// claim of a ticket creation gets verified against the board before we
+    /// trust the preamble.
+    /// </summary>
+    private static readonly Regex CreatedTicketClaimPattern =
+        new(@"\bcreated\s*#(\d+)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     /// <summary>
     /// Looks for a re-run signal and returns a formatted preamble if one applies.
     /// </summary>
@@ -121,7 +134,93 @@ public sealed class RerunPreambleBuilder(
             return null;
         }
 
+        // Verify any "Created #N" claims in the prior body actually exist on
+        // the board. The fast-path is only safe when the prior output's
+        // load-bearing facts are still true. The most common fictional claim
+        // is "Created #43, #44" emitted by an agent whose UpdateFileProcessor
+        // silently rejected its files (missing `new-` prefix). When the
+        // claimed tickets don't exist, suppress the preamble and let the step
+        // run fresh — which is the safe outcome.
+        if (boardClient is not null)
+        {
+            var verification = await VerifyCreatedTicketClaimsAsync(
+                priorBody, cardId, stepName, cancellationToken);
+            if (verification.Suppress)
+            {
+                return null;
+            }
+        }
+
         return Format(variant, priorBody);
+    }
+
+    /// <summary>
+    /// Result of scanning the prior comment body for "Created #N" claims and
+    /// resolving each against the board. <see cref="Suppress"/> is true when
+    /// any cited ticket does not exist on the board — meaning the prior
+    /// output's "I created these" claim is fictional and we should not let
+    /// the next agent confirm it sight-unseen.
+    /// </summary>
+    private readonly record struct ClaimVerificationResult(bool Suppress, int TotalCited, int Missing);
+
+    private async Task<ClaimVerificationResult> VerifyCreatedTicketClaimsAsync(
+        string priorBody,
+        string cardId,
+        string stepName,
+        CancellationToken cancellationToken)
+    {
+        if (boardClient is null)
+            return new ClaimVerificationResult(false, 0, 0);
+
+        var matches = CreatedTicketClaimPattern.Matches(priorBody);
+        if (matches.Count == 0)
+            return new ClaimVerificationResult(false, 0, 0);
+
+        // Dedupe — same #N often shows up in multiple comment sections.
+        var citedIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match m in matches)
+        {
+            if (m.Groups.Count > 1) citedIds.Add(m.Groups[1].Value);
+        }
+
+        var missing = new List<string>();
+        foreach (var id in citedIds)
+        {
+            try
+            {
+                _ = await boardClient.GetCardAsync(id, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                // Treat any lookup failure (404, transient API error, parse
+                // error) as "missing". Conservative: if we can't confirm the
+                // ticket exists, don't trust the prior claim. A flaky API
+                // makes the preamble suppress; that's a safe default — the
+                // step just runs fresh, paying tokens but not making a wrong
+                // decision.
+                missing.Add(id);
+            }
+        }
+
+        if (missing.Count > 0)
+        {
+            logger.LogWarning(
+                "Re-run preamble suppressed for step '{StepName}' on card {CardId}: prior comment cited " +
+                "{TotalCount} ticket(s) but {MissingCount} could not be resolved on the board ({Missing}). " +
+                "The prior 'Created #N' claim is fictional or stale — running step fresh instead of letting " +
+                "the agent confirm fabricated work.",
+                stepName, cardId, citedIds.Count, missing.Count, string.Join(", ", missing.Select(id => "#" + id)));
+            return new ClaimVerificationResult(true, citedIds.Count, missing.Count);
+        }
+
+        logger.LogDebug(
+            "Re-run preamble verification for step '{StepName}' on card {CardId}: all {Count} cited ticket(s) exist on the board",
+            stepName, cardId, citedIds.Count);
+        return new ClaimVerificationResult(false, citedIds.Count, 0);
     }
 
     private static CardComment? FindLatestCommentWithMarker(

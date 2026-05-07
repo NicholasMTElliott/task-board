@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Linq;
 using System.Text.RegularExpressions;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
@@ -66,6 +67,7 @@ public sealed class UpdateFileProcessor(
         var newTicketFiles = new List<(string FilePath, string Slug)>();
         var createdTickets = new List<CreatedTicketInfo>();
         var postedComments = new List<CrossCardCommentInfo>();
+        var unrecognizedFiles = new List<UnrecognizedUpdateFile>();
         string? referenceContent = null;
 
         foreach (var filePath in files)
@@ -103,7 +105,28 @@ public sealed class UpdateFileProcessor(
                     continue;
                 }
 
-                logger.LogWarning("Unrecognized update file (does not match new-{{slug}}.md, {{cardId}}-comment.md, or {{cardId}}-reference.md): {FileName}", fileName);
+                // Unrecognized .md file. Most common case is a missing `new-`
+                // prefix on what was supposed to be a new-ticket file (KvA / eve
+                // failure shape: agent writes `apply-theme-class.md` instead
+                // of `new-apply-theme-class.md` and the regex silently rejects
+                // it). Detect that case and call it out specifically — it's a
+                // 99% chance to be the cause.
+                var likelyMissingNewPrefix = LooksLikeMissingNewPrefix(fileName);
+                if (likelyMissingNewPrefix)
+                {
+                    logger.LogWarning(
+                        "Update file '{FileName}' looks like a new-ticket file with the required `new-` prefix missing. " +
+                        "The orchestrator only matches files named `new-{{slug}}.md` — rename to `new-{FileName}` to get this " +
+                        "ticket created. Skipping.",
+                        fileName, fileName);
+                }
+                else
+                {
+                    logger.LogWarning(
+                        "Unrecognized update file (does not match new-{{slug}}.md, {{cardId}}-comment.md, or {{cardId}}-reference.md): {FileName}",
+                        fileName);
+                }
+                unrecognizedFiles.Add(new UnrecognizedUpdateFile(fileName, likelyMissingNewPrefix));
             }
             catch (Exception ex)
             {
@@ -118,7 +141,60 @@ public sealed class UpdateFileProcessor(
             createdTickets.AddRange(results);
         }
 
-        return new UpdateProcessingResult(createdTickets, postedComments, referenceContent);
+        // End-of-loop summary: a single Warning that surfaces the count
+        // visibly even when individual file warnings scroll off. Loud-failure
+        // mode for the case where EVERY .md file was rejected — that almost
+        // always means the agent got the filename convention wrong, and it's
+        // a silent-success failure mode if we don't shout about it.
+        if (unrecognizedFiles.Count > 0)
+        {
+            var likelyMissingPrefixCount = unrecognizedFiles.Count(u => u.LikelyMissingNewPrefix);
+            if (createdTickets.Count == 0 && postedComments.Count == 0 && referenceContent is null)
+            {
+                logger.LogWarning(
+                    "UpdateFileProcessor scanned {Total} .md file(s) in .aiboard/updates/ for card {CardId} step '{StepName}' " +
+                    "and recognized ZERO of them ({MissingPrefixCount} look like new-ticket files missing the `new-` prefix). " +
+                    "No tickets were created. The agent likely violated the filename convention — review prompt or model output.",
+                    unrecognizedFiles.Count, sourceCardId, stepName, likelyMissingPrefixCount);
+            }
+            else
+            {
+                logger.LogWarning(
+                    "UpdateFileProcessor for card {CardId} step '{StepName}': {Total} unrecognized .md file(s) skipped " +
+                    "({MissingPrefixCount} look like new-ticket files missing the `new-` prefix). Filenames: {Names}",
+                    sourceCardId, stepName, unrecognizedFiles.Count, likelyMissingPrefixCount,
+                    string.Join(", ", unrecognizedFiles.Select(u => u.FileName)));
+            }
+        }
+
+        return new UpdateProcessingResult(createdTickets, postedComments, referenceContent, unrecognizedFiles);
+    }
+
+    /// <summary>
+    /// Heuristic: a filename "looks like" a new-ticket file with the missing `new-` prefix when
+    ///   - it ends in .md
+    ///   - it has at least one hyphen (slug shape)
+    ///   - it does not match the comment-file (`{N}-comment.md`) or reference-file (`{N}-reference.md`) patterns
+    ///   - it doesn't start with a digit (a leading digit is the comment/reference shape)
+    /// Conservative: prefers false-negative (silent skip with generic warning) over false-positive
+    /// (telling an operator to rename a file that wasn't a new-ticket file).
+    /// </summary>
+    internal static bool LooksLikeMissingNewPrefix(string fileName)
+    {
+        if (!fileName.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (fileName.Length < 4) // ".md" + at least one char
+            return false;
+        if (CommentPattern.IsMatch(fileName) || ReferencePattern.IsMatch(fileName))
+            return false;
+        // Already has the prefix — if it does, the regex match would have caught it.
+        if (fileName.StartsWith("new-", StringComparison.OrdinalIgnoreCase))
+            return false;
+        // Comment / reference patterns start with a digit. Don't claim those.
+        if (char.IsDigit(fileName[0]))
+            return false;
+        // A hyphen anywhere suggests slug shape.
+        return fileName.IndexOf('-') > 0;
     }
 
     private async Task<IReadOnlyList<CreatedTicketInfo>> ProcessNewTicketFilesAsync(
@@ -662,10 +738,13 @@ public sealed class UpdateFileProcessor(
 public sealed record UpdateProcessingResult(
     IReadOnlyList<CreatedTicketInfo> CreatedTickets,
     IReadOnlyList<CrossCardCommentInfo> PostedComments,
-    string? ReferenceContent = null)
+    string? ReferenceContent = null,
+    IReadOnlyList<UnrecognizedUpdateFile>? UnrecognizedFiles = null)
 {
     public static readonly UpdateProcessingResult Empty = new([], []);
     public bool HasUpdates => CreatedTickets.Count > 0 || PostedComments.Count > 0;
+    public IReadOnlyList<UnrecognizedUpdateFile> UnrecognizedFilesList =>
+        UnrecognizedFiles ?? Array.Empty<UnrecognizedUpdateFile>();
 
     /// <summary>
     /// Sum of all created ticket estimates (from front matter). Null if no estimates were provided.
@@ -691,6 +770,20 @@ public sealed record UpdateProcessingResult(
 
 public sealed record CreatedTicketInfo(string NewCardId, string Title, string Slug, double? Estimate = null);
 public sealed record CrossCardCommentInfo(string TargetCardId, string SourceFileName);
+
+/// <summary>
+/// A `.md` file in `.aiboard/updates/` that did not match any of the recognized
+/// patterns (`new-{slug}.md`, `{N}-comment.md`, `{N}-reference.md`). Surfaced
+/// in <see cref="UpdateProcessingResult"/> so callers (e.g. gate checks) can
+/// see how the agent's output was rejected.
+/// </summary>
+/// <param name="FileName">Just the filename portion, no path.</param>
+/// <param name="LikelyMissingNewPrefix">
+/// True when the heuristic in <see cref="UpdateFileProcessor.LooksLikeMissingNewPrefix"/>
+/// suggests this is a new-ticket file with the required prefix omitted (the
+/// dominant agent-error mode).
+/// </param>
+public sealed record UnrecognizedUpdateFile(string FileName, bool LikelyMissingNewPrefix);
 
 /// <summary>
 /// Represents a parsed new-ticket update file.
