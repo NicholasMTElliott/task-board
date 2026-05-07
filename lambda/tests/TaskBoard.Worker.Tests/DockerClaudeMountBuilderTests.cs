@@ -451,6 +451,117 @@ public class DockerClaudeMountBuilderTests : IDisposable
             m => m.ContainerPath == DockerClaudeMountBuilder.DefaultCredentialMountPoint);
     }
 
+    // ── BuildAsync — ~/.claude.json mount (eve issue #9 regression guard) ───
+    //
+    // Claude CLI 2.x looks for $HOME/.claude.json (a FILE at the home root,
+    // sibling of the .claude/ directory). When this isn't mounted into the
+    // container, the CLI hard-fails with "Claude configuration file not found
+    // at: /home/agent/.claude.json" before any prompt processing.
+    // These tests pin the mount behaviour.
+
+    [Fact]
+    public async Task BuildAsync_WithExplicitCredentialPath_AlsoMountsClaudeJsonSibling()
+    {
+        var credDir = Path.Combine(_tempDir, ".claude");
+        Directory.CreateDirectory(credDir);
+        File.WriteAllText(Path.Combine(credDir, "settings.json"), "{}");
+        // Sibling .claude.json file lives at the credential dir's parent.
+        var jsonPath = Path.Combine(_tempDir, ".claude.json");
+        await File.WriteAllTextAsync(jsonPath, "{\"oauthAccessToken\":\"test\"}");
+
+        await using var ctx = await Builder.BuildAsync(
+            _tempDir,
+            new DockerClaudeAgentOptions { CredentialPath = credDir },
+            CancellationToken.None);
+
+        var jsonMount = Assert.Single(ctx.Mounts, m => m.ContainerPath == "/home/agent/.claude.json");
+        Assert.False(jsonMount.ReadOnly,
+            "claude.json must be RW so the CLI's auth refresh can write to the staged copy");
+        // Mount should point at a STAGED copy in temp, not the host file directly.
+        Assert.NotEqual(NormalizeForwardSlashes(jsonPath), jsonMount.HostPath);
+        Assert.Contains("aiboard-claude-json-", jsonMount.HostPath);
+    }
+
+    [Fact]
+    public async Task BuildAsync_NoSiblingClaudeJson_DoesNotMountFile()
+    {
+        var credDir = Path.Combine(_tempDir, ".claude");
+        Directory.CreateDirectory(credDir);
+        File.WriteAllText(Path.Combine(credDir, "settings.json"), "{}");
+        // Deliberately no .claude.json sibling — fresh-install host shape.
+
+        await using var ctx = await Builder.BuildAsync(
+            _tempDir,
+            new DockerClaudeAgentOptions { CredentialPath = credDir },
+            CancellationToken.None);
+
+        Assert.DoesNotContain(ctx.Mounts,
+            m => m.ContainerPath.EndsWith(".claude.json", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task BuildAsync_HostClaudeJsonNotMutated_StagedCopyIsTarget()
+    {
+        var credDir = Path.Combine(_tempDir, ".claude");
+        Directory.CreateDirectory(credDir);
+        var hostJsonPath = Path.Combine(_tempDir, ".claude.json");
+        const string original = "{\"hostFingerprint\":\"do-not-touch\"}";
+        await File.WriteAllTextAsync(hostJsonPath, original);
+
+        string? stagedHostPath;
+        await using (var ctx = await Builder.BuildAsync(
+            _tempDir,
+            new DockerClaudeAgentOptions { CredentialPath = credDir },
+            CancellationToken.None))
+        {
+            var mount = ctx.Mounts.Single(m => m.ContainerPath == "/home/agent/.claude.json");
+            stagedHostPath = mount.HostPath; // Forward-slash form — same content though.
+            // Mutate the staged copy as a stand-in for the in-container CLI's auth refresh.
+            // The staged path is a forward-slash version; convert back for File.* APIs.
+            var diskPath = stagedHostPath.Replace('/', Path.DirectorySeparatorChar);
+            await File.WriteAllTextAsync(diskPath, "{\"agentMutation\":\"ok\"}");
+        }
+
+        // Host must be untouched.
+        Assert.Equal(original, await File.ReadAllTextAsync(hostJsonPath));
+        // Staged temp file must be cleaned up on dispose.
+        Assert.NotNull(stagedHostPath);
+        var stagedDisk = stagedHostPath!.Replace('/', Path.DirectorySeparatorChar);
+        Assert.False(File.Exists(stagedDisk), "staged claude.json copy should be deleted on context dispose");
+    }
+
+    [Fact]
+    public async Task BuildAsync_CustomCredentialMountPoint_DerivesMatchingClaudeJsonPath()
+    {
+        var credDir = Path.Combine(_tempDir, ".claude");
+        Directory.CreateDirectory(credDir);
+        await File.WriteAllTextAsync(Path.Combine(_tempDir, ".claude.json"), "{}");
+
+        await using var ctx = await Builder.BuildAsync(
+            _tempDir,
+            new DockerClaudeAgentOptions
+            {
+                CredentialPath = credDir,
+                CredentialMountPoint = "/opt/claude-creds",
+            },
+            CancellationToken.None);
+
+        // Sibling-of-dir layout preserved: dir at /opt/claude-creds → file at /opt/claude-creds.json
+        Assert.Contains(ctx.Mounts, m => m.ContainerPath == "/opt/claude-creds.json");
+        Assert.DoesNotContain(ctx.Mounts, m => m.ContainerPath == "/home/agent/.claude.json");
+    }
+
+    [Theory]
+    [InlineData("/home/agent/.claude", "/home/agent/.claude.json")]
+    [InlineData("/home/agent/.claude/", "/home/agent/.claude.json")]
+    [InlineData("/opt/agent-creds", "/opt/agent-creds.json")]
+    public void DeriveClaudeJsonContainerPath_StripsTrailingSlash_AppendsJson(string mount, string expected)
+    {
+        Assert.Equal(expected, DockerClaudeMountBuilder.DeriveClaudeJsonContainerPath(mount));
+    }
+
+    private static string NormalizeForwardSlashes(string p) => p.Replace('\\', '/');
+
     // ── BuildAsync — environment variables ──────────────────────────────────
 
     [Fact]
