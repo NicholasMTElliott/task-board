@@ -1,0 +1,3 @@
+# The overlay Dockerfile uses no COPY — keep the build context empty so
+# every build is fast. Even README/script files are excluded.
+*

@@ -1,0 +1,62 @@
+# task-board self-hosting overlay: adds the .NET 10 SDK on top of any of the
+# three aiboard sandbox base images.
+#
+# Why this exists: when aiboard runs against task-board's own codebase
+# (the dogfooding case), agents need to run `dotnet build` and `dotnet test`
+# to validate their changes. The upstream sandbox images intentionally don't
+# ship a .NET SDK — that's a project-specific dependency, exactly the
+# use case docs/ProjectOverlays.md was written for.
+#
+# Single Dockerfile parameterised by BASE_IMAGE so all three executor
+# families share the install layer. The matching build scripts pass
+# different BASE_IMAGE values and re-tag accordingly:
+#
+#   build-claude-dotnet.ps1   → aiboard-agent-sandbox:dotnet      (FROM aiboard-agent-sandbox:latest)
+#   build-codex-dotnet.ps1    → aiboard-codex-sandbox:dotnet      (FROM aiboard-codex-sandbox:latest)
+#   build-opencode-dotnet.ps1 → aiboard-opencode-sandbox:dotnet   (FROM aiboard-opencode-sandbox:latest)
+#
+# Build args:
+#   BASE_IMAGE      - The aiboard upstream image to overlay (no default —
+#                     scripts always supply this).
+#   DOTNET_CHANNEL  - The .NET install-script channel (default: 10.0).
+#                     "10.0" pulls the latest patch release in 10.0.x.
+#                     For reproducible builds in CI, pin to e.g. "10.0.100"
+#                     via -DotnetChannel "10.0.100" on the build script.
+
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+USER root
+
+ARG DOTNET_CHANNEL=10.0
+
+# libicu runtime is a hard requirement for the .NET runtime's globalization
+# layer. Bookworm (debian-slim ancestor of node:22-slim) ships libicu72.
+# The dotnet-install.sh script does NOT pull OS-level dependencies, so we
+# install libicu before invoking it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libicu72 \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL -o /tmp/dotnet-install.sh https://dot.net/v1/dotnet-install.sh \
+    && chmod +x /tmp/dotnet-install.sh \
+    && /tmp/dotnet-install.sh --channel ${DOTNET_CHANNEL} --install-dir /usr/share/dotnet \
+    && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet \
+    && rm /tmp/dotnet-install.sh
+
+# DOTNET_ROOT lets the runtime find shared frameworks and the SDK without
+# relying on PATH walks. /usr/share/dotnet is the Microsoft-canonical
+# install location on Linux.
+ENV DOTNET_ROOT=/usr/share/dotnet
+ENV PATH=/usr/share/dotnet:${PATH}
+
+# Disable telemetry by default (per-container, opt-out only). aiboard agents
+# spawn lots of short-lived dotnet invocations; first-run telemetry would
+# add noise without value. Operators wanting to send first-run can override
+# at run time by passing -e DOTNET_CLI_TELEMETRY_OPTOUT=0.
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+ENV DOTNET_NOLOGO=1
+
+# Keep workspace + agent user from the upstream image. Don't WORKDIR
+# elsewhere — the aiboard mount builders bind the per-run worktree at
+# /workspace and assume the container's CWD is there.
+USER agent
