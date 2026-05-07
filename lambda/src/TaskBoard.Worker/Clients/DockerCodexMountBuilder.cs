@@ -84,7 +84,83 @@ public sealed class DockerCodexMountBuilder(ILogger<DockerCodexMountBuilder> log
             ["GIT_OPTIONAL_LOCKS"] = "0",
         };
 
+        // Stable per-host installation_id passed via env var; the sandbox
+        // entrypoint writes it into ~/.codex/installation_id at container
+        // start. Avoids the EROFS / EPERM trap that hits when the host file
+        // is bind-mounted (Codex 0.128.0 always opens with O_RDWR; bind-mount
+        // perms on Docker Desktop Windows make chmod-to-0o644 fail). The
+        // file is in installation_id.rs's "valid existing UUID → return as-is"
+        // path, so Codex never actually writes — telemetry continuity is
+        // preserved across runs without touching the host's ~/.codex/.
+        var installationId = ResolveInstallationId(options);
+        if (!string.IsNullOrEmpty(installationId))
+            envVars["CODEX_INSTALLATION_ID"] = installationId;
+
         return new DockerMountContext(mounts, envVars, pathMap, tempFiles, tempDirs);
+    }
+
+    /// <summary>
+    /// Resolves the stable per-aiboard-host Codex installation UUID. Order:
+    /// (1) <see cref="DockerCodexAgentOptions.InstallationId"/> if set
+    ///     (operator override — useful for fleet identity);
+    /// (2) cached value at <c>&lt;UserProfile&gt;/.aiboard/codex_installation_id</c>;
+    /// (3) generate a fresh UUIDv4 and persist to the cache path.
+    /// </summary>
+    /// <remarks>
+    /// We deliberately don't read from the operator's host <c>~/.codex/installation_id</c>.
+    /// Aiboard runs are agent runs — they should be a distinct install identity
+    /// from the operator's interactive Codex use. Conflating the two would
+    /// inflate the operator's perceived activity volume in OpenAI's metrics.
+    /// </remarks>
+    internal static string ResolveInstallationId(DockerCodexAgentOptions options)
+    {
+        if (!string.IsNullOrWhiteSpace(options.InstallationId)
+            && Guid.TryParse(options.InstallationId, out var configured))
+            return configured.ToString();
+
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrEmpty(home))
+        {
+            // Couldn't locate a per-user persistence path; fall back to a
+            // process-stable UUID. Better than nothing — at least all candidates
+            // in one polling process share an identity.
+            return ProcessStableInstallationId.Value;
+        }
+
+        var aiboardDir = Path.Combine(home, ".aiboard");
+        var idPath = Path.Combine(aiboardDir, "codex_installation_id");
+
+        try
+        {
+            if (File.Exists(idPath))
+            {
+                var existing = File.ReadAllText(idPath).Trim();
+                if (Guid.TryParse(existing, out var parsed))
+                    return parsed.ToString();
+            }
+
+            Directory.CreateDirectory(aiboardDir);
+            var fresh = Guid.NewGuid().ToString();
+            File.WriteAllText(idPath, fresh);
+            return fresh;
+        }
+        catch (IOException)
+        {
+            return ProcessStableInstallationId.Value;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return ProcessStableInstallationId.Value;
+        }
+    }
+
+    private static class ProcessStableInstallationId
+    {
+        // One UUID per aiboard process, used as a last-resort fallback when
+        // the cache file can't be read or written. Ensures every container
+        // launched by this process shares an identity even if disk persistence
+        // failed for some reason.
+        public static readonly string Value = Guid.NewGuid().ToString();
     }
 
     private void AddCredentialMount(
@@ -171,16 +247,25 @@ public sealed class DockerCodexMountBuilder(ILogger<DockerCodexMountBuilder> log
     /// staged and mounted into the container. Anything else (including the
     /// runtime-state files Codex CLI 0.125.0+ writes at startup —
     /// <c>models_cache.json</c>, <c>state_*.sqlite*</c>, <c>logs_*.sqlite*</c>,
-    /// <c>sandbox.log</c>, <c>history.jsonl</c>) is skipped, so Codex
-    /// regenerates fresh copies in the agent-writable container directory
-    /// rather than failing on a read-only mount.
+    /// <c>sandbox.log</c>, <c>history.jsonl</c>, <c>installation_id</c>)
+    /// is skipped, so Codex regenerates fresh copies in the agent-writable
+    /// container directory rather than failing on a read-only mount.
     /// </summary>
+    /// <remarks>
+    /// <c>installation_id</c> was previously in the allowlist for telemetry
+    /// continuity, but Codex CLI 0.128.0+ rewrites it during
+    /// <c>thread/start</c> session init. Mounting it RO produced
+    /// <c>codex_core::session: Failed to create session: Read-only file system</c>
+    /// at startup, killing every Codex candidate before any agent work began.
+    /// Letting Codex regenerate a fresh per-run UUID avoids the EROFS, at the
+    /// cost of telemetry treating each agent run as a new install — fine for
+    /// an isolated sandboxed agent.
+    /// </remarks>
     internal static readonly HashSet<string> CredentialFileNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "auth.json",            // OAuth tokens — required for API calls
         "config.toml",          // CLI config (model preferences, etc.)
         "cap_sid",              // capability/session ID — auth-related
-        "installation_id",      // stable per-installation UUID — keep for telemetry continuity
         "version.json",         // last-checked CLI version metadata
         ".personality_migration", // one-time migration flag
     };

@@ -39,6 +39,14 @@ public sealed class DockerMountContext : IAsyncDisposable
     public IReadOnlyDictionary<string, string> EnvironmentVariables { get; }
 
     /// <summary>
+    /// Temporary directories owned by this context (e.g., per-run staged
+    /// credentials directories). Deleted on <see cref="DisposeAsync"/>.
+    /// Exposed so tests can verify staging behaviour without grovelling
+    /// through mount specs.
+    /// </summary>
+    public IReadOnlyList<string> TempDirectories => _tempDirs;
+
+    /// <summary>
     /// Translates a host-side absolute path to its container-side equivalent using the mount map.
     /// Returns null if no mapping matches.
     /// </summary>
