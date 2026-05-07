@@ -34,7 +34,10 @@ param(
     [string]$BaseImage = "node:22-slim",
     [int]$AgentUid = 1000,
     [int]$AgentGid = 1000,
-    [string]$ClaudeCliVersion = "latest",
+    # Default mirrors the Dockerfile's ARG CLAUDE_CLI_VERSION pin.
+    # Bump in lockstep with docker/agent-sandbox/Dockerfile and
+    # CliVersionPolicy.KnownGood["claude"].MaxKnown — see docs/CliVersionTesting.md.
+    [string]$ClaudeCliVersion = "2.1.126",
     [string]$Tag = "latest",
     [switch]$NoCache
 )

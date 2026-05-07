@@ -11,14 +11,18 @@
 #   BASE_IMAGE           - Base Docker image (default: node:22-slim)
 #   AGENT_UID            - UID for the non-root agent user (default: 1000)
 #   AGENT_GID            - GID for the non-root agent group (default: 1000)
-#   OPENCODE_CLI_VERSION - npm version spec for opencode-ai (default: latest)
+#   OPENCODE_CLI_VERSION - npm version spec for opencode-ai.
+#                          Pinned to a specific tested version; see
+#                          docs/CliVersionTesting.md for the bump dance.
+#                          DockerfilePolicyDriftTests fails CI if this
+#                          default exceeds CliVersionPolicy.MaxKnown.
 
 ARG BASE_IMAGE=node:22-slim
 FROM ${BASE_IMAGE}
 
 ARG AGENT_UID=1000
 ARG AGENT_GID=1000
-ARG OPENCODE_CLI_VERSION=latest
+ARG OPENCODE_CLI_VERSION=1.14.26
 
 # Install system dependencies:
 #   git        - required for read-only worktree operations

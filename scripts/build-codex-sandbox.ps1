@@ -39,7 +39,10 @@ param(
     [string]$BaseImage = "node:22-slim",
     [int]$AgentUid = 1000,
     [int]$AgentGid = 1000,
-    [string]$CodexCliVersion = "latest",
+    # Default mirrors the Dockerfile's ARG CODEX_CLI_VERSION pin.
+    # Bump in lockstep with docker/codex-sandbox/Dockerfile and
+    # CliVersionPolicy.KnownGood["codex"].MaxKnown — see docs/CliVersionTesting.md.
+    [string]$CodexCliVersion = "0.128.0",
     [string]$Tag = "latest",
     [switch]$NoCache
 )

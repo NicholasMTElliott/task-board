@@ -36,17 +36,24 @@ public static class CliVersionPolicy
             // Codex CLI 0.125.0 dropped top-level structured_output events in favour
             // of the agent_message item.completed shape. Older versions use a parser
             // path we no longer maintain test fixtures for; mark them unsupported.
-            [CliKey.Codex] = new(MinSupported: new SemVer(0, 125, 0), MaxKnown: new SemVer(0, 125, 0)),
+            // 0.128.0 is the version baked into docker/codex-sandbox/Dockerfile and
+            // tested in production; we worked around its installation_id O_RDWR|O_CREAT
+            // behaviour via the CODEX_INSTALLATION_ID env var path.
+            // DockerfilePolicyDriftTests asserts MaxKnown >= the Dockerfile pin.
+            [CliKey.Codex] = new(MinSupported: new SemVer(0, 125, 0), MaxKnown: new SemVer(0, 128, 0)),
 
-            // Claude CLI: pinning deferred until we capture fixtures from the
-            // versions we test against. Until then, runtime check is informational
-            // only (logs version, no error/warn) — see CheckResult.Unknown handling.
-            [CliKey.Claude] = new(MinSupported: null, MaxKnown: null),
+            // Claude CLI 2.1.126 is the version baked into docker/agent-sandbox/Dockerfile.
+            // 2.x is the era where ~/.claude.json (file at home, sibling of .claude/)
+            // became a hard requirement — see DockerClaudeMountBuilder's claude.json
+            // mount. MinSupported left null until we capture fixtures from earlier
+            // versions we want to keep working with.
+            [CliKey.Claude] = new(MinSupported: null, MaxKnown: new SemVer(2, 1, 126)),
 
-            // OpenCode CLI runs inside the docker-opencode sandbox image, which
-            // bakes the version. Operators upgrade by rebuilding the image, so
-            // this check fires from inside the container at first use.
-            [CliKey.OpenCode] = new(MinSupported: null, MaxKnown: null),
+            // OpenCode CLI 1.14.26 is the version baked into docker/opencode-sandbox/Dockerfile.
+            // OpenCode runs only inside the sandbox image, so this check effectively
+            // pins the image. Operators upgrade by rebuilding the image — the runtime
+            // check fires from inside the container at first use.
+            [CliKey.OpenCode] = new(MinSupported: null, MaxKnown: new SemVer(1, 14, 26)),
         };
 
     /// <summary>

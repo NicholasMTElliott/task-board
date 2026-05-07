@@ -38,7 +38,10 @@ param(
     [string]$BaseImage = "node:22-slim",
     [int]$AgentUid = 1000,
     [int]$AgentGid = 1000,
-    [string]$OpenCodeCliVersion = "latest",
+    # Default mirrors the Dockerfile's ARG OPENCODE_CLI_VERSION pin.
+    # Bump in lockstep with docker/opencode-sandbox/Dockerfile and
+    # CliVersionPolicy.KnownGood["opencode"].MaxKnown — see docs/CliVersionTesting.md.
+    [string]$OpenCodeCliVersion = "1.14.26",
     [string]$Tag = "latest",
     [switch]$NoCache
 )

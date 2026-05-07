@@ -18,14 +18,18 @@
 #   BASE_IMAGE         - Base Docker image (default: node:22-slim)
 #   AGENT_UID          - UID for the non-root agent user (default: 1000)
 #   AGENT_GID          - GID for the non-root agent group (default: 1000)
-#   CODEX_CLI_VERSION  - npm version spec for @openai/codex (default: latest)
+#   CODEX_CLI_VERSION  - npm version spec for @openai/codex.
+#                        Pinned to a specific tested version; see
+#                        docs/CliVersionTesting.md for the bump dance.
+#                        DockerfilePolicyDriftTests fails CI if this
+#                        default exceeds CliVersionPolicy.MaxKnown.
 
 ARG BASE_IMAGE=node:22-slim
 FROM ${BASE_IMAGE}
 
 ARG AGENT_UID=1000
 ARG AGENT_GID=1000
-ARG CODEX_CLI_VERSION=latest
+ARG CODEX_CLI_VERSION=0.128.0
 
 # Install system dependencies:
 #   git             - read-only worktree operations the agent uses for
