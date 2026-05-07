@@ -70,7 +70,7 @@ public class CodexAgentExecutorLiveTests
         try
         {
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions
+                TestOptionsMonitor.Create(new CodexCliLlmOptions
                 {
                     ExecutablePath = "codex",
                     // gpt-5.4-mini is the cheapest GPT-5 tier and is sufficient

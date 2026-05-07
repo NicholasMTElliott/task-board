@@ -198,7 +198,7 @@ public class AgentRunnerIntegrationTests : IDisposable
 
     private ClaudeAgentExecutor CreateRealExecutor(decimal maxBudgetUsd, int timeoutSeconds)
     {
-        var options = Options.Create(new ClaudeCliLlmOptions
+        var options = TestOptionsMonitor.Create(new ClaudeCliLlmOptions
         {
             ExecutablePath = "claude",
             MaxBudgetUsd = maxBudgetUsd,

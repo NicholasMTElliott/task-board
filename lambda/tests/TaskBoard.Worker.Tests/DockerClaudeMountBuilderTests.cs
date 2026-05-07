@@ -701,7 +701,7 @@ public class DockerClaudeMountBuilderTests : IDisposable
     [Fact]
     public async Task BuildDockerArgumentList_WithMountContext_IncludesWorkspaceVolumeArg()
     {
-        var opts = Options.Create(new DockerClaudeAgentOptions
+        var opts = TestOptionsMonitor.Create(new DockerClaudeAgentOptions
         {
             ImageName = "aiboard-test:latest",
             PromptMountPoint = "/mnt/prompts",
@@ -726,7 +726,7 @@ public class DockerClaudeMountBuilderTests : IDisposable
     [Fact]
     public async Task BuildDockerArgumentList_WithMountContext_SetsWorkingDirectory()
     {
-        var opts = Options.Create(new DockerClaudeAgentOptions { ImageName = "aiboard-test:latest" });
+        var opts = TestOptionsMonitor.Create(new DockerClaudeAgentOptions { ImageName = "aiboard-test:latest" });
         var executor = new DockerClaudeAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerClaudeAgentExecutor>.Instance);
 
         await using var ctx = await Builder.BuildAsync(
@@ -744,7 +744,7 @@ public class DockerClaudeMountBuilderTests : IDisposable
     [Fact]
     public async Task BuildDockerArgumentList_WithMountContext_InjectsGitOptionalLocksEnvVar()
     {
-        var opts = Options.Create(new DockerClaudeAgentOptions { ImageName = "aiboard-test:latest" });
+        var opts = TestOptionsMonitor.Create(new DockerClaudeAgentOptions { ImageName = "aiboard-test:latest" });
         var executor = new DockerClaudeAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerClaudeAgentExecutor>.Instance);
 
         await using var ctx = await Builder.BuildAsync(
@@ -762,7 +762,7 @@ public class DockerClaudeMountBuilderTests : IDisposable
     [Fact]
     public void BuildDockerArgumentList_WithoutMountContext_NoWorkingDirectoryFlag()
     {
-        var opts = Options.Create(new DockerClaudeAgentOptions { ImageName = "aiboard-test:latest" });
+        var opts = TestOptionsMonitor.Create(new DockerClaudeAgentOptions { ImageName = "aiboard-test:latest" });
         var executor = new DockerClaudeAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance, NullLogger<DockerClaudeAgentExecutor>.Instance);
 
         var args = executor.BuildDockerArgumentList("test-container", "/host/prompts", [], mountContext: null);

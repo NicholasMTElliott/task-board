@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Clients;
 
@@ -57,7 +58,7 @@ public class CodexAgentExecutorDiagnosticsTests
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -85,7 +86,7 @@ public class CodexAgentExecutorDiagnosticsTests
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -114,7 +115,7 @@ public class CodexAgentExecutorDiagnosticsTests
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -150,7 +151,7 @@ public class CodexAgentExecutorDiagnosticsTests
                     => Task.FromResult((1, stdout, stderr));
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -179,7 +180,7 @@ public class CodexAgentExecutorDiagnosticsTests
                     => Task.FromResult((127, stdout, "command not found"));
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -203,7 +204,7 @@ public class CodexAgentExecutorDiagnosticsTests
                     => Task.FromResult((1, "garbled output not a valid event stream", "fatal error"));
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -243,7 +244,7 @@ public class CodexAgentExecutorDiagnosticsTests
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -279,7 +280,7 @@ public class CodexAgentExecutorDiagnosticsTests
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -312,7 +313,7 @@ public class CodexAgentExecutorDiagnosticsTests
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -344,7 +345,7 @@ public class CodexAgentExecutorDiagnosticsTests
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -376,7 +377,7 @@ public class CodexAgentExecutorDiagnosticsTests
                     => Task.FromResult((0, stdout, ""));
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -411,7 +412,7 @@ public class CodexAgentExecutorDiagnosticsTests
                     => Task.FromResult((1, "", stderr));
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -439,7 +440,7 @@ public class CodexAgentExecutorDiagnosticsTests
                     => Task.FromResult((1, "", longStderr));
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -458,7 +459,7 @@ public class CodexAgentExecutorDiagnosticsTests
     {
         var logger = new CapturingLogger<CodexAgentExecutor>();
         var executor = new CodexAgentExecutor(
-            Options.Create(new CodexCliLlmOptions { FullAuto = true, Sandbox = "workspace-write" }),
+            TestOptionsMonitor.Create(new CodexCliLlmOptions { FullAuto = true, Sandbox = "workspace-write" }),
             logger);
 
         var context = new AgentExecutionContext(
@@ -479,7 +480,7 @@ public class CodexAgentExecutorDiagnosticsTests
     {
         var logger = new CapturingLogger<CodexAgentExecutor>();
         var executor = new CodexAgentExecutor(
-            Options.Create(new CodexCliLlmOptions { FullAuto = true }),
+            TestOptionsMonitor.Create(new CodexCliLlmOptions { FullAuto = true }),
             logger);
 
         var context = new AgentExecutionContext(
@@ -504,7 +505,7 @@ public class CodexAgentExecutorDiagnosticsTests
     {
         var logger = new CapturingLogger<CodexAgentExecutor>();
         var executor = new CodexAgentExecutor(
-            Options.Create(new CodexCliLlmOptions
+            TestOptionsMonitor.Create(new CodexCliLlmOptions
             {
                 Yolo = true,
                 FullAuto = true,

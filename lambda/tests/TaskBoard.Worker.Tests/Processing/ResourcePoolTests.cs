@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Processing;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Processing;
 
@@ -18,7 +19,7 @@ public class ResourcePoolTests
             ProviderResources = providerResources,
         };
         return new ResourcePool(
-            Options.Create(opts),
+            TestOptionsMonitor.Create(opts),
             NullLogger<ResourcePool>.Instance);
     }
 

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Clients;
 
@@ -15,7 +16,7 @@ public class DockerOpenCodeAgentExecutorContractTests : AgentExecutorContractTes
 {
     protected override IAgentExecutor CreateExecutor(ProcessRunnerDelegate processRunner)
     {
-        var options = Options.Create(new DockerOpenCodeAgentOptions
+        var options = TestOptionsMonitor.Create(new DockerOpenCodeAgentOptions
         {
             ImageName = "aiboard-opencode-test:latest",
             TimeoutSeconds = 30,

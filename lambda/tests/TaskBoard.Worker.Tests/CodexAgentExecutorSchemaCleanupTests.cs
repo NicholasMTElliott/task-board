@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests;
 
@@ -57,7 +58,7 @@ public class CodexAgentExecutorSchemaCleanupTests
             };
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -90,7 +91,7 @@ public class CodexAgentExecutorSchemaCleanupTests
             };
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 
@@ -127,7 +128,7 @@ public class CodexAgentExecutorSchemaCleanupTests
             };
 
             var executor = new CodexAgentExecutor(
-                Options.Create(new CodexCliLlmOptions()),
+                TestOptionsMonitor.Create(new CodexCliLlmOptions()),
                 NullLogger<CodexAgentExecutor>.Instance,
                 runner);
 

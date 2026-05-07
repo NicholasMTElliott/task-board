@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests;
 
@@ -7,7 +8,7 @@ public class CodexAgentExecutorTests
 {
     private static CodexAgentExecutor CreateExecutor(bool fullAuto = true, string? sandbox = null)
     {
-        var options = Microsoft.Extensions.Options.Options.Create(
+        var options = TestOptionsMonitor.Create(
             new CodexCliLlmOptions { FullAuto = fullAuto, Sandbox = sandbox });
         return new CodexAgentExecutor(options,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<CodexAgentExecutor>.Instance);
@@ -642,7 +643,7 @@ public class CodexAgentExecutorTests
     [Fact]
     public void IsRateLimited_OperatorOverridePattern_IsDetected()
     {
-        var options = Microsoft.Extensions.Options.Options.Create(
+        var options = TestOptionsMonitor.Create(
             new CodexCliLlmOptions
             {
                 RateLimitPatterns = { "my-custom-throttle-marker" },
@@ -656,7 +657,7 @@ public class CodexAgentExecutorTests
     [Fact]
     public void IsRateLimited_OperatorOverride_DoesNotReplaceDefaults()
     {
-        var options = Microsoft.Extensions.Options.Options.Create(
+        var options = TestOptionsMonitor.Create(
             new CodexCliLlmOptions
             {
                 RateLimitPatterns = { "custom-marker" },

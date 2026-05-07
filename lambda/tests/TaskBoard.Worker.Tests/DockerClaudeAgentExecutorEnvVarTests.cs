@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests;
 
@@ -15,7 +16,7 @@ public class DockerClaudeAgentExecutorEnvVarTests
 {
     private static DockerClaudeAgentExecutor CreateExecutor() =>
         new(
-            Options.Create(new DockerClaudeAgentOptions { ImageName = "test:latest" }),
+            TestOptionsMonitor.Create(new DockerClaudeAgentOptions { ImageName = "test:latest" }),
             Helpers.TestTenant.Instance,
             NullLogger<DockerClaudeAgentExecutor>.Instance);
 

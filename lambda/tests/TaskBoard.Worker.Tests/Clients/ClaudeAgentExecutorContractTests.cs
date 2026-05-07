@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Clients;
 
@@ -8,7 +9,7 @@ public class ClaudeAgentExecutorContractTests : AgentExecutorContractTests
 {
     protected override IAgentExecutor CreateExecutor(ProcessRunnerDelegate processRunner)
     {
-        var options = Options.Create(new ClaudeCliLlmOptions
+        var options = TestOptionsMonitor.Create(new ClaudeCliLlmOptions
         {
             ExecutablePath = "claude",
             TimeoutSeconds = 30,

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Clients;
 
@@ -19,7 +20,7 @@ public class DockerOpenCodeAgentExecutorEnvVarTests
 {
     private static DockerOpenCodeAgentExecutor CreateExecutor() =>
         new(
-            Options.Create(new DockerOpenCodeAgentOptions
+            TestOptionsMonitor.Create(new DockerOpenCodeAgentOptions
             {
                 ImageName = "test:latest",
                 NetworkMode = "llm-net",
@@ -121,7 +122,7 @@ public class DockerOpenCodeAgentExecutorEnvVarTests
             },
         };
         var executor = new DockerOpenCodeAgentExecutor(
-            Options.Create(options),
+            TestOptionsMonitor.Create(options),
             Helpers.TestTenant.Instance,
             NullLogger<DockerOpenCodeAgentExecutor>.Instance);
 

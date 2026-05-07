@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests;
 
@@ -17,7 +18,7 @@ public class DockerCodexAgentExecutorTests
         string? cpuLimit = null,
         string containerUser = "")
     {
-        var opts = Options.Create(new DockerCodexAgentOptions
+        var opts = TestOptionsMonitor.Create(new DockerCodexAgentOptions
         {
             ImageName = imageName,
             ContainerNamePrefix = "aiboard-cdx",

@@ -58,7 +58,7 @@ public class ClaudeAgentExecutorLiveTests
         try
         {
             var executor = new ClaudeAgentExecutor(
-                Options.Create(new ClaudeCliLlmOptions
+                TestOptionsMonitor.Create(new ClaudeCliLlmOptions
                 {
                     ExecutablePath = executablePath,
                     TimeoutSeconds = 120,

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Clients;
 
@@ -17,7 +18,7 @@ public class DockerClaudeQwenAgentExecutorDiagnosticsTests
         ProcessRunnerDelegate runner,
         DockerClaudeQwenAgentOptions? opts = null) =>
         new(
-            Options.Create(opts ?? new DockerClaudeQwenAgentOptions
+            TestOptionsMonitor.Create(opts ?? new DockerClaudeQwenAgentOptions
             {
                 ImageName = "aiboard-cq-test:latest",
                 TimeoutSeconds = 30,

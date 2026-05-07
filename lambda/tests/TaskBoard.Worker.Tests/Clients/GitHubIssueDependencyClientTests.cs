@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Clients;
 
@@ -28,7 +29,7 @@ public class GitHubIssueDependencyClientTests
         };
 
         var client = new GitHubIssueDependencyClient(
-            Microsoft.Extensions.Options.Options.Create(GitHubOptions()),
+            TestOptionsMonitor.Create(GitHubOptions()),
             NullLogger<GitHubIssueDependencyClient>.Instance,
             runner);
 
@@ -52,7 +53,7 @@ public class GitHubIssueDependencyClientTests
         };
 
         var client = new GitHubIssueDependencyClient(
-            Options.Create(GitHubOptions()),
+            TestOptionsMonitor.Create(GitHubOptions()),
             NullLogger<GitHubIssueDependencyClient>.Instance,
             runner);
 
@@ -80,7 +81,7 @@ public class GitHubIssueDependencyClientTests
         };
 
         var client = new GitHubIssueDependencyClient(
-            Options.Create(GitHubOptions()),
+            TestOptionsMonitor.Create(GitHubOptions()),
             NullLogger<GitHubIssueDependencyClient>.Instance,
             runner);
 
@@ -101,7 +102,7 @@ public class GitHubIssueDependencyClientTests
             Task.FromResult((0, """{"message": "Not Found"}""", ""));
 
         var client = new GitHubIssueDependencyClient(
-            Options.Create(GitHubOptions()),
+            TestOptionsMonitor.Create(GitHubOptions()),
             NullLogger<GitHubIssueDependencyClient>.Instance,
             runner);
 
@@ -117,7 +118,7 @@ public class GitHubIssueDependencyClientTests
             Task.FromResult((0, "<html>oops</html>", ""));
 
         var client = new GitHubIssueDependencyClient(
-            Options.Create(GitHubOptions()),
+            TestOptionsMonitor.Create(GitHubOptions()),
             NullLogger<GitHubIssueDependencyClient>.Instance,
             runner);
 

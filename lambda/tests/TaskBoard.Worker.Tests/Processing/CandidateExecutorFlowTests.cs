@@ -3,6 +3,7 @@ using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Models;
 using TaskBoard.Worker.Processing;
 using static TaskBoard.Worker.Tests.Helpers.TestGitHelper;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Processing;
 
@@ -483,7 +484,7 @@ public class CandidateExecutorFlowTests : IDisposable
             },
         };
         using var pool = new ResourcePool(
-            Microsoft.Extensions.Options.Options.Create(poolOpts),
+            TestOptionsMonitor.Create(poolOpts),
             NullLogger<ResourcePool>.Instance);
 
         var candidateExecutor = new CandidateExecutor(

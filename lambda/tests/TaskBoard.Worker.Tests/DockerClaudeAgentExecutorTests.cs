@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests;
 
@@ -16,7 +17,7 @@ public class DockerClaudeAgentExecutorTests
         string? cpuLimit = null,
         string containerUser = "")
     {
-        var opts = Options.Create(new DockerClaudeAgentOptions
+        var opts = TestOptionsMonitor.Create(new DockerClaudeAgentOptions
         {
             ImageName = imageName,
             PromptMountPoint = promptMountPoint,

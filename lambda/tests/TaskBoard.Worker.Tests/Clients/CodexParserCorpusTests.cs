@@ -38,7 +38,7 @@ public class CodexParserCorpusTests
                 "ProcessRunner should not be invoked from a parser-corpus test.");
 
         _executor = new CodexAgentExecutor(
-            Options.Create(new CodexCliLlmOptions()),
+            TestOptionsMonitor.Create(new CodexCliLlmOptions()),
             NullLogger<CodexAgentExecutor>.Instance,
             trapRunner);
     }

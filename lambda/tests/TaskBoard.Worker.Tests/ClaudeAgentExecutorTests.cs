@@ -1,4 +1,5 @@
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests;
 
@@ -6,7 +7,7 @@ public class ClaudeAgentExecutorTests
 {
     private static ClaudeAgentExecutor CreateExecutor(decimal maxBudgetUsd = 2.00m)
     {
-        var options = Microsoft.Extensions.Options.Options.Create(
+        var options = TestOptionsMonitor.Create(
             new ClaudeCliLlmOptions { MaxBudgetUsd = maxBudgetUsd });
         return new ClaudeAgentExecutor(options,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<ClaudeAgentExecutor>.Instance);

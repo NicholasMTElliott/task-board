@@ -23,7 +23,7 @@ public class TrelloClientTests
         // Wire TrelloAuthHandler into the pipeline so auth params are appended (matching production)
         var authHandler = new TrelloClient.TrelloAuthHandler(opts) { InnerHandler = handler };
         var httpClient = new HttpClient(authHandler) { BaseAddress = new Uri("https://api.trello.com") };
-        var client = new TrelloClient(httpClient, Options.Create(opts), NullLogger<TrelloClient>.Instance);
+        var client = new TrelloClient(httpClient, TestOptionsMonitor.Create(opts), NullLogger<TrelloClient>.Instance);
         return (client, handler);
     }
 

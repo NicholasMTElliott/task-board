@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
 using TaskBoard.Worker.Validation;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Validation;
 
@@ -17,7 +18,7 @@ public class GitHubProjectShapeApplierTests
         string owner = "acme",
         string repo = "acme/widgets")
     {
-        var opts = Options.Create(new GitHubProjectsOptions
+        var opts = TestOptionsMonitor.Create(new GitHubProjectsOptions
         {
             Owner = owner,
             Repo = repo,

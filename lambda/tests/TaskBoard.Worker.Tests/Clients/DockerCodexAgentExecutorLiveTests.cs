@@ -145,7 +145,7 @@ public class DockerCodexAgentExecutorLiveTests
         var (workspace, promptFile) = NewWorkspace();
         try
         {
-            var options = Options.Create(new DockerCodexAgentOptions
+            var options = TestOptionsMonitor.Create(new DockerCodexAgentOptions
             {
                 ImageName = image,
                 TimeoutSeconds = 180,

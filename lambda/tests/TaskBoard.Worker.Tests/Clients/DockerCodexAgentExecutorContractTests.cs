@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Clients;
 
@@ -13,7 +14,7 @@ public class DockerCodexAgentExecutorContractTests : AgentExecutorContractTests
 {
     protected override IAgentExecutor CreateExecutor(ProcessRunnerDelegate processRunner)
     {
-        var options = Options.Create(new DockerCodexAgentOptions
+        var options = TestOptionsMonitor.Create(new DockerCodexAgentOptions
         {
             ImageName = "aiboard-codex-test:latest",
             TimeoutSeconds = 30,

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests;
 
@@ -41,7 +42,7 @@ public class DockerCodexAgentExecutorSchemaCleanupTests
 
     private static DockerCodexAgentExecutor CreateExecutor(ProcessRunnerDelegate runner) =>
         new(
-            Options.Create(new DockerCodexAgentOptions { TimeoutSeconds = 30 }),
+            TestOptionsMonitor.Create(new DockerCodexAgentOptions { TimeoutSeconds = 30 }),
             Helpers.TestTenant.Instance,
             NullLogger<DockerCodexAgentExecutor>.Instance,
             mountBuilder: null,

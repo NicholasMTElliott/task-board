@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TaskBoard.Worker.Clients;
+using TaskBoard.Worker.Tests.Helpers;
 
 namespace TaskBoard.Worker.Tests.Clients;
 
@@ -16,7 +17,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
         bool enableStructurer = false,
         string? structurerModelName = null) =>
         new(
-            Options.Create(new DockerOpenCodeAgentOptions
+            TestOptionsMonitor.Create(new DockerOpenCodeAgentOptions
             {
                 ImageName = "aiboard-opencode-test:latest",
                 TimeoutSeconds = 30,
@@ -472,7 +473,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
     public void BuildDockerArgumentList_IncludesNetworkLlmNetByDefault()
     {
         var executor = new DockerOpenCodeAgentExecutor(
-            Options.Create(new DockerOpenCodeAgentOptions()),
+            TestOptionsMonitor.Create(new DockerOpenCodeAgentOptions()),
             Helpers.TestTenant.Instance,
             NullLogger<DockerOpenCodeAgentExecutor>.Instance);
 
@@ -490,7 +491,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
     public void BuildDockerArgumentList_UsesOpenCodeSandboxImage()
     {
         var executor = new DockerOpenCodeAgentExecutor(
-            Options.Create(new DockerOpenCodeAgentOptions()),
+            TestOptionsMonitor.Create(new DockerOpenCodeAgentOptions()),
             Helpers.TestTenant.Instance,
             NullLogger<DockerOpenCodeAgentExecutor>.Instance);
 
@@ -508,7 +509,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
     public void BuildContainerName_IncludesTenantHashAndOcPrefix()
     {
         var executor = new DockerOpenCodeAgentExecutor(
-            Options.Create(new DockerOpenCodeAgentOptions()),
+            TestOptionsMonitor.Create(new DockerOpenCodeAgentOptions()),
             Helpers.TestTenant.Instance,
             NullLogger<DockerOpenCodeAgentExecutor>.Instance);
 
