@@ -25,7 +25,7 @@ public class CompletionRunnerTests
     {
         _boardClient = Substitute.For<ITaskBoardClient>();
         _crossRefResolver = Substitute.For<ICrossReferenceResolver>();
-        _identity = new AgentIdentity("Bot", "TestBot", "machine");
+        _identity = new AgentIdentity("TestBot", "machine");
 
         _boardClient.GetCurrentUserAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult("test-bot"));

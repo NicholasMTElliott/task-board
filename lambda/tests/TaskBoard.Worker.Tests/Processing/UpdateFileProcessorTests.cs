@@ -39,7 +39,7 @@ public class UpdateFileProcessorTests : IDisposable
                 ["story"] = new("User Story", "type", ["task"]),
             });
 
-        _identity = new AgentIdentity("Bot", "TestBot", "machine");
+        _identity = new AgentIdentity("TestBot", "machine");
         _processor = new UpdateFileProcessor(_boardClient, _config, _identity,
             NullLogger<UpdateFileProcessor>.Instance);
     }
