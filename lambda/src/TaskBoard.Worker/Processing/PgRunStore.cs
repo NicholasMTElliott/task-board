@@ -469,4 +469,51 @@ public sealed class PgRunStore(
             OutputSummary: reader.IsDBNull(5) ? null : reader.GetString(5),
             Detail: reader.IsDBNull(6) ? null : reader.GetString(6));
     }
+
+    public async Task<string?> GetEarliestStateEntryShaAsync(
+        string cardId, string stateName, CancellationToken ct)
+    {
+        // Earliest captured SHA for this (tenant, card, state) — the first
+        // run's value, copied forward by every subsequent run via
+        // SetStateEntryShaAsync. Returns null when no prior run has captured
+        // a SHA yet.
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT state_entry_canonical_sha
+            FROM agent_run
+            WHERE tenant_id = $1
+              AND card_id = $2
+              AND state_name = $3
+              AND state_entry_canonical_sha IS NOT NULL
+            ORDER BY started_at_utc ASC
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue(tenant.Value);
+        cmd.Parameters.AddWithValue(cardId);
+        cmd.Parameters.AddWithValue(stateName);
+
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result is string s && !string.IsNullOrWhiteSpace(s) ? s : null;
+    }
+
+    public async Task SetStateEntryShaAsync(string runId, string sha, CancellationToken ct)
+    {
+        // Idempotent: only sets the column when it's currently null. A
+        // re-entry into the same state during a single run shouldn't
+        // overwrite the captured SHA.
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE agent_run
+            SET state_entry_canonical_sha = $3
+            WHERE tenant_id = $1
+              AND run_id = $2
+              AND state_entry_canonical_sha IS NULL
+            """;
+        cmd.Parameters.AddWithValue(tenant.Value);
+        cmd.Parameters.AddWithValue(runId);
+        cmd.Parameters.AddWithValue(sha);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
 }

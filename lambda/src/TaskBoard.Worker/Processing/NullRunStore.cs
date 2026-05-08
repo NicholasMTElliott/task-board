@@ -62,4 +62,11 @@ public sealed class NullRunStore : IRunStore
     public Task<CacheCandidateRecord?> GetMostRecentCompleteForStepAsync(
         string cardId, string stateName, string stepName, CancellationToken ct)
         => Task.FromResult<CacheCandidateRecord?>(null);
+
+    public Task<string?> GetEarliestStateEntryShaAsync(
+        string cardId, string stateName, CancellationToken ct)
+        => Task.FromResult<string?>(null);
+
+    public Task SetStateEntryShaAsync(string runId, string sha, CancellationToken ct)
+        => Task.CompletedTask;
 }

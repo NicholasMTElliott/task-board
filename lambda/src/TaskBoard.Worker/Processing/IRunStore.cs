@@ -80,6 +80,27 @@ public interface IRunStore
     /// </summary>
     Task<CacheCandidateRecord?> GetMostRecentCompleteForStepAsync(
         string cardId, string stateName, string stepName, CancellationToken ct);
+
+    /// <summary>
+    /// Returns the earliest non-null <c>state_entry_canonical_sha</c> across
+    /// every <c>agent_run</c> row for <c>(tenant, card, state)</c> — the SHA
+    /// captured the FIRST time this card entered this state. Subsequent runs
+    /// in the same state copy it forward so the gate-check diff base
+    /// (Problem 3) shows cumulative committed work across re-runs, not just
+    /// this run's possibly-empty diff. Returns null when no prior run has
+    /// captured a SHA yet (the caller should capture one for the current
+    /// run via <see cref="SetStateEntryShaAsync"/>).
+    /// </summary>
+    Task<string?> GetEarliestStateEntryShaAsync(
+        string cardId, string stateName, CancellationToken ct);
+
+    /// <summary>
+    /// Sets <c>agent_run.state_entry_canonical_sha</c> for the current run.
+    /// Idempotent: if the column is already set on this row, the update is
+    /// a no-op (so re-entry into the same state mid-run doesn't clobber the
+    /// stored SHA).
+    /// </summary>
+    Task SetStateEntryShaAsync(string runId, string sha, CancellationToken ct);
 }
 
 /// <summary>
