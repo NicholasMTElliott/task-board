@@ -1075,6 +1075,7 @@ public class CandidateExecutorFlowTests : IDisposable
 
         public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;
         public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct) => Task.CompletedTask;
+        public Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct) => Task.FromResult(0);
     }
 
     internal sealed record RecordedVerdict(
@@ -1097,6 +1098,19 @@ public class CandidateExecutorFlowTests : IDisposable
             string cardId, string body, string marker, CancellationToken cancellationToken)
         {
             Comments.Add(new RecordedComment(cardId, body, marker));
+            return Task.CompletedTask;
+        }
+
+        public Task AppendAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken)
+        {
+            // Record with empty marker so existing tests that introspect by marker still work.
+            Comments.Add(new RecordedComment(cardId, commentBody, ""));
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAgentCommentsByMarkerAsync(string cardId, string markerSubstring, CancellationToken cancellationToken)
+        {
+            Comments.RemoveAll(c => c.CardId == cardId && c.Body.Contains(markerSubstring, StringComparison.Ordinal));
             return Task.CompletedTask;
         }
 

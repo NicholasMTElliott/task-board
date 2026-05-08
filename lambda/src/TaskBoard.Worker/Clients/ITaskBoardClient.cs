@@ -25,6 +25,27 @@ public interface ITaskBoardClient
     Task UpdateCardBodyAsync(string cardId, string body, CancellationToken cancellationToken);
     Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken cancellationToken);
     Task UpsertAgentCommentAsync(string cardId, string commentBody, string commentMarker, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Posts a NEW comment without checking for existing comments. Used by the
+    /// rerun-redesign comment router for chronological log entries (kind:step,
+    /// kind:candidate, kind:evaluator, kind:gate, kind:optional, kind:cache_hit)
+    /// and as the second leg of delete-and-repost. The caller has already
+    /// composed the full body including the <c>aiboard-log</c> marker line.
+    /// </summary>
+    Task AppendAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Deletes every comment on the card whose body contains
+    /// <paramref name="markerSubstring"/>. Used by the rerun-redesign comment
+    /// router as the first leg of delete-and-repost for status notices
+    /// (dependency_blocked, completion_progress, rate_limit_notice,
+    /// shutdown_notice, cross_card_notification) so the most current message
+    /// stays at the bottom of the comment timeline. No-op when no matching
+    /// comments are found.
+    /// </summary>
+    Task DeleteAgentCommentsByMarkerAsync(string cardId, string markerSubstring, CancellationToken cancellationToken);
+
     Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken);
 
     // ── Card creation ─────────────────────────────────────────────────────────

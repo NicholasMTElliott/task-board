@@ -91,6 +91,24 @@ public sealed record DependencyPolicy(
     List<string>? SatisfiedColumns = null,
     bool CommentOnBlocked = true);
 
+/// <summary>
+/// Top-level rerun-redesign config block. All fields optional with sensible
+/// defaults so existing workflow.json files continue to work unchanged.
+/// </summary>
+public sealed record RerunConfig(
+    /// <summary>null → auto-detect via <c>git symbolic-ref --short refs/remotes/origin/HEAD</c> at startup.</summary>
+    string? DefaultBranch = null,
+    RerunCommentsConfig? Comments = null,
+    RerunDiffConfig? Diff = null);
+
+public sealed record RerunCommentsConfig(
+    /// <summary>Map of comment kind (e.g. "step", "dependency_blocked") → "append" / "delete_and_repost" / "upsert". Unrecognised kinds default to append.</summary>
+    Dictionary<string, string>? RetentionPolicy = null);
+
+public sealed record RerunDiffConfig(
+    /// <summary>Byte threshold above which the gate's diff switches to summary-mode packet. Default 51200 (50 KB).</summary>
+    int? SummaryThresholdBytes = null);
+
 public sealed record WorkflowConfig(
     Dictionary<string, WorkflowState> States,
     Dictionary<string, WorkflowRole> Roles,
@@ -99,7 +117,8 @@ public sealed record WorkflowConfig(
     EstimationConfig? Estimation = null,
     Dictionary<string, CardTypeDefinition>? CardTypes = null,
     string? CardTypeField = null,
-    DependencyPolicy? DependencyPolicy = null)
+    DependencyPolicy? DependencyPolicy = null,
+    RerunConfig? Rerun = null)
 {
     /// <summary>
     /// The directory containing the workflow config file. Set after deserialization.
@@ -359,7 +378,16 @@ public sealed record WorkflowStep(
     /// up and does NOT trigger fallback (the operator answers and re-runs from
     /// slot 0). Cannot be combined with <see cref="Candidates"/>.
     /// </summary>
-    List<SlotConfig>? Slots = null)
+    List<SlotConfig>? Slots = null,
+    /// <summary>
+    /// Whether the step is permitted to write its managed step section in the
+    /// card description (rerun redesign Problem 2). Default true. Operators
+    /// override per-step: gate-check steps set false (verdicts go in
+    /// comments only); evaluator steps set false (the evaluator commits the
+    /// winning candidate's section, not its own). Main steps and optional
+    /// reviewers default true.
+    /// </summary>
+    bool? WritesDescriptionSection = null)
 {
     /// <summary>
     /// Returns the canonical slots list for this step:

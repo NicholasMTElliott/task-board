@@ -671,5 +671,6 @@ public class AgentRunnerGateCheckTests : IDisposable
             WinnerRegressedFlags++;
             return Task.CompletedTask;
         }
+        public Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct) => Task.FromResult(0);
     }
 }

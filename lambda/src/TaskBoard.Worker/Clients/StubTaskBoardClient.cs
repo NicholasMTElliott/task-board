@@ -41,6 +41,18 @@ public sealed class StubTaskBoardClient(ILogger<StubTaskBoardClient> logger) : I
         return Task.CompletedTask;
     }
 
+    public Task AppendAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("[Stub] AppendComment {CardId} ({Length} chars)", cardId, commentBody.Length);
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteAgentCommentsByMarkerAsync(string cardId, string markerSubstring, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("[Stub] DeleteCommentsByMarker {CardId} marker={Marker}", cardId, markerSubstring);
+        return Task.CompletedTask;
+    }
+
     public Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken)
     {
         logger.LogInformation("[Stub] GetCardComments {CardId}", cardId);

@@ -393,4 +393,31 @@ public sealed class PgRunStore(
                 "Failed to flag winners as regressed for run {RunId}; continuing.", runId);
         }
     }
+
+    public async Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct)
+    {
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        // Predicate: candidate_index IS NULL OR candidate_index = 0 — counts
+        // one row per slot try, regardless of candidate fan-out within the slot.
+        // Multi-slot fallback within one run counts each slot try (slot 0 row +
+        // slot 1 row = 2 attempts). All outcomes counted (COMPLETE / NEEDS_INFO
+        // / ERROR), per the rerun redesign attempt-counter rule.
+        cmd.CommandText = """
+            SELECT COUNT(*)::INT
+            FROM step_result
+            WHERE tenant_id = $1
+              AND card_id = $2
+              AND state_name = $3
+              AND step_name = $4
+              AND (candidate_index IS NULL OR candidate_index = 0)
+            """;
+        cmd.Parameters.AddWithValue(tenant.Value);
+        cmd.Parameters.AddWithValue(cardId);
+        cmd.Parameters.AddWithValue(stateName);
+        cmd.Parameters.AddWithValue(stepName);
+
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result is int n ? n : 0;
+    }
 }

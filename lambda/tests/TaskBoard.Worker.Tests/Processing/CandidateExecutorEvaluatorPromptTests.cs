@@ -745,6 +745,7 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         public Task UpdateCandidateEvaluationAsync(string runId, Guid groupId, int idx, bool selected, decimal? score, string? reasoning, CancellationToken ct) => Task.CompletedTask;
         public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;
         public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct) => Task.CompletedTask;
+        public Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct) => Task.FromResult(0);
     }
 
     // ── Builders ─────────────────────────────────────────────────────────────
@@ -895,11 +896,16 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
             CancellationToken ct) => Task.CompletedTask;
         public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;
         public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct) => Task.CompletedTask;
+        public Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct) => Task.FromResult(0);
     }
 
     private sealed class NullBoardClient : ITaskBoardClient
     {
         public Task UpsertAgentCommentAsync(string cardId, string body, string marker, CancellationToken cancellationToken)
+            => Task.CompletedTask;
+        public Task AppendAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken)
+            => Task.CompletedTask;
+        public Task DeleteAgentCommentsByMarkerAsync(string cardId, string markerSubstring, CancellationToken cancellationToken)
             => Task.CompletedTask;
         public Task<BoardCard> GetCardAsync(string cardId, CancellationToken cancellationToken)
             => throw new NotImplementedException();

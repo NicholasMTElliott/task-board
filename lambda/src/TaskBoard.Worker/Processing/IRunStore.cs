@@ -54,4 +54,15 @@ public interface IRunStore
     /// survive downstream scrutiny.
     /// </summary>
     Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct);
+
+    /// <summary>
+    /// Returns the number of attempts on record for a step on a card+state.
+    /// Predicate: <c>candidate_index IS NULL OR candidate_index = 0</c>, so a
+    /// multi-candidate slot counts as a single attempt regardless of fan-out.
+    /// Multi-slot fallback chains within one run count each slot try as its
+    /// own attempt (slot 0 row + slot 1 row = 2 attempts). Used by the rerun
+    /// redesign's comment poster to render <c>attempt:N</c> in the
+    /// <c>aiboard-log</c> marker preamble.
+    /// </summary>
+    Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct);
 }

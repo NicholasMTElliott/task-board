@@ -49,9 +49,17 @@ internal static class AgentOutputParser
                 // not inside structured_output itself. Pull from root.
                 var usage = ParseUsage(root);
 
+                // Rerun redesign: section_update is the agent's structured directive
+                // for updating its managed step section. Null on legacy roles or
+                // when the agent omitted the field; the orchestrator's writer is
+                // mechanical and a null result simply means "no description change".
+                var section = ParseSectionUpdate(structured);
+
                 return new AgentResult(
                     outcome, detail, questions, null, requestedSteps, estimate,
-                    winnerIndex, scores, usage);
+                    winnerIndex, scores, usage,
+                    StructurerFallbackUsed: null,
+                    Section: section);
             }
 
             // Try result field
@@ -107,6 +115,61 @@ internal static class AgentOutputParser
         }
 
         return questions.Count > 0 ? questions : null;
+    }
+
+    /// <summary>
+    /// Reads the <c>section_update</c> object from the structured-output JSON.
+    /// Returns null when the field is missing, explicitly null, or malformed
+    /// (e.g. unrecognized strategy value). The orchestrator treats a null
+    /// SectionUpdate as "no description change for this step" — equivalent to
+    /// strategy=leave on a step that already has a section. The first-run
+    /// placeholder coercion happens in the description writer, not here.
+    /// </summary>
+    internal static SectionUpdate? ParseSectionUpdate(JsonElement structured)
+    {
+        if (!structured.TryGetProperty("section_update", out var el)
+            || el.ValueKind != JsonValueKind.Object)
+            return null;
+
+        if (!el.TryGetProperty("strategy", out var strategyEl)
+            || strategyEl.ValueKind != JsonValueKind.String)
+            return null;
+
+        var strategy = strategyEl.GetString() switch
+        {
+            "leave" => SectionUpdateStrategy.Leave,
+            "replace" => SectionUpdateStrategy.Replace,
+            "append_with_revision_notes" => SectionUpdateStrategy.AppendWithRevisionNotes,
+            _ => (SectionUpdateStrategy?)null,
+        };
+        if (strategy is null)
+            return null;
+
+        string? content = null;
+        if (el.TryGetProperty("content", out var cEl) && cEl.ValueKind == JsonValueKind.String)
+            content = cEl.GetString();
+
+        var openQuestions = ReadStringArray(el, "open_questions");
+        var resolvedDecisions = ReadStringArray(el, "resolved_decisions");
+
+        return new SectionUpdate(strategy.Value, content, openQuestions, resolvedDecisions);
+    }
+
+    private static IReadOnlyList<string>? ReadStringArray(JsonElement obj, string propertyName)
+    {
+        if (!obj.TryGetProperty(propertyName, out var arr)
+            || arr.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var list = new List<string>();
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String) continue;
+            var s = item.GetString();
+            if (!string.IsNullOrWhiteSpace(s))
+                list.Add(s);
+        }
+        return list.Count > 0 ? list : null;
     }
 
     /// <summary>

@@ -38,7 +38,15 @@ public sealed record AgentResult(
     UsageInfo? Usage = null,
     // True only when the DockerOpenCode no-think structurer fallback recovered the
     // result from prose narrative on a -think model run. Null otherwise.
-    bool? StructurerFallbackUsed = null);
+    bool? StructurerFallbackUsed = null,
+    // Rerun redesign: section_update is the agent's structured directive for
+    // updating the card description's managed step section. The orchestrator
+    // (DescriptionWriter) consumes it mechanically — strategy decides leave /
+    // replace / append; content is the new section markdown; open_questions
+    // and resolved_decisions render into HTML-marker-wrapped subsections.
+    // Null when the agent didn't supply one (legacy roles, gates, evaluators,
+    // or operator-managed flows).
+    SectionUpdate? Section = null);
 
 /// <summary>
 /// Token / cost usage extracted from the CLI's final result event.
@@ -55,6 +63,36 @@ public sealed record UsageInfo(
 public sealed record AgentQuestion(
     string Question,
     IReadOnlyList<string>? Recommendations = null);
+
+/// <summary>
+/// Structured directive from the agent for updating its managed step section
+/// in the card description. Mirrors the wire-format <c>section_update</c>
+/// object on the agent contract schema.
+/// </summary>
+/// <param name="Strategy">
+/// One of <c>leave</c> / <c>replace</c> / <c>append_with_revision_notes</c>.
+/// On the very first run for a step (no prior section), <c>leave</c> is
+/// coerced by the orchestrator to a placeholder section so future hashing
+/// has a stable input.
+/// </param>
+/// <param name="Content">New section markdown. Required when Strategy != <c>leave</c>.</param>
+/// <param name="OpenQuestions">Bullets rendered into the section's <c>### Open Questions</c> subsection (HTML-marker-wrapped).</param>
+/// <param name="ResolvedDecisions">Bullets rendered into the section's <c>### Resolved Decisions</c> subsection (HTML-marker-wrapped).</param>
+public sealed record SectionUpdate(
+    SectionUpdateStrategy Strategy,
+    string? Content = null,
+    IReadOnlyList<string>? OpenQuestions = null,
+    IReadOnlyList<string>? ResolvedDecisions = null);
+
+public enum SectionUpdateStrategy
+{
+    /// <summary>Orchestrator does not modify the existing step section.</summary>
+    Leave,
+    /// <summary>Orchestrator replaces section content wholesale.</summary>
+    Replace,
+    /// <summary>Same as Replace, but Content includes lessons-learned / durable-decision notes.</summary>
+    AppendWithRevisionNotes,
+}
 
 /// <summary>
 /// One per-candidate score from an evaluator's structured response. Mirrors

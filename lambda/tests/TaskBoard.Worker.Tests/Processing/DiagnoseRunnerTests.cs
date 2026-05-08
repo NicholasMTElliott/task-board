@@ -103,6 +103,8 @@ public class DiagnoseRunnerTests
         public Task UpdateCardBodyAsync(string cardId, string body, CancellationToken ct) => Task.CompletedTask;
         public Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken ct) => Task.CompletedTask;
         public Task UpsertAgentCommentAsync(string cardId, string body, string marker, CancellationToken ct) => Task.CompletedTask;
+        public Task AppendAgentCommentAsync(string cardId, string commentBody, CancellationToken ct) => Task.CompletedTask;
+        public Task DeleteAgentCommentsByMarkerAsync(string cardId, string markerSubstring, CancellationToken ct) => Task.CompletedTask;
         public Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken ct)
             => Task.FromResult<IReadOnlyList<CardComment>>([]);
         public Task<string> CreateCardAsync(CreateCardRequest request, CancellationToken ct) => Task.FromResult("0");
@@ -485,6 +487,12 @@ public class DiagnoseRunnerTests
             onComment();
             return Task.CompletedTask;
         }
+        public Task AppendAgentCommentAsync(string cardId, string commentBody, CancellationToken ct)
+        {
+            onComment();
+            return Task.CompletedTask;
+        }
+        public Task DeleteAgentCommentsByMarkerAsync(string cardId, string markerSubstring, CancellationToken ct) => Task.CompletedTask;
         public Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken ct)
             => Task.FromResult<IReadOnlyList<CardComment>>([]);
         public Task<string> CreateCardAsync(CreateCardRequest request, CancellationToken ct) => Task.FromResult("0");
@@ -532,6 +540,8 @@ public class DiagnoseRunnerTests
         public Task UpdateCardBodyAsync(string cardId, string body, CancellationToken ct) => Task.CompletedTask;
         public Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken ct) => Task.CompletedTask;
         public Task UpsertAgentCommentAsync(string cardId, string body, string marker, CancellationToken ct) => Task.CompletedTask;
+        public Task AppendAgentCommentAsync(string cardId, string commentBody, CancellationToken ct) => Task.CompletedTask;
+        public Task DeleteAgentCommentsByMarkerAsync(string cardId, string markerSubstring, CancellationToken ct) => Task.CompletedTask;
         public Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken ct)
             => Task.FromResult<IReadOnlyList<CardComment>>([]);
         public Task<string> CreateCardAsync(CreateCardRequest request, CancellationToken ct) => Task.FromResult("0");

@@ -668,6 +668,7 @@ public class CandidateExecutorSlotsTests : IDisposable
         }
         public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;
         public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct) => Task.CompletedTask;
+        public Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct) => Task.FromResult(0);
     }
 
     private sealed record RecordedVerdict(string RunId, Guid GroupId, int CandidateIndex, bool Selected, decimal? QualityScore, string? Reasoning);
@@ -675,6 +676,8 @@ public class CandidateExecutorSlotsTests : IDisposable
     private sealed class RecordingBoardClient : ITaskBoardClient
     {
         public Task UpsertAgentCommentAsync(string cardId, string body, string marker, CancellationToken ct) => Task.CompletedTask;
+        public Task AppendAgentCommentAsync(string cardId, string commentBody, CancellationToken ct) => Task.CompletedTask;
+        public Task DeleteAgentCommentsByMarkerAsync(string cardId, string markerSubstring, CancellationToken ct) => Task.CompletedTask;
         public Task<BoardCard> GetCardAsync(string cardId, CancellationToken ct) => throw new NotImplementedException();
         public Task<IReadOnlyList<BoardCard>> GetBoardCardsAsync(string boardId, CancellationToken ct, IReadOnlyList<string>? excludeStatuses = null) => throw new NotImplementedException();
         public Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken ct) => throw new NotImplementedException();

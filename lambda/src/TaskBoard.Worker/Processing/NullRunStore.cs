@@ -55,4 +55,7 @@ public sealed class NullRunStore : IRunStore
 
     public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct)
         => Task.CompletedTask;
+
+    public Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct)
+        => Task.FromResult(0);
 }

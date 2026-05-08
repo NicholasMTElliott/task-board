@@ -458,6 +458,8 @@ public class RerunPreambleBuilderTests
         public Task UpdateCardBodyAsync(string cardId, string body, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task MoveCardToColumnAsync(string cardId, string columnId, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task UpsertAgentCommentAsync(string cardId, string commentBody, string commentMarker, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task AppendAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task DeleteAgentCommentsByMarkerAsync(string cardId, string markerSubstring, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<string> CreateCardAsync(CreateCardRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task AddLabelAsync(string cardId, string labelName, CancellationToken cancellationToken) => throw new NotImplementedException();
@@ -505,6 +507,7 @@ public class RerunPreambleBuilderTests
             CancellationToken ct) => Task.CompletedTask;
         public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;
         public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct) => Task.CompletedTask;
+        public Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct) => Task.FromResult(0);
     }
 
     private sealed record StubRecord(

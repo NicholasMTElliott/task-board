@@ -119,6 +119,65 @@ public sealed class TrelloClient(
         }, "UpsertComment", cancellationToken);
     }
 
+    public async Task AppendAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken)
+    {
+        await WithRetryAsync(async () =>
+        {
+            // Body already contains the aiboard-log marker line; just create.
+            var createUrl = $"/1/cards/{cardId}/actions/comments";
+            using var createContent = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("text", commentBody) });
+            using var createResponse = await _httpClient.PostAsync(createUrl, createContent, cancellationToken);
+            await EnsureSuccessOrThrow(createResponse, "AppendComment", cardId);
+            _logger.LogInformation("Appended agent comment on card {CardId}", cardId);
+        }, "AppendComment", cancellationToken);
+    }
+
+    public async Task DeleteAgentCommentsByMarkerAsync(string cardId, string markerSubstring, CancellationToken cancellationToken)
+    {
+        await WithRetryAsync(async () =>
+        {
+            // Trello action IDs are listed by the same /actions endpoint we use
+            // for Upsert. Iterate; delete every action whose text contains the
+            // marker substring. Best-effort per delete — a failure on one
+            // doesn't stop subsequent ones.
+            var listUrl = $"/1/cards/{cardId}/actions?filter=commentCard&limit=1000";
+            using var listResponse = await _httpClient.GetAsync(listUrl, cancellationToken);
+            await EnsureSuccessOrThrow(listResponse, "ListCommentsForDelete", cardId);
+            var listJson = await listResponse.Content.ReadAsStringAsync(cancellationToken);
+
+            using var doc = JsonDocument.Parse(listJson);
+            var deleted = 0;
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                var text = item.TryGetProperty("data", out var data)
+                    && data.TryGetProperty("text", out var t)
+                    ? t.GetString() ?? ""
+                    : "";
+                if (!text.Contains(markerSubstring, StringComparison.Ordinal))
+                    continue;
+
+                if (!item.TryGetProperty("id", out var idEl)) continue;
+                var actionId = idEl.GetString();
+                if (string.IsNullOrEmpty(actionId)) continue;
+
+                try
+                {
+                    var deleteUrl = $"/1/actions/{actionId}/comments";
+                    using var deleteResponse = await _httpClient.DeleteAsync(deleteUrl, cancellationToken);
+                    await EnsureSuccessOrThrow(deleteResponse, "DeleteComment", cardId);
+                    deleted++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to delete comment {ActionId} on card {CardId} — continuing", actionId, cardId);
+                }
+            }
+
+            if (deleted > 0)
+                _logger.LogInformation("Deleted {Count} prior comment(s) matching marker on card {CardId}", deleted, cardId);
+        }, "DeleteCommentsByMarker", cancellationToken);
+    }
+
     public async Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken)
     {
         return await WithRetryAsync(async () =>

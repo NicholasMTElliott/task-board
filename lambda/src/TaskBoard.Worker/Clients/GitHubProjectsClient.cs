@@ -294,6 +294,68 @@ public sealed class GitHubProjectsClient(
         }
     }
 
+    public async Task AppendAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken)
+    {
+        // Body already contains the aiboard-log marker line (composed by caller).
+        // Plain "create new comment" path — no scan, no edit.
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(tempFile, commentBody, cancellationToken);
+            await RunGhAsync(
+                ["issue", "comment", cardId, "--repo", _options.Repo, "--body-file", tempFile],
+                cancellationToken);
+            logger.LogInformation("Appended agent comment on issue {IssueNumber}", cardId);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    public async Task DeleteAgentCommentsByMarkerAsync(string cardId, string markerSubstring, CancellationToken cancellationToken)
+    {
+        // Find every comment whose body contains the marker substring and
+        // DELETE it via the REST API. Used as the first leg of delete-and-repost
+        // for status notices that should stay current chronologically (the
+        // marker substring is the kind+identity prefix, e.g.
+        // "<!-- aiboard-log kind:dependency_blocked card:42").
+        var commentsJson = await RunGhAsync(
+            ["api", $"repos/{_options.Repo}/issues/{cardId}/comments", "--paginate"],
+            cancellationToken);
+
+        using var doc = JsonDocument.Parse(commentsJson);
+        var deleted = 0;
+        foreach (var item in doc.RootElement.EnumerateArray())
+        {
+            var body = item.TryGetProperty("body", out var bodyProp) ? bodyProp.GetString() : null;
+            if (body is null || !body.Contains(markerSubstring, StringComparison.Ordinal))
+                continue;
+
+            if (!item.TryGetProperty("id", out var idEl) || idEl.ValueKind != JsonValueKind.Number)
+                continue;
+
+            var commentId = idEl.GetInt64();
+            try
+            {
+                await RunGhAsync(
+                    ["api", $"repos/{_options.Repo}/issues/comments/{commentId}", "--method", "DELETE"],
+                    cancellationToken);
+                deleted++;
+            }
+            catch (Exception ex)
+            {
+                // Best-effort: a single failed delete shouldn't block the repost.
+                // Falls through to the new comment which preserves chronology
+                // (just leaves the stale prior at the top of the list).
+                logger.LogWarning(ex, "Failed to delete comment {CommentId} on issue {IssueNumber} — continuing with repost", commentId, cardId);
+            }
+        }
+
+        if (deleted > 0)
+            logger.LogInformation("Deleted {Count} prior comment(s) matching marker on issue {IssueNumber}", deleted, cardId);
+    }
+
     public async Task<IReadOnlyList<CardComment>> GetCardCommentsAsync(string cardId, CancellationToken cancellationToken)
     {
         var json = await RunGhAsync(

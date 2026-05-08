@@ -40,6 +40,27 @@ internal static class AgentSchemas
             },
             "estimate": {
               "type": "number"
+            },
+            "section_update": {
+              "type": "object",
+              "properties": {
+                "strategy": {
+                  "type": "string",
+                  "enum": ["leave", "replace", "append_with_revision_notes"]
+                },
+                "content": {
+                  "type": "string"
+                },
+                "open_questions": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "resolved_decisions": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              },
+              "required": ["strategy"]
             }
           },
           "required": ["outcome"]
@@ -86,9 +107,31 @@ internal static class AgentSchemas
             },
             "estimate": {
               "type": ["number", "null"]
+            },
+            "section_update": {
+              "type": ["object", "null"],
+              "properties": {
+                "strategy": {
+                  "type": "string",
+                  "enum": ["leave", "replace", "append_with_revision_notes"]
+                },
+                "content": {
+                  "type": ["string", "null"]
+                },
+                "open_questions": {
+                  "type": ["array", "null"],
+                  "items": { "type": "string" }
+                },
+                "resolved_decisions": {
+                  "type": ["array", "null"],
+                  "items": { "type": "string" }
+                }
+              },
+              "required": ["strategy", "content", "open_questions", "resolved_decisions"],
+              "additionalProperties": false
             }
           },
-          "required": ["outcome", "detail", "questions", "requestedSteps", "estimate"],
+          "required": ["outcome", "detail", "questions", "requestedSteps", "estimate", "section_update"],
           "additionalProperties": false
         }
         """;
