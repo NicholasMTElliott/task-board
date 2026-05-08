@@ -5,11 +5,12 @@ using TaskBoard.Worker.Models;
 namespace TaskBoard.Worker.Processing;
 
 /// <summary>
-/// Deterministic-skip cache decision (rerun redesign Problem 1). Replaces the
-/// LLM-judgment fast-path of <see cref="RerunPreambleBuilder"/> with a hash
-/// comparison: if the prior run's input bundle is byte-identical to this
-/// run's, AND the prior section's output is still in the card body, skip
-/// the agent invocation and reuse the prior <c>step_result</c>.
+/// Deterministic-skip cache decision (rerun redesign Problem 1). Decides
+/// whether a step can be skipped based on a hash comparison: if the prior
+/// run's input bundle is byte-identical to this run's, AND the prior
+/// section's output is still in the card body, skip the agent invocation
+/// and reuse the prior <c>step_result</c>. Replaced the previous
+/// LLM-judgment fast-path entirely.
 ///
 /// <para>
 /// This service is wired through DI and consulted by <see cref="AgentRunner"/>

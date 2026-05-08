@@ -609,7 +609,6 @@ builder.Services.AddSingleton(sp =>
     new GitWorkspaceManager(sp.GetRequiredService<ILogger<GitWorkspaceManager>>(), worktreeBasePath, gitTimeoutSeconds));
 
 builder.Services.AddSingleton<UpdateFileProcessor>();
-builder.Services.AddSingleton<RerunPreambleBuilder>();
 // Rerun redesign Problem 2: per-kind comment routing (append / delete_and_repost / upsert).
 // Optional dep on every emit site — when not registered, sites fall back to legacy
 // upsert with the legacy marker (e.g. <!-- agent-step:create_design -->). When

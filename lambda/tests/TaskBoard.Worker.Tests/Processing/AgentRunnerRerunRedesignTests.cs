@@ -112,93 +112,6 @@ public class AgentRunnerRerunRedesignTests : IDisposable
 
     // ── Finding 2: cache gate hashes the plain prompt, not preamble+plain ──
 
-    [Fact]
-    public async Task CacheGate_HashesPlainPrompt_NotPreambleAugmentedPrompt()
-    {
-        // Two runs with identical operator inputs:
-        //   Run 1 — clean state. No preamble. step_result row stored.
-        //   Run 2 — prior COMPLETE row + step marker present on the card.
-        //           RerunPreambleBuilder injects preamble into the prompt
-        //           the AGENT sees. But the cache gate must hash the PLAIN
-        //           prompt (the cacheKeyPrompt captured before injection),
-        //           so the persisted input_hash matches run 1's.
-        //
-        // Pre-fix: resolvedPrompt was mutated before the cache evaluation
-        // → run 2 hashed "preamble + plain" → input_hash differed from run 1
-        // → cache always missed on re-runs even when nothing changed.
-
-        var executor = Substitute.For<IAgentExecutor>();
-        var capturedAgentPrompts = new List<string>();
-        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns(ci =>
-            {
-                capturedAgentPrompts.Add(ci.Arg<AgentExecutionContext>().TaskPrompt);
-                return new AgentResult(AgentOutcome.COMPLETE, "Step done");
-            });
-
-        var capturingStore = new CapturingRunStore();
-        var preambleBuilder = new RerunPreambleBuilder(
-            capturingStore, NullLogger<RerunPreambleBuilder>.Instance);
-        var cacheGate = new RerunCacheGate(
-            capturingStore, NullLogger<RerunCacheGate>.Instance);
-
-        var runner = CreateRunner(
-            executor, BuildBasicConfig(), runStore: capturingStore,
-            preambleBuilder: preambleBuilder, cacheGate: cacheGate);
-        SetupBoardCards(DesignListId);
-
-        // Run 1: no marker, no prior. Cache miss. input_hash computed and stored.
-        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
-        var run1Records = capturingStore.SavedStepResults
-            .Where(r => r.StepName == "create_design")
-            .ToList();
-        Assert.Single(run1Records);
-        var hashRun1 = run1Records[0].InputHash;
-        Assert.NotNull(hashRun1);
-
-        // Sanity: agent's run-1 prompt did NOT contain the preamble marker.
-        Assert.DoesNotContain("RE-RUN OF PREVIOUSLY COMPLETED STEP", capturedAgentPrompts[0]);
-
-        // Set up run 2 priors: marker comment on the card + a prior COMPLETE
-        // step_result returned by GetStepResultsForCardAsync (preamble eligibility),
-        // and a NULL prior on GetMostRecentCompleteForStepAsync so the cache
-        // doesn't hit (we want to compare hashes on a miss, not a hit).
-        capturingStore.PriorStepResultsForCard = [run1Records[0] with { RunId = "prior-run-1" }];
-        // Cache gate prior intentionally null — we want a cache MISS on run 2 so
-        // the input_hash gets computed and persisted afresh, lettingrelease us compare.
-        capturingStore.PriorCacheCandidate = null;
-        _boardClient.GetCardCommentsAsync(TargetCardId, Arg.Any<CancellationToken>())
-            .Returns(new List<CardComment>
-            {
-                new("bot",
-                    "<!-- aiboard-log kind:step state:Designing step:create_design -->\nPrior step output.",
-                    DateTimeOffset.UtcNow.AddHours(-1)),
-            });
-
-        capturingStore.SavedStepResults.Clear();
-        capturedAgentPrompts.Clear();
-
-        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
-
-        // Sanity: the agent's run-2 prompt DID contain the preamble (the
-        // injection happened — without this, the test wouldn't be exercising
-        // the bug path at all).
-        Assert.NotEmpty(capturedAgentPrompts);
-        Assert.Contains("RE-RUN OF PREVIOUSLY COMPLETED STEP", capturedAgentPrompts[0]);
-
-        var run2Records = capturingStore.SavedStepResults
-            .Where(r => r.StepName == "create_design")
-            .ToList();
-        Assert.Single(run2Records);
-        var hashRun2 = run2Records[0].InputHash;
-
-        // The actual assertion: input_hash is identical across the two runs
-        // even though run 2's agent saw preamble + plain. Pre-fix this fails
-        // because resolvedPrompt was mutated before being passed to the cache
-        // gate, so run 2's hash included the preamble bytes.
-        Assert.Equal(hashRun1, hashRun2);
-    }
-
     // ── Finding 3: gate prompt sees post-section-update body ─────────
 
     [Fact]
@@ -433,7 +346,6 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         IAgentExecutor executor,
         WorkflowConfig config,
         IRunStore? runStore = null,
-        RerunPreambleBuilder? preambleBuilder = null,
         RerunCacheGate? cacheGate = null)
     {
         var normalisedConfig = config.Normalised();
@@ -450,7 +362,6 @@ public class AgentRunnerRerunRedesignTests : IDisposable
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             NullLogger<AgentRunner>.Instance,
-            rerunPreambleBuilder: preambleBuilder,
             cacheGate: cacheGate);
     }
 
@@ -639,9 +550,7 @@ public class AgentRunnerRerunRedesignTests : IDisposable
 
     /// <summary>
     /// Records every <see cref="SaveStepResultAsync"/> payload and serves
-    /// configurable priors back to <see cref="RerunPreambleBuilder"/> and
-    /// <see cref="RerunCacheGate"/>. The two services share an IRunStore
-    /// instance in production wiring, so the test mirrors that.
+    /// configurable priors back to <see cref="RerunCacheGate"/>.
     /// </summary>
     private sealed class CapturingRunStore : IRunStore
     {

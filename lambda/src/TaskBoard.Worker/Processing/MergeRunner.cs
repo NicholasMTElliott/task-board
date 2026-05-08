@@ -95,8 +95,9 @@ public sealed class MergeRunner(
             // 4. Fetch latest remote state
             await gitWorkspaceManager.FetchAsync(workspacePath, cancellationToken);
 
-            // 5. Detect default branch
-            var defaultBranch = await gitWorkspaceManager.GetDefaultBranchAsync(workspacePath, cancellationToken);
+            // 5. Detect default branch (honour rerun.defaultBranch override)
+            var defaultBranch = await gitWorkspaceManager.GetDefaultBranchAsync(
+                workspacePath, cancellationToken, workflowConfig.Rerun?.DefaultBranch);
             logger.LogInformation("Default branch: {DefaultBranch}, work branch: {WorkBranch}", defaultBranch, workBranch);
 
             // 6. Check if already merged

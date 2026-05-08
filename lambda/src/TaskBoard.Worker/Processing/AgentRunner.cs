@@ -23,7 +23,6 @@ public sealed partial class AgentRunner(
     DockerClaudeMountBuilder? mountBuilder = null,
     ShutdownCoordinator? shutdownCoordinator = null,
     CandidateExecutor? candidateExecutor = null,
-    RerunPreambleBuilder? rerunPreambleBuilder = null,
     IResourcePool? resourcePool = null,
     DependencyGuard? dependencyGuard = null,
     // Rerun redesign Problem 1 + 3 wiring. Optional so existing tests that
@@ -552,24 +551,10 @@ public sealed partial class AgentRunner(
                 var cacheKeyPrompt = resolvedPrompt;
 
                 // 6b-ii. Re-run fast-path: if the step's marker is already on the card AND the
-                //        prior run completed this step with COMPLETE, prepend a "bail if nothing
-                //        changed" preamble so the agent can short-circuit without redoing work.
-                //        Operator force-rerun: delete the comment from the card → preamble suppressed.
-                //        Computed lazily (only when cache misses) — see step 6c.
-                string? rerunPreamble = null;
-                bool rerunPreambleInjected = false;
-                if (rerunPreambleBuilder is not null)
-                {
-                    rerunPreamble = await rerunPreambleBuilder.TryBuildPreambleAsync(
-                        cardId, state.Name, step.Name,
-                        markerName: $"agent-step:{step.Name}",
-                        currentRunId: runId,
-                        existingComments: comments,
-                        variant: PreambleVariant.TaskPrompt,
-                        cancellationToken);
-                }
-
-                // 6b-iv. Cache gate (rerun redesign Problem 1).
+                // 6b. Cache gate (rerun redesign Problem 1) — deterministic
+                // skip cache. On hit, the entire step (single agent OR
+                // candidate fan-out) is skipped without invoking the LLM.
+                // On miss, the agent runs fresh against the new inputs.
                 // For non-candidate single-agent steps, hash the input bundle
                 // (operator content + comments + prior section hashes + step
                 // config + prompts) and check whether a prior COMPLETE run
@@ -589,8 +574,7 @@ public sealed partial class AgentRunner(
                 // step (including any candidate fan-out) is skipped because the
                 // input bundle (operator content + comments + prior section
                 // hashes + step config + prompts) hasn't changed since the
-                // prior COMPLETE. This replaces RerunPreambleBuilder's
-                // LLM-judgment fast-path for candidate steps.
+                // prior COMPLETE.
                 if (cacheGate is not null)
                 {
                     string systemPromptContents = "";
@@ -658,24 +642,14 @@ public sealed partial class AgentRunner(
                     }
                 }
 
-                // 6b-iii. On cache MISS, augment the executor's prompt with the
-                //         re-run preamble (when applicable) and existing-branch
-                //         advisory. These are run-specific scaffolding that
-                //         intentionally does NOT participate in the cache-hash
-                //         (see cacheKeyPrompt above) — a re-run with identical
-                //         operator inputs must produce the same hash whether
-                //         or not the preamble was injected.
+                // 6b-v. On cache MISS, augment the executor's prompt with the
+                //       existing-branch advisory. This run-specific scaffolding
+                //       intentionally does NOT participate in the cache-hash
+                //       (see cacheKeyPrompt above) — a re-run with identical
+                //       operator inputs must produce the same hash whether
+                //       or not the advisory was injected.
                 if (!cacheHit)
                 {
-                    if (rerunPreamble is not null)
-                    {
-                        resolvedPrompt = rerunPreamble + "\n\n---\n\n" + resolvedPrompt;
-                        rerunPreambleInjected = true;
-                        logger.LogInformation(
-                            "Re-run preamble injected for step '{StepName}' on card {CardId}; agent may fast-path if no changes",
-                            step.Name, cardId);
-                    }
-
                     if (isExistingBranch && stepIndex == 0)
                     {
                         resolvedPrompt += "\n\nNote: This task has been worked on previously. A branch with prior changes already exists. " +
@@ -696,7 +670,6 @@ public sealed partial class AgentRunner(
                 // to a single-element slot list so the same code path handles both.
                 AgentResult stepResult;
                 int? stepSessionExecMs;
-                var stepRanAsCandidateGroup = false;
                 if (cacheHit)
                 {
                     // Cache hit: synthesize a COMPLETE AgentResult and skip the
@@ -727,7 +700,6 @@ public sealed partial class AgentRunner(
                     }
                     else
                     {
-                        stepRanAsCandidateGroup = true;
                         var groupRequest = new CandidateGroupRequest(
                             RunId: runId,
                             CardId: cardId,
@@ -830,13 +802,12 @@ public sealed partial class AgentRunner(
                 }
                 lastResult = stepResult;
 
-                // Fast-path hit detection: preamble was injected AND the agent
-                // returned COMPLETE → the agent confirmed the prior output is
-                // still valid without redoing the work. Anything else (no preamble,
-                // or preamble + non-COMPLETE outcome) is null/false.
-                bool? stepFastPathHit = rerunPreambleInjected
-                    ? lastResult.Outcome == AgentOutcome.COMPLETE
-                    : null;
+                // Fast-path hit column is preserved on the schema for V22
+                // metrics back-compat but is no longer populated — the
+                // rerun-redesign deterministic cache (Problem 1) replaced
+                // the LLM-judgment fast-path. Cache hits are signalled via
+                // ExecutionKind = "cache_hit", not via this flag.
+                bool? stepFastPathHit = null;
 
                 // Capture estimate if this step returned one and persist it to DB
                 if (lastResult.Estimate.HasValue)
@@ -958,12 +929,27 @@ public sealed partial class AgentRunner(
                     allUnrecognizedFiles.AddRange(updateResult.UnrecognizedFilesList);
                 }
 
-                // 6d-iii. Save step result to DB.
-                // Skip when the step ran as a candidate group: CandidateExecutor
-                // already persisted N candidate rows + 1 evaluator row, and a
-                // single rolled-up step row would muddy the (role, provider)
-                // metrics by attributing outcome to no concrete candidate.
-                if (!stepRanAsCandidateGroup)
+                // 6d-iii. Resolve attempt count BEFORE the step row is persisted
+                // so the COUNT predicate excludes the current attempt. The
+                // canonical step name (slot/candidate/evaluator suffixes are
+                // collapsed to the same identity at the IRunStore layer) is
+                // used. Best effort — a DB hiccup defaults to 1 (current run
+                // is at least attempt 1).
+                int stepAttempt = await ResolveStepAttemptAsync(
+                    cardId, state.Name, step.Name, cancellationToken);
+
+                // 6d-iv. Save step result to DB.
+                // ALWAYS persist a canonical step row keyed on step.Name (no
+                // slot/candidate suffix, candidate_group_id NULL) so the cache
+                // lookup at GetMostRecentCompleteForStepAsync (which matches
+                // by exact step_name) finds it on subsequent runs. For
+                // candidate-group steps this is in addition to the per-
+                // candidate suffixed rows persisted by CandidateExecutor —
+                // candidate-aware metrics views (v_provider_role_metrics,
+                // v_candidate_outcomes, v_evaluator_reliability) filter on
+                // `candidate_group_id IS NOT NULL` so the canonical row is
+                // ignored there and per-(role, provider) attribution stays
+                // pinned to concrete candidates.
                 {
                     var stepCompletedAt = DateTimeOffset.UtcNow;
 
@@ -1035,14 +1021,6 @@ public sealed partial class AgentRunner(
                 // redesign migration; legacy markers continue to classify as
                 // agent-generated for the hash builder).
                 var stepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role, stepRole.Provider, stepRole.Model);
-
-                // Resolve attempt count for the step's marker fields. Uses the
-                // canonical step name (slot/candidate/evaluator suffixes are
-                // collapsed to the same identity at the IRunStore layer). Best
-                // effort — a DB hiccup defaults to 1 (current run is at least
-                // attempt 1).
-                int stepAttempt = await ResolveStepAttemptAsync(
-                    cardId, state.Name, step.Name, cancellationToken);
 
                 if (cacheHit)
                 {
@@ -1727,30 +1705,6 @@ public sealed partial class AgentRunner(
             gatePrompt += "\n\n## Step History (this run)\n\n" + stepHistoryBlock;
         }
 
-        // Re-run fast-path for the gate check: if a prior run completed this gate with COMPLETE
-        // and the canonical gate-check comment is still on the card, prepend a "confirm or update"
-        // preamble. Operator force-rerun = delete the gate-check comment.
-        bool gatePreambleInjected = false;
-        if (rerunPreambleBuilder is not null)
-        {
-            var gateComments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
-            var gateRerunPreamble = await rerunPreambleBuilder.TryBuildPreambleAsync(
-                cardId, state.Name, stepName: "gate_check",
-                markerName: $"gate-check:{state.Name}",
-                currentRunId: runId,
-                existingComments: gateComments,
-                variant: PreambleVariant.TaskPrompt,
-                cancellationToken);
-            if (gateRerunPreamble is not null)
-            {
-                gatePrompt = gateRerunPreamble + "\n\n---\n\n" + gatePrompt;
-                gatePreambleInjected = true;
-                logger.LogInformation(
-                    "Re-run preamble injected for gate check on card {CardId} state {State}",
-                    cardId, state.Name);
-            }
-        }
-
         // Append optional step catalog if configured
         if (state.OptionalSteps is { Count: > 0 })
         {
@@ -1810,10 +1764,10 @@ public sealed partial class AgentRunner(
 
             // Save gate check result to DB.
             // Gate runs after main steps (or directly if no steps configured); fall back to 0
-            // when Steps is null so the gate still records cleanly.
-            var gateFastPathHit = gatePreambleInjected
-                ? gateResult.Outcome == AgentOutcome.COMPLETE
-                : (bool?)null;
+            // when Steps is null so the gate still records cleanly. fast_path_hit
+            // is no longer populated post-rerun-redesign; cache hits are
+            // surfaced via ExecutionKind = "cache_hit" instead.
+            var gateFastPathHit = (bool?)null;
             var gateRecord = new StepResultRecord(
                 RunId: runId,
                 CardId: cardId,
@@ -2063,30 +2017,6 @@ public sealed partial class AgentRunner(
             var resolvedPrompt = await ResolveTaskPromptFromFileOrInlineAsync(
                 step.TaskPromptFile, step.TaskPrompt, step.Name, worktreePath, targetCard, cancellationToken);
 
-            // Re-run fast-path for this optional specialist reviewer: same detection rule as
-            // regular steps (marker on card + prior COMPLETE row). Operator force-rerun =
-            // delete the optional step's comment.
-            bool optPreambleInjected = false;
-            if (rerunPreambleBuilder is not null)
-            {
-                var optComments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
-                var optRerunPreamble = await rerunPreambleBuilder.TryBuildPreambleAsync(
-                    cardId, state.Name, stepName: $"optional:{step.Name}",
-                    markerName: $"agent-step:optional:{step.Name}",
-                    currentRunId: runId,
-                    existingComments: optComments,
-                    variant: PreambleVariant.TaskPrompt,
-                    cancellationToken);
-                if (optRerunPreamble is not null)
-                {
-                    resolvedPrompt = optRerunPreamble + "\n\n---\n\n" + resolvedPrompt;
-                    optPreambleInjected = true;
-                    logger.LogInformation(
-                        "Re-run preamble injected for optional step '{StepName}' on card {CardId}",
-                        step.Name, cardId);
-                }
-            }
-
             var effectiveParams = MergeProviderParams(state.ProviderParams, step.ProviderParams);
 
             var context = new AgentExecutionContext(
@@ -2171,9 +2101,7 @@ public sealed partial class AgentRunner(
                 OutputTokens: result.Usage?.OutputTokens,
                 CacheReadTokens: result.Usage?.CacheReadTokens,
                 CacheCreationTokens: result.Usage?.CacheCreationTokens,
-                FastPathHit: optPreambleInjected
-                    ? result.Outcome == AgentOutcome.COMPLETE
-                    : (bool?)null,
+                FastPathHit: null,
                 StructurerFallbackUsed: result.StructurerFallbackUsed,
                 SectionUpdateJson: result.SectionUpdateJson,
                 SectionOutputHash: optionalSectionOutputHash,

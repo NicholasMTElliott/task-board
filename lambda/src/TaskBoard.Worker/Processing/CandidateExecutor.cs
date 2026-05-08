@@ -43,7 +43,6 @@ public sealed class CandidateExecutor(
     IRunStore runStore,
     ITaskBoardClient boardClient,
     ILogger<CandidateExecutor> logger,
-    RerunPreambleBuilder? rerunPreambleBuilder = null,
     IResourcePool? resourcePool = null,
     AgentIdentity? agentIdentity = null,
     // Rerun redesign Problem 2: route per-candidate audit comments through the
@@ -1241,33 +1240,6 @@ public sealed class CandidateExecutor(
     {
         var sb = new StringBuilder();
 
-        // Re-run fast-path for the evaluator: if the prior canonical step output
-        // is still on the card (and the prior run completed this step with COMPLETE),
-        // tell the evaluator that candidates may have just confirmed prior — so a
-        // tie of "Confirmed" details is a valid outcome rather than a verdict.
-        // Operator force-rerun is identical to the candidate path: delete the
-        // canonical agent-step:{step.Name} comment.
-        if (rerunPreambleBuilder is not null && request.ExistingComments is { Count: > 0 })
-        {
-            var evaluatorPreamble = await rerunPreambleBuilder.TryBuildPreambleAsync(
-                request.CardId, request.StateName, request.Step.Name,
-                markerName: $"agent-step:{request.Step.Name}",
-                currentRunId: request.RunId,
-                existingComments: request.ExistingComments,
-                variant: PreambleVariant.Evaluator,
-                cancellationToken);
-            if (evaluatorPreamble is not null)
-            {
-                sb.AppendLine(evaluatorPreamble);
-                sb.AppendLine();
-                sb.AppendLine("---");
-                sb.AppendLine();
-                logger.LogInformation(
-                    "Re-run preamble injected for evaluator on step '{StepName}' card {CardId}",
-                    request.Step.Name, request.CardId);
-            }
-        }
-
         // Task prompt template: configured in EvaluatorConfig, with a sane
         // built-in fallback so users don't have to supply one for the v1 trial.
         var promptTemplate = await ResolveEvaluatorPromptTemplateAsync(
@@ -1827,14 +1799,34 @@ public sealed class CandidateExecutor(
         CancellationToken cancellationToken)
     {
         // Per-candidate audit comments — make individual outputs visible without
-        // bloating the consolidated step comment. Multi-slot steps include a
-        // `:slot-N` infix in the marker so candidate comments from earlier
-        // (failed) slots and the winning slot don't collide on upsert.
-        var slotInfix = SlotInfix(slotIndex, totalSlots);
+        // bloating the consolidated step comment. Multi-slot steps surface the
+        // slot via the `slot:` field in the aiboard-log marker.
+
+        // Resolve the (card, state, step) attempt count once per slot so all
+        // candidate comments in this slot agree on the attempt field. This is
+        // resolved AFTER the per-candidate step_result rows are persisted, so
+        // the count includes them — but we want the canonical attempt
+        // (representing this run's slot try). The candidate rows have non-null
+        // candidate_index ≠ 0, so they're EXCLUDED from the COUNT predicate
+        // (`candidate_index IS NULL OR candidate_index = 0`), and the count
+        // reflects only prior canonical runs. +1 for the current run.
+        int slotAttempt = 1;
+        try
+        {
+            var prior = await runStore.GetStepAttemptCountAsync(
+                request.CardId, request.StateName, request.Step.Name, cancellationToken);
+            slotAttempt = prior + 1;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Failed to resolve attempt count for candidate comments on card {Card}; defaulting to 1",
+                request.CardId);
+        }
+
         for (var i = 0; i < executions.Count; i++)
         {
             var e = executions[i];
-            var marker = $"<!-- agent-step:{stepName}{slotInfix}:cand-{i}:{SlugifyProvider(e.Provider)} -->";
             var won = verdict.WinnerIndex is int w && w == i;
             var sb = new StringBuilder();
             var candidateAgentName = agentIdentity is not null
@@ -1866,40 +1858,47 @@ public sealed class CandidateExecutor(
 
             try
             {
+                // kind:candidate → append (per-candidate chronological log).
+                // Attempt field included per "every aiboard-log emit site"
+                // contract. No legacy upsert fallback — when no router is
+                // wired, we still append the aiboard-log marker directly via
+                // boardClient (test-only path; production registers the
+                // router).
+                var fields = new List<KeyValuePair<string, string>>
+                {
+                    KeyValuePair.Create("state", request.StateName),
+                    KeyValuePair.Create("step", stepName),
+                };
+                if (totalSlots > 1)
+                    fields.Add(KeyValuePair.Create("slot",
+                        slotIndex.ToString(CultureInfo.InvariantCulture)));
+                fields.Add(KeyValuePair.Create("candidate",
+                    i.ToString(CultureInfo.InvariantCulture)));
+                fields.Add(KeyValuePair.Create("provider", e.Provider));
+                fields.Add(KeyValuePair.Create("run", request.RunId));
+                fields.Add(KeyValuePair.Create("outcome", e.AgentResult.Outcome.ToString()));
+                fields.Add(KeyValuePair.Create("attempt",
+                    slotAttempt.ToString(CultureInfo.InvariantCulture)));
+
+                var newMarker = AiboardLogMarker.Build(
+                    AiboardLogMarker.KindCandidate, fields);
                 if (commentRouter is not null)
                 {
-                    // kind:candidate → append (per-candidate chronological log).
-                    var fields = new List<KeyValuePair<string, string>>
-                    {
-                        KeyValuePair.Create("state", request.StateName),
-                        KeyValuePair.Create("step", stepName),
-                    };
-                    if (totalSlots > 1)
-                        fields.Add(KeyValuePair.Create("slot",
-                            slotIndex.ToString(CultureInfo.InvariantCulture)));
-                    fields.Add(KeyValuePair.Create("candidate",
-                        i.ToString(CultureInfo.InvariantCulture)));
-                    fields.Add(KeyValuePair.Create("provider", e.Provider));
-                    fields.Add(KeyValuePair.Create("run", request.RunId));
-                    fields.Add(KeyValuePair.Create("outcome", e.AgentResult.Outcome.ToString()));
-
-                    var newMarker = AiboardLogMarker.Build(
-                        AiboardLogMarker.KindCandidate, fields);
                     await commentRouter.PostAsync(
                         request.CardId, AiboardLogMarker.KindCandidate,
                         sb.ToString(), newMarker, cancellationToken);
                 }
                 else
                 {
-                    await boardClient.UpsertAgentCommentAsync(
-                        request.CardId, sb.ToString(), marker, cancellationToken);
+                    await boardClient.AppendAgentCommentAsync(
+                        request.CardId, $"{newMarker}\n{sb}", cancellationToken);
                 }
             }
             catch (Exception ex)
             {
                 logger.LogWarning(ex,
-                    "Failed to upsert candidate comment {Marker} on card {CardId}",
-                    marker, request.CardId);
+                    "Failed to post candidate comment for card {CardId} candidate {Index}",
+                    request.CardId, i);
             }
         }
 

@@ -108,7 +108,7 @@ public class CandidateExecutorFlowTests : IDisposable
         // Per-candidate audit comments + evaluator-driven step comment posted.
         // (CandidateExecutor posts the per-candidate ones; AgentRunner posts the
         // step-level comment, which this test does NOT exercise.)
-        Assert.Equal(2, _boardClient.Comments.Count(c => c.Marker.Contains(":cand-")));
+        Assert.Equal(2, _boardClient.Comments.Count(c => c.Marker.Contains("kind:candidate")));
     }
 
     // ── V22: evaluator_prompt_chars persisted on evaluator step row ──────────
@@ -630,7 +630,6 @@ public class CandidateExecutorFlowTests : IDisposable
             _runStore,
             _boardClient,
             NullLogger<CandidateExecutor>.Instance,
-            rerunPreambleBuilder: null,
             resourcePool: pool);
 
         var request = NewRequest(
@@ -1241,9 +1240,24 @@ public class CandidateExecutorFlowTests : IDisposable
 
         public Task AppendAgentCommentAsync(string cardId, string commentBody, CancellationToken cancellationToken)
         {
-            // Record with empty marker so existing tests that introspect by marker still work.
-            Comments.Add(new RecordedComment(cardId, commentBody, ""));
+            // Extract the leading aiboard-log / legacy marker from the body so
+            // existing tests that introspect by marker still work. The
+            // CandidateExecutor / AgentRunner call sites prepend the marker
+            // followed by a newline.
+            var extracted = ExtractLeadingMarker(commentBody);
+            Comments.Add(new RecordedComment(cardId, commentBody, extracted));
             return Task.CompletedTask;
+        }
+
+        private static string ExtractLeadingMarker(string body)
+        {
+            const string Open = "<!--";
+            const string Close = "-->";
+            var trimmed = body.TrimStart();
+            if (!trimmed.StartsWith(Open, StringComparison.Ordinal)) return "";
+            var endIdx = trimmed.IndexOf(Close, StringComparison.Ordinal);
+            if (endIdx < 0) return "";
+            return trimmed[..(endIdx + Close.Length)];
         }
 
         public Task DeleteAgentCommentsByMarkerAsync(string cardId, string markerSubstring, CancellationToken cancellationToken)

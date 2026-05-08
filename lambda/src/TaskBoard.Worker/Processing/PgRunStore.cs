@@ -218,7 +218,8 @@ public sealed class PgRunStore(
                    provider, candidate_group_id, candidate_index,
                    selected, quality_score, evaluator_reasoning, slot_index,
                    cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                   fast_path_hit, structurer_fallback_used, evaluator_prompt_chars, winner_regressed
+                   fast_path_hit, structurer_fallback_used, evaluator_prompt_chars, winner_regressed,
+                   execution_kind, output_summary
             FROM step_result
             WHERE tenant_id = $1
               AND card_id = $2
@@ -245,7 +246,8 @@ public sealed class PgRunStore(
                    sr.provider, sr.candidate_group_id, sr.candidate_index,
                    sr.selected, sr.quality_score, sr.evaluator_reasoning, sr.slot_index,
                    sr.cost_usd, sr.input_tokens, sr.output_tokens, sr.cache_read_tokens, sr.cache_creation_tokens,
-                   sr.fast_path_hit, sr.structurer_fallback_used, sr.evaluator_prompt_chars, sr.winner_regressed
+                   sr.fast_path_hit, sr.structurer_fallback_used, sr.evaluator_prompt_chars, sr.winner_regressed,
+                   sr.execution_kind, sr.output_summary
             FROM step_result sr
             INNER JOIN (
                 SELECT run_id FROM agent_run
@@ -314,9 +316,27 @@ public sealed class PgRunStore(
                 FastPathHit: ReadNullableBool(reader, "fast_path_hit"),
                 StructurerFallbackUsed: ReadNullableBool(reader, "structurer_fallback_used"),
                 EvaluatorPromptChars: ReadNullableInt(reader, "evaluator_prompt_chars"),
-                WinnerRegressed: ReadNullableBool(reader, "winner_regressed")));
+                WinnerRegressed: ReadNullableBool(reader, "winner_regressed"),
+                ExecutionKind: HasColumn(reader, "execution_kind")
+                    ? (reader.IsDBNull(reader.GetOrdinal("execution_kind"))
+                        ? "full_run"
+                        : reader.GetString(reader.GetOrdinal("execution_kind")))
+                    : "full_run",
+                OutputSummary: HasColumn(reader, "output_summary")
+                    ? (reader.IsDBNull(reader.GetOrdinal("output_summary"))
+                        ? null
+                        : reader.GetString(reader.GetOrdinal("output_summary")))
+                    : null));
         }
         return results;
+    }
+
+    private static bool HasColumn(NpgsqlDataReader r, string col)
+    {
+        for (var i = 0; i < r.FieldCount; i++)
+            if (string.Equals(r.GetName(i), col, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
     }
 
     private static int? ReadNullableInt(NpgsqlDataReader r, string col)
