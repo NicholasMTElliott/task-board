@@ -246,11 +246,25 @@ After promotion, AgentRunner's existing post-step processors run unchanged: `Tas
 
 ## Re-run cache (deterministic skip)
 
-When a card returns from a Questions column for a re-run, candidate-group steps participate in the same deterministic-skip cache as single-agent steps (rerun redesign Problem 1). The runtime hashes the input bundle (operator content + comments + prior section hashes + step config + prompts) and compares against the prior `COMPLETE` `step_result` row's `input_hash`. On match, the entire step is skipped — no LLM invocation, no candidate fan-out, no evaluator. The prior winner's output is reused via the existing canonical row, and a `kind:cache_hit` aiboard-log comment marks the timeline.
+When a card returns from a Questions column for a re-run, candidate-group steps participate in the same deterministic-skip cache as single-agent steps (rerun redesign Problem 1). The runtime hashes the input bundle and compares against the prior `COMPLETE` `step_result` row's `input_hash`. On match, the entire step is skipped — no LLM invocation, no candidate fan-out, no evaluator. The prior winner's output is reused via the existing canonical row, and a `kind:cache_hit` aiboard-log comment marks the timeline.
 
-On mismatch (any input changed: operator edited a managed section, comments were added, the system or task prompt changed, or a candidate/model was added or removed), the cache misses and every slot runs fresh.
+The input bundle hashes:
 
-**Force a fresh re-run** by editing any input that participates in the hash — the easiest is to delete the canonical `<!-- aiboard-log kind:step ... -->` comment from the card. Comment deletion changes the comments-since-prior-completion bundle and invalidates the cache. With the canonical row's input_hash no longer matching, every slot runs from scratch.
+- **Operator-authored portion of the card body** — the prefix before any managed section markers. Edits here invalidate.
+- **Operator comments** — every comment whose body does NOT carry an `aiboard-log` marker (i.e. human-authored, not orchestrator-emitted). Adding, editing, or deleting these invalidates the cache. Agent-generated comments (`kind:step`, `kind:candidate`, `kind:evaluator`, `kind:gate`, `kind:optional`, `kind:cache_hit`) are filtered out at hash time and do **not** participate.
+- **Prior section output hashes** — managed-section content from earlier steps in the same state. If an operator edited an earlier step's managed section, downstream steps cache-miss on this signal.
+- **Step config** — provider, model, candidate / slot configuration, retry policy, prompt file references, generation config. Changes to `workflow.json` invalidate.
+- **System prompt contents** — file contents of the role's system prompt.
+- **Task prompt contents** — file contents (or inline string) of the step's task prompt.
+
+Plus a separate "section drift" check: if the step's *own* managed-section content was edited externally between runs, the cache misses on that signal independently of the input bundle hash.
+
+**Force a fresh re-run** by editing any input that participates above. Practical levers:
+
+- **Edit the card body**: change anything in the operator-authored prefix (the portion before `<!-- step-section:... -->` markers), or edit a managed section in place to trigger section drift.
+- **Edit or delete an operator comment**: any non-`aiboard-log` comment. *Deleting an agent comment (one that carries an `aiboard-log` marker) does not invalidate the cache* — those are filtered out of the hash.
+- **Edit `workflow.json`**: bump a model, adjust a candidate's retries, swap a prompt file path. Even cosmetic config changes count.
+- **Edit the prompt file contents**: changing `prompts/<role>.md` or `prompts/states/.../*.md` invalidates every step that references it.
 
 The previous LLM-judgment preamble ("if your prior output remains accurate, respond COMPLETE") was removed in Round-4 of the rerun redesign — the deterministic cache handles "no change" decisively without the LLM judging itself.
 

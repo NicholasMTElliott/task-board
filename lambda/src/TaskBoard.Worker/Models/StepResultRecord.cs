@@ -90,9 +90,11 @@ public sealed record StepResultRecord(
     /// <summary>Cache-creation tokens (Claude only; null for other providers).</summary>
     long? CacheCreationTokens = null,
     /// <summary>
-    /// True when the re-run preamble was injected for this step AND the agent
-    /// returned COMPLETE — the fast path actually short-circuited a full re-run.
-    /// Null when the fast path didn't apply or wasn't checked.
+    /// Deprecated (rerun redesign Round-4). Was populated by the removed
+    /// <c>RerunPreambleBuilder</c> LLM-judgment fast-path. The column is
+    /// preserved on the schema for back-compat with existing dashboards but
+    /// is no longer written by the runtime — cache-decision recording moved
+    /// to <see cref="ExecutionKind"/> (<c>'full_run'</c> vs <c>'cache_hit'</c>).
     /// </summary>
     bool? FastPathHit = null,
     /// <summary>
