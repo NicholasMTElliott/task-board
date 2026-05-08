@@ -2033,6 +2033,12 @@ public sealed partial class AgentRunner(
             var (result, optionalSessionExecMs) = await ExecuteWithSessionAsync(
                 session, stepRole.Provider, context, $"optional:{step.Name}", runId, cancellationToken);
 
+            // Resolve attempt count BEFORE the optional step row is persisted
+            // so the COUNT predicate excludes the current attempt (rerun
+            // redesign Round-5 Finding 1 — symmetric with main-step fix).
+            int optionalAttempt = await ResolveStepAttemptAsync(
+                cardId, state.Name, $"optional:{step.Name}", cancellationToken);
+
             // Update card body. Mirrors the regular-step path: when the agent
             // returned a structured section_update directive (rerun redesign
             // Problem 2), apply it via DescriptionWriter — optional reviewers
@@ -2112,8 +2118,6 @@ public sealed partial class AgentRunner(
             // Build a per-step prefix so the header reflects the actual specialist-reviewer role.
             var optionalStepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role, stepRole.Provider, stepRole.Model);
             var stepBody = $"{optionalStepPrefix}\n\n**Optional Step: {step.Name}**\n\n{FormatComment(result, includeConversationLog: runStore is NullRunStore)}";
-            int optionalAttempt = await ResolveStepAttemptAsync(
-                cardId, state.Name, $"optional:{step.Name}", cancellationToken);
             // kind:optional → append (chronological log entry). Marker carries
             // attempt for cross-run correlation; no legacy fallback (rerun
             // redesign Problem 2: only aiboard-log markers are emitted).

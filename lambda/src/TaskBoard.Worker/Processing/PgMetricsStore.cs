@@ -328,24 +328,28 @@ public sealed class PgMetricsStore(
     {
         await using var conn = await dataSource.OpenConnectionAsync(ct);
         await using var cmd = conn.CreateCommand();
+        // Round-5 Finding 3: read execution_kind ('cache_hit' vs 'full_run')
+        // populated by the deterministic cache gate, not the deprecated
+        // fast_path_hit column. The column is preserved on the schema for
+        // back-compat but is no longer populated by the runtime.
         cmd.CommandText = """
             SELECT
                 state_name,
                 step_name,
                 role,
                 provider,
-                COUNT(*)                                              AS total,
-                COUNT(*) FILTER (WHERE fast_path_hit = true)          AS hits,
+                COUNT(*)                                                  AS total,
+                COUNT(*) FILTER (WHERE execution_kind = 'cache_hit')      AS hits,
                 CASE
-                    WHEN COUNT(*) FILTER (WHERE fast_path_hit IS NOT NULL) = 0 THEN NULL
+                    WHEN COUNT(*) = 0 THEN NULL
                     ELSE 100.0 *
-                        COUNT(*) FILTER (WHERE fast_path_hit = true) /
-                        COUNT(*) FILTER (WHERE fast_path_hit IS NOT NULL)
-                END                                                    AS hit_rate_percent
+                        COUNT(*) FILTER (WHERE execution_kind = 'cache_hit') /
+                        COUNT(*)
+                END                                                       AS hit_rate_percent
             FROM step_result
             WHERE tenant_id = $1
               AND completed_at_utc IS NOT NULL
-              AND fast_path_hit IS NOT NULL
+              AND execution_kind IN ('full_run', 'cache_hit')
               AND ($2::timestamptz IS NULL OR started_at_utc >= $2)
             GROUP BY state_name, step_name, role, provider
             ORDER BY state_name, step_name, role, provider

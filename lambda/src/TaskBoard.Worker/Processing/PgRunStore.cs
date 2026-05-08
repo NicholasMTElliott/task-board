@@ -441,19 +441,37 @@ public sealed class PgRunStore(
     {
         await using var conn = await dataSource.OpenConnectionAsync(ct);
         await using var cmd = conn.CreateCommand();
-        // Predicate: candidate_index IS NULL OR candidate_index = 0 — counts
-        // one row per slot try, regardless of candidate fan-out within the slot.
-        // Multi-slot fallback within one run counts each slot try (slot 0 row +
-        // slot 1 row = 2 attempts). All outcomes counted (COMPLETE / NEEDS_INFO
-        // / ERROR), per the rerun redesign attempt-counter rule.
+        // Counts ATTEMPTS = "operator-perceived slot tries" for (card, state,
+        // step), per the rerun-redesign spec. The canonical AgentRunner row
+        // (step_name = $4, candidate_group_id NULL) covers single-agent steps
+        // and the rolled-up outcome of a candidate group's WINNING slot;
+        // candidate-suffixed rows from PRIOR slots in a multi-slot fallback
+        // (slot_index >= 1, the "extra" tries beyond the rolled-up one) are
+        // counted via the second branch. Slot 0's outcome is absorbed by the
+        // canonical row when the slot wins; when slot 0 fails and slot 1 wins,
+        // the canonical row reflects slot 1 and slot 0's per-candidate row
+        // adds one (slot_index >= 1 captures slot 1 — slot 0 already absorbed).
+        //
+        // Multi-slot run that succeeds at slot 0: 1 attempt (canonical only).
+        // Multi-slot that succeeds at slot 1: 2 attempts (canonical + slot 1).
+        // Multi-slot that succeeds at slot N: N+1 attempts (canonical + slots 1..N).
+        //
+        // All outcomes counted (COMPLETE / NEEDS_INFO / ERROR) per spec.
         cmd.CommandText = """
             SELECT COUNT(*)::INT
             FROM step_result
             WHERE tenant_id = $1
               AND card_id = $2
               AND state_name = $3
-              AND step_name = $4
-              AND (candidate_index IS NULL OR candidate_index = 0)
+              AND (
+                  -- Canonical step row (single-agent or rolled-up candidate group)
+                  step_name = $4
+                  -- First-candidate row from slots beyond slot 0 — additional
+                  -- attempts not absorbed into the canonical row.
+                  OR (step_name LIKE $4 || ':slot-%:cand-0:%'
+                      AND slot_index >= 1
+                      AND candidate_index = 0)
+              )
             """;
         cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(cardId);
