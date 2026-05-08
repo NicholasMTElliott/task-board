@@ -610,6 +610,11 @@ builder.Services.AddSingleton(sp =>
 
 builder.Services.AddSingleton<UpdateFileProcessor>();
 builder.Services.AddSingleton<RerunPreambleBuilder>();
+// Rerun redesign Problem 1: deterministic-skip cache gate. Optional dep on
+// AgentRunner — registering it here turns on the cache check for every
+// single-agent step on every card. Cache misses still pay the executor cost;
+// hits skip the executor and reuse the prior step_result.
+builder.Services.AddSingleton<RerunCacheGate>();
 builder.Services.Configure<ResourcePoolOptions>(
     builder.Configuration.GetSection(ResourcePoolOptions.SectionName));
 builder.Services.AddSingleton<IResourcePool, ResourcePool>();

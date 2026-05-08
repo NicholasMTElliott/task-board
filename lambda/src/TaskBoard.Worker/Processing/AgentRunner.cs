@@ -25,7 +25,11 @@ public sealed partial class AgentRunner(
     CandidateExecutor? candidateExecutor = null,
     RerunPreambleBuilder? rerunPreambleBuilder = null,
     IResourcePool? resourcePool = null,
-    DependencyGuard? dependencyGuard = null)
+    DependencyGuard? dependencyGuard = null,
+    // Rerun redesign Problem 1 + 3 wiring. Optional so existing tests that
+    // don't inject these continue to work — non-cached single-agent steps
+    // run identically to the pre-rerun-redesign flow.
+    RerunCacheGate? cacheGate = null)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
 
@@ -169,6 +173,36 @@ public sealed partial class AgentRunner(
             // as before this change).
             var runStartCanonicalSha = await gitWorkspaceManager.GetCurrentShaAsync(
                 worktreePath, cancellationToken);
+
+            // 4c. Resolve state-entry canonical SHA (rerun redesign Problem 3).
+            // The state-entry SHA represents the codebase as of the FIRST run
+            // for this (tenant, card, state). Re-runs (Questions answered,
+            // gate fail, etc.) inherit it so the gate-check diff base shows
+            // CUMULATIVE work across runs, not just this run's possibly-empty
+            // diff. First run captures runStartCanonicalSha. Subsequent runs
+            // copy forward the earliest stored value. The column already
+            // exists on agent_run (V24); SetStateEntryShaAsync is idempotent.
+            string? stateEntrySha = null;
+            try
+            {
+                var priorStateEntry = await runStore.GetEarliestStateEntryShaAsync(
+                    cardId, state.Name, cancellationToken);
+                stateEntrySha = priorStateEntry ?? runStartCanonicalSha;
+                if (stateEntrySha is not null)
+                {
+                    await runStore.SetStateEntryShaAsync(runId, stateEntrySha, cancellationToken);
+                    logger.LogDebug(
+                        "State-entry SHA for card {CardId} state {State}: {Sha} ({Origin})",
+                        cardId, state.Name, stateEntrySha,
+                        priorStateEntry is not null ? "carried-forward" : "captured-now");
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Failed to resolve state-entry SHA for card {CardId} state {State}; gate diff will fall back to runStartCanonicalSha",
+                    cardId, state.Name);
+            }
 
             // 5. Fetch comments (used for both cross-references and comments file)
             var comments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
@@ -354,6 +388,14 @@ public sealed partial class AgentRunner(
 
             double? capturedEstimate = null;
 
+            // Rerun redesign: track the card body in-process so the cache gate
+            // (Problem 1) can hash it without re-fetching, and so the
+            // DescriptionWriter (Problem 2) can apply incremental section
+            // updates step-by-step without round-tripping the board body each
+            // time. Updated in lockstep with every UpdateCardBodyAsync we issue
+            // from inside the step loop.
+            var currentBody = targetCard.Body ?? "";
+
             // Accumulator for tickets created across all steps. Forwarded to the
             // gate check as {CreatedTickets} so the gate sees what was actually
             // accomplished even after UpdateFileProcessor deletes the source
@@ -496,6 +538,77 @@ public sealed partial class AgentRunner(
                     }
                 }
 
+                // 6b-iv. Cache gate (rerun redesign Problem 1).
+                // For non-candidate single-agent steps, hash the input bundle
+                // (operator content + comments + prior section hashes + step
+                // config + prompts) and check whether a prior COMPLETE run
+                // produced the same bundle. On hit, skip the executor entirely
+                // and persist a cache_hit step_result pointing back at the
+                // source row. The hash is computed regardless of cache
+                // availability so the input_hash column gets populated on
+                // miss too — that's what makes future runs' cache decisions
+                // cheap. Cache check is opt-in via DI: omit the cacheGate
+                // dependency to retain pre-rerun-redesign behaviour.
+                CacheGateResult? cacheResult = null;
+                bool cacheHit = false;
+                var effectiveSlots = step.GetEffectiveSlots();
+                if (cacheGate is not null && effectiveSlots.Count == 0)
+                {
+                    string systemPromptContents = "";
+                    try
+                    {
+                        if (File.Exists(systemPromptFilePath))
+                        {
+                            systemPromptContents = await File.ReadAllTextAsync(
+                                systemPromptFilePath, cancellationToken);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex,
+                            "Could not read system prompt for hashing on step '{Step}'; using empty contents — cache key may differ from prior runs",
+                            step.Name);
+                    }
+
+                    var stepConfigJson = RerunCacheGate.SerializeStepConfig(
+                        step, stepRole, state.ProviderParams);
+
+                    // Prior section hashes from the CURRENT body in visitation
+                    // order. Earlier steps' sections may have been written by
+                    // prior runs OR by earlier iterations of this run; either
+                    // way, the body is the source of truth.
+                    var priorSectionHashes = new List<string>();
+                    for (var prevIdx = 0; prevIdx < stepIndex; prevIdx++)
+                    {
+                        var prevHash = RerunHashBuilder.ComputeSectionHash(
+                            currentBody, state.Steps[prevIdx].Name);
+                        if (prevHash is not null)
+                            priorSectionHashes.Add(prevHash);
+                    }
+
+                    try
+                    {
+                        cacheResult = await cacheGate.EvaluateAsync(
+                            cardId, currentBody, state, step, stepRole,
+                            stepConfigJson, systemPromptContents, resolvedPrompt,
+                            comments, priorSectionHashes, cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex,
+                            "Cache gate failed for step '{Step}' on card {CardId}; proceeding with executor",
+                            step.Name, cardId);
+                    }
+
+                    if (cacheResult is not null && cacheResult.IsHit)
+                    {
+                        cacheHit = true;
+                        logger.LogInformation(
+                            "Cache HIT — skipping executor for step '{Step}' on card {CardId}",
+                            step.Name, cardId);
+                    }
+                }
+
                 // 6c. Execute agent for this step.
                 // Two paths: slot-driven (parallel candidates per slot, sequential
                 // fallback chain across slots) or single-agent (canonical worktree).
@@ -504,9 +617,23 @@ public sealed partial class AgentRunner(
                 AgentResult stepResult;
                 int? stepSessionExecMs;
                 var stepRanAsCandidateGroup = false;
-
-                var effectiveSlots = step.GetEffectiveSlots();
-                if (effectiveSlots.Count > 0)
+                if (cacheHit)
+                {
+                    // Cache hit: synthesize a COMPLETE AgentResult and skip the
+                    // executor entirely. The detail / output_summary on the
+                    // synthetic result mirrors what the prior run produced so
+                    // downstream consumers (gate prompt, comment poster) see
+                    // the cached narrative without re-invoking the LLM.
+                    var src = cacheResult!.Source!;
+                    var cachedDetail = src.OutputSummary
+                        ?? src.Detail
+                        ?? $"Skipped: inputs unchanged since run {src.RunId} (completed {src.CompletedAtUtc:yyyy-MM-dd HH:mm 'UTC'}).";
+                    stepResult = new AgentResult(
+                        AgentOutcome.COMPLETE,
+                        Detail: cachedDetail);
+                    stepSessionExecMs = null;
+                }
+                else if (effectiveSlots.Count > 0)
                 {
                     if (candidateExecutor is null)
                     {
@@ -641,23 +768,81 @@ public sealed partial class AgentRunner(
                         runStore.UpdateRunEstimateAsync(runId, capturedEstimate.Value, cancellationToken));
                 }
 
-                // 6d. Update card body from task file after each step (write-after-each-step strategy)
-                await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken,
-                    trimForBoard: runStore is not NullRunStore);
+                // 6d. Update card body. Three paths:
+                //
+                //   1. Cache hit — body untouched. The cached prior result is
+                //      already reflected in the card body (no executor ran;
+                //      task file wasn't modified; managed section already
+                //      present from the prior run).
+                //
+                //   2. Section update path (rerun redesign Problem 2) — agent
+                //      returned a structured section_update directive. Apply
+                //      via DescriptionWriter to the in-process body, write to
+                //      the board, and track currentBody for the next step's
+                //      cache hash + section update.
+                //
+                //   3. Legacy task-file path — agent wrote to the worktree's
+                //      task file; sync that content to the board body (the
+                //      pre-rerun-redesign behaviour).
+                string? sectionOutputHash = null;
+                if (cacheHit)
+                {
+                    // Cache hit: section_output_hash carries forward from the
+                    // source row (we already verified it matches the current
+                    // body in the cache decision).
+                    sectionOutputHash = cacheResult!.Source!.SectionOutputHash;
+                }
+                else if (lastResult.Section is not null)
+                {
+                    var newBody = DescriptionWriter.ApplySectionUpdate(
+                        currentBody, step.Name, lastResult.Section);
+                    if (!ReferenceEquals(newBody, currentBody) && newBody != currentBody)
+                    {
+                        try
+                        {
+                            await boardClient.UpdateCardBodyAsync(cardId, newBody, cancellationToken);
+                            currentBody = newBody;
+                            logger.LogInformation(
+                                "Applied section_update (strategy={Strategy}) for step '{Step}' on card {CardId}",
+                                lastResult.Section.Strategy, step.Name, cardId);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex,
+                                "Failed to write section_update for step '{Step}' on card {CardId}; description unchanged for this step",
+                                step.Name, cardId);
+                        }
+                    }
+                    sectionOutputHash = RerunHashBuilder.ComputeSectionHash(currentBody, step.Name);
+                }
+                else
+                {
+                    // Legacy flow: pull body from task file. Skipped on cache
+                    // hit because nothing wrote to the task file (executor
+                    // didn't run); skipped when Section is provided because
+                    // the new flow takes over body management for that step.
+                    await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken,
+                        trimForBoard: runStore is not NullRunStore);
+                }
 
                 // 6d-ii. Process update files (.aiboard/updates/) — handles both generation steps
                 //        (step.GenerationConfig set) and ad-hoc ticket creation (no config).
-                UpdateProcessingResult updateResult;
-                try
+                //        Skipped on cache hit because the cached step didn't run, and the
+                //        prior run's update files already produced their tickets.
+                UpdateProcessingResult updateResult = UpdateProcessingResult.Empty;
+                if (!cacheHit)
                 {
-                    updateResult = await updateFileProcessor.ProcessUpdatesAsync(
-                        worktreePath, cardId, step.Name, comments, cancellationToken,
-                        step.GenerationConfig);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Update file processing failed for step '{StepName}' on card {CardId}", step.Name, cardId);
-                    updateResult = UpdateProcessingResult.Empty;
+                    try
+                    {
+                        updateResult = await updateFileProcessor.ProcessUpdatesAsync(
+                            worktreePath, cardId, step.Name, comments, cancellationToken,
+                            step.GenerationConfig);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Update file processing failed for step '{StepName}' on card {CardId}", step.Name, cardId);
+                        updateResult = UpdateProcessingResult.Empty;
+                    }
                 }
 
                 // 6d-ii-b. If update processing produced estimates (e.g., generate_tasks step),
@@ -737,20 +922,56 @@ public sealed partial class AgentRunner(
                         CacheReadTokens: lastResult.Usage?.CacheReadTokens,
                         CacheCreationTokens: lastResult.Usage?.CacheCreationTokens,
                         FastPathHit: stepFastPathHit,
-                        StructurerFallbackUsed: lastResult.StructurerFallbackUsed);
+                        StructurerFallbackUsed: lastResult.StructurerFallbackUsed,
+                        // Rerun redesign cache columns. input_hash is captured
+                        // whenever the cache gate ran (hit OR miss) so future
+                        // runs can match against this row. section_output_hash
+                        // is set on Section-using steps and on cache hits;
+                        // legacy steps that don't manage sections leave it null.
+                        InputHash: cacheResult?.CurrentInputHash,
+                        SectionOutputHash: sectionOutputHash,
+                        ExecutionKind: cacheHit ? "cache_hit" : "full_run",
+                        SourceRunId: cacheHit ? cacheResult!.Source!.RunId : null,
+                        SourceStepResultId: cacheHit ? cacheResult!.Source!.Id : null,
+                        OutputSummary: cacheHit ? cacheResult!.Source!.OutputSummary : null);
                     await SafeDbCallAsync(() => runStore.SaveStepResultAsync(stepRecord, cancellationToken));
                 }
                 await SafeDbCallAsync(() => runStore.UpdateRunProgressAsync(runId, stepIndex + 1, cancellationToken));
 
-                // 6e. Upsert step-specific comment (augmented with update file summary if applicable)
-                // Build a per-step prefix so the comment header attributes the actual role that ran,
-                // rather than always reporting the first step's role for a multi-step state.
+                // 6e. Step comment.
+                // Cache hits post a kind:cache_hit aiboard-log comment via
+                // append (chronological log entry), so the operator can see
+                // every cache decision in the timeline. Full-run steps post
+                // the legacy agent-step upsert (preserved during the rerun
+                // redesign migration; legacy markers continue to classify as
+                // agent-generated for the hash builder).
                 var stepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role, stepRole.Provider, stepRole.Model);
-                var stepMarker = $"<!-- agent-step:{step.Name} -->";
-                var stepComment = $"{stepPrefix}\n\n**Step: {step.Name}**\n\n{FormatComment(lastResult, includeConversationLog: runStore is NullRunStore)}";
-                if (updateResult.HasUpdates)
-                    stepComment += FormatUpdateSummary(updateResult);
-                await boardClient.UpsertAgentCommentAsync(cardId, stepComment, stepMarker, cancellationToken);
+                if (cacheHit)
+                {
+                    var src = cacheResult!.Source!;
+                    var cacheMarker = AiboardLogMarker.Build(
+                        AiboardLogMarker.KindCacheHit,
+                        new[]
+                        {
+                            KeyValuePair.Create("state", state.Name),
+                            KeyValuePair.Create("step", step.Name),
+                            KeyValuePair.Create("source_run", src.RunId),
+                        });
+                    var cacheBody =
+                        $"{cacheMarker}\n\n{stepPrefix}\n\n" +
+                        $"**Step: {step.Name}** — cache hit\n\n" +
+                        $"Skipped: inputs unchanged since run `{src.RunId}` (completed " +
+                        $"{src.CompletedAtUtc.UtcDateTime:yyyy-MM-dd HH:mm} UTC). Prior result reused.";
+                    await boardClient.AppendAgentCommentAsync(cardId, cacheBody, cancellationToken);
+                }
+                else
+                {
+                    var stepMarker = $"<!-- agent-step:{step.Name} -->";
+                    var stepComment = $"{stepPrefix}\n\n**Step: {step.Name}**\n\n{FormatComment(lastResult, includeConversationLog: runStore is NullRunStore)}";
+                    if (updateResult.HasUpdates)
+                        stepComment += FormatUpdateSummary(updateResult);
+                    await boardClient.UpsertAgentCommentAsync(cardId, stepComment, stepMarker, cancellationToken);
+                }
 
                 // 6e-ii. Refresh comments file so the next step sees this step's output
                 comments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
@@ -804,10 +1025,17 @@ public sealed partial class AgentRunner(
                     cardId);
             }
 
-            // 7. Run gate check if configured
+            // 7. Run gate check if configured.
+            // Diff base (rerun redesign Problem 3): prefer state_entry_canonical_sha
+            // (cumulative work across runs in this state) over runStartCanonicalSha
+            // (this run only). On first entry to a state, both values are equal so
+            // there's no behavioural change. On a re-run, the gate sees committed
+            // work from prior runs that runStartCanonicalSha would have hidden
+            // behind an empty HEAD diff.
+            var gateDiffBase = stateEntrySha ?? runStartCanonicalSha;
             var gateCheckResult = await RunGateCheckAsync(
                 session, state, lastResult!, worktreePath, targetCard, cardId, runId,
-                runStartCanonicalSha, allCreatedTickets, allUnrecognizedFiles, cancellationToken);
+                gateDiffBase, allCreatedTickets, allUnrecognizedFiles, cancellationToken);
 
             if (gateCheckResult.BlockingResult is not null)
             {
