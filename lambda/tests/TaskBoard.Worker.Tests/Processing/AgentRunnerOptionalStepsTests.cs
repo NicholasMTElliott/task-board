@@ -84,11 +84,12 @@ public class AgentRunnerOptionalStepsTests : IDisposable
         await _boardClient.Received().MoveCardToColumnAsync(
             TargetCardId, "list-done", Arg.Any<CancellationToken>());
 
-        // Optional step comment posted with optional: marker
-        await _boardClient.Received().UpsertAgentCommentAsync(
+        // Optional step comment posted via the new aiboard-log Append path
+        await _boardClient.Received().AppendAgentCommentAsync(
             TargetCardId,
-            Arg.Is<string>(s => s.Contains("Optional Step: security_audit")),
-            Arg.Is<string>(s => s.Contains("agent-step:optional:security_audit")),
+            Arg.Is<string>(s => s.Contains("Optional Step: security_audit")
+                && s.Contains("aiboard-log") && s.Contains("kind:optional")
+                && s.Contains("step:security_audit")),
             Arg.Any<CancellationToken>());
     }
 
@@ -467,11 +468,12 @@ public class AgentRunnerOptionalStepsTests : IDisposable
         await _boardClient.Received().MoveCardToColumnAsync(
             TargetCardId, "list-done", Arg.Any<CancellationToken>());
 
-        // Optional step comment with correct marker
-        await _boardClient.Received().UpsertAgentCommentAsync(
+        // Optional step comment with the new aiboard-log Append marker
+        await _boardClient.Received().AppendAgentCommentAsync(
             TargetCardId,
-            Arg.Is<string>(s => s.Contains("Optional Step: security_audit")),
-            Arg.Is<string>(s => s == "<!-- agent-step:optional:security_audit -->"),
+            Arg.Is<string>(s => s.Contains("Optional Step: security_audit")
+                && s.Contains("aiboard-log") && s.Contains("kind:optional")
+                && s.Contains("step:security_audit")),
             Arg.Any<CancellationToken>());
     }
 

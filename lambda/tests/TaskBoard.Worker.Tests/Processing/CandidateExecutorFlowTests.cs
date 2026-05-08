@@ -150,6 +150,138 @@ public class CandidateExecutorFlowTests : IDisposable
         Assert.All(candidateRows, r => Assert.Null(r.EvaluatorPromptChars));
     }
 
+    // ── Evaluator-commits-winner section_update ──────────────────────────────
+
+    [Fact]
+    public async Task EvaluatorCommitsWinner_PropagatesWinnerSection_NotEvaluatorSection()
+    {
+        // Rerun-redesign Problem 2: "the evaluator commits the winner's
+        // section_update on the group's behalf." Mechanically, the SlotResult
+        // returned by CandidateExecutor must carry the WINNER candidate's
+        // Section field — not the evaluator's. AgentRunner's DescriptionWriter
+        // wiring then applies the winner's section update to the card.
+        //
+        // We tell the evaluator to set strategy=leave (per the prompt
+        // contract); without this fix, the evaluator's leave Section would
+        // propagate and the winner's replace would be silently discarded.
+        var winnerSection = new SectionUpdate(
+            Strategy: SectionUpdateStrategy.Replace,
+            Content: "winner-content (qwen)");
+        var loserSection = new SectionUpdate(
+            Strategy: SectionUpdateStrategy.Replace,
+            Content: "loser-content (claude)");
+        var evaluatorSection = new SectionUpdate(
+            Strategy: SectionUpdateStrategy.Leave);
+
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = new ScriptedExecutor(
+                AgentOutcome.COMPLETE, "Claude impl", section: loserSection),
+            ["docker-opencode"]   = new ScriptedExecutor(
+                AgentOutcome.COMPLETE, "Qwen impl", section: winnerSection),
+            ["claude-cli"] = new ScriptedExecutor(
+                AgentOutcome.COMPLETE,
+                """
+                Qwen wins on cleanliness.
+                ```json
+                {"outcome":"COMPLETE","winner_index":1,"scores":[
+                  {"index":0,"score":6,"reasoning":"verbose"},
+                  {"index":1,"score":8,"reasoning":"clean"}
+                ]}
+                ```
+                """,
+                section: evaluatorSection),
+        };
+        var resolver = new MapResolver(byProvider);
+        var candidateExecutor = new CandidateExecutor(
+            _git, resolver, _runStore, _boardClient,
+            NullLogger<CandidateExecutor>.Instance);
+
+        var request = NewRequest(
+            stepName: "create_design",
+            providers: ["docker-claude-cli", "docker-opencode"]);
+
+        var result = await candidateExecutor.ExecuteCandidateGroupAsync(
+            request, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+        Assert.NotNull(result.Section);
+        // The decisive assertion: the propagated Section is the WINNER's, not
+        // the evaluator's leave nor the loser's replace.
+        Assert.Equal(SectionUpdateStrategy.Replace, result.Section!.Strategy);
+        Assert.Equal("winner-content (qwen)", result.Section.Content);
+    }
+
+    [Fact]
+    public async Task SingleCandidateNoEvaluator_PropagatesCandidateSection()
+    {
+        // The single-candidate-no-evaluator slot path also goes through
+        // PromoteAndFinalizeWinnerAsync. Ensure the candidate's Section
+        // propagates as-is — this is the no-op-by-equality case (the fix's
+        // substitution is `with { Section = winner.AgentResult.Section }`,
+        // and here the winner's result is already the surfaced result).
+        var winnerSection = new SectionUpdate(
+            Strategy: SectionUpdateStrategy.Replace,
+            Content: "single-candidate-content");
+
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = new ScriptedExecutor(
+                AgentOutcome.COMPLETE, "single impl", section: winnerSection),
+        };
+        var resolver = new MapResolver(byProvider);
+        var candidateExecutor = new CandidateExecutor(
+            _git, resolver, _runStore, _boardClient,
+            NullLogger<CandidateExecutor>.Instance);
+
+        // Build a single-candidate slot WITH no evaluator.
+        var systemPromptFile = Path.Combine(_repoRoot, "system.md");
+        File.WriteAllText(systemPromptFile, "# system");
+        var step = new WorkflowStep(
+            Name: "create_design",
+            Role: "implementer",
+            TaskPromptFile: null,
+            TaskPrompt: "Implement the thing.",
+            Slots: new List<SlotConfig>
+            {
+                new SlotConfig(
+                    Candidates: new List<CandidateOverride> { new("docker-claude-cli") },
+                    Evaluator: null),
+            });
+
+        var request = new CandidateGroupRequest(
+            RunId: "run-test-1",
+            CardId: "1",
+            CardTitle: "Test card",
+            StateName: "Implementing",
+            StepIndex: 0,
+            Step: step,
+            Role: new WorkflowRole(
+                Model: "claude-sonnet-4-6",
+                SystemPrompt: "you are an implementer",
+                Sections: []),
+            WorkflowRoles: new Dictionary<string, WorkflowRole>
+            {
+                ["implementer"] = new("claude-sonnet-4-6", "sys", []),
+            },
+            StateProviderParams: null,
+            TaskPrompt: "Implement the thing.",
+            SystemPromptFilePath: systemPromptFile,
+            WorktreePath: _canonicalWorktree,
+            RepoPath: _repoRoot,
+            GitBehavior: "commit_and_push",
+            CommentsFilePath: null,
+            PromptBaseDirectory: null);
+
+        var result = await candidateExecutor.ExecuteCandidateGroupAsync(
+            request, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+        Assert.NotNull(result.Section);
+        Assert.Equal(SectionUpdateStrategy.Replace, result.Section!.Strategy);
+        Assert.Equal("single-candidate-content", result.Section.Content);
+    }
+
     // ── Cleanup pinning ──────────────────────────────────────────────────────
 
     [Fact]
@@ -977,11 +1109,14 @@ public class CandidateExecutorFlowTests : IDisposable
     /// marker file into the worktree so the test can confirm it ran in the right place.
     /// Optional <paramref name="aiboardWrites"/> lets a discard-mode test populate
     /// <c>.aiboard/tasks/</c> + <c>.aiboard/updates/</c> so file-based winner
-    /// promotion has something to copy.</summary>
+    /// promotion has something to copy. Optional <paramref name="section"/>
+    /// surfaces a SectionUpdate on the AgentResult — used to lock in
+    /// evaluator-commits-winner-section semantics.</summary>
     private sealed class ScriptedExecutor(
         AgentOutcome outcome,
         string detail,
-        IReadOnlyDictionary<string, string>? aiboardWrites = null) : IAgentExecutor
+        IReadOnlyDictionary<string, string>? aiboardWrites = null,
+        SectionUpdate? section = null) : IAgentExecutor
     {
         public Task<AgentResult> ExecuteAsync(
             AgentExecutionContext context, CancellationToken cancellationToken)
@@ -1002,7 +1137,7 @@ public class CandidateExecutorFlowTests : IDisposable
                 }
             }
 
-            return Task.FromResult(new AgentResult(outcome, detail));
+            return Task.FromResult(new AgentResult(outcome, detail, Section: section));
         }
     }
 

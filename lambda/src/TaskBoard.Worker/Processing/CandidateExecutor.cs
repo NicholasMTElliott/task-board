@@ -45,7 +45,12 @@ public sealed class CandidateExecutor(
     ILogger<CandidateExecutor> logger,
     RerunPreambleBuilder? rerunPreambleBuilder = null,
     IResourcePool? resourcePool = null,
-    AgentIdentity? agentIdentity = null)
+    AgentIdentity? agentIdentity = null,
+    // Rerun redesign Problem 2: route per-candidate audit comments through the
+    // comment router (kind:candidate → append) when wired. When null, falls back
+    // to legacy upsert with the per-candidate `agent-step:{step}:cand-N:{provider}`
+    // marker so existing tests continue to pass without DI changes.
+    ICommentRouter? commentRouter = null)
 {
     /// <summary>
     /// Backward-compatible single-slot entry. Treats the request's step as a
@@ -494,13 +499,31 @@ public sealed class CandidateExecutor(
         await PostCandidateCommentsAsync(
             request, step.Name, slotIndex, totalSlots, executions, evaluatorResultForReturn, verdict, cancellationToken);
 
+        // Evaluator-commits-winner-section: the doc says "the evaluator commits
+        // the winner's section_update on the group's behalf" — meaning the
+        // winning candidate's Section should be the one applied to the card,
+        // not the evaluator's own (we instruct the evaluator to set
+        // strategy=leave). Substitute the winner's Section into the result that
+        // propagates up to AgentRunner.DescriptionWriter so the winner's
+        // section_update lands in the managed description on Won.
+        //
+        // For the single-candidate-no-evaluator path, evaluatorResultForReturn
+        // already IS the candidate's own AgentResult, so its Section is already
+        // the winner's — the rewrite is a no-op-by-equality. For the
+        // multi-candidate path, evaluatorResultForReturn is the evaluator's
+        // result; this is where the substitution actually matters.
+        var resultWithWinnerSection = evaluatorResultForReturn with
+        {
+            Section = winner.AgentResult.Section,
+        };
+
         // Slot outcome derives from the WINNER's outcome, not the evaluator's.
         // Evaluator says COMPLETE = "I picked a winner"; the winner itself can
         // still be NEEDS_INFO from the candidate-agent's perspective. The user
         // chose: NEEDS_INFO from a winning slot propagates up — no fallback.
         return winner.AgentResult.Outcome switch
         {
-            AgentOutcome.COMPLETE => new SlotResult(SlotOutcome.Won, evaluatorResultForReturn),
+            AgentOutcome.COMPLETE => new SlotResult(SlotOutcome.Won, resultWithWinnerSection),
             AgentOutcome.NEEDS_INFO => new SlotResult(SlotOutcome.NeedsInfo, winner.AgentResult),
             _ => new SlotResult(SlotOutcome.Failed, winner.AgentResult),
         };
@@ -847,7 +870,8 @@ public sealed class CandidateExecutor(
             OutputTokens: result.Usage?.OutputTokens,
             CacheReadTokens: result.Usage?.CacheReadTokens,
             CacheCreationTokens: result.Usage?.CacheCreationTokens,
-            StructurerFallbackUsed: result.StructurerFallbackUsed);
+            StructurerFallbackUsed: result.StructurerFallbackUsed,
+            SectionUpdateJson: result.SectionUpdateJson);
 
         try
         {
@@ -1188,7 +1212,12 @@ public sealed class CandidateExecutor(
             // counts push the evaluator toward context-truncation territory before
             // the verdict silently degrades. evaluatorTaskPrompt is the entire
             // prompt body (rubric + per-candidate diffs / artifacts).
-            EvaluatorPromptChars: evaluatorTaskPrompt.Length);
+            EvaluatorPromptChars: evaluatorTaskPrompt.Length,
+            // Persist the evaluator's own section_update directive (typically
+            // strategy=leave) for replay/debugging. The orchestrator substitutes
+            // the winner's section into the propagated AgentResult; this column
+            // captures what the evaluator actually emitted.
+            SectionUpdateJson: evaluatorResult.SectionUpdateJson);
 
         try
         {
@@ -1837,8 +1866,34 @@ public sealed class CandidateExecutor(
 
             try
             {
-                await boardClient.UpsertAgentCommentAsync(
-                    request.CardId, sb.ToString(), marker, cancellationToken);
+                if (commentRouter is not null)
+                {
+                    // kind:candidate → append (per-candidate chronological log).
+                    var fields = new List<KeyValuePair<string, string>>
+                    {
+                        KeyValuePair.Create("state", request.StateName),
+                        KeyValuePair.Create("step", stepName),
+                    };
+                    if (totalSlots > 1)
+                        fields.Add(KeyValuePair.Create("slot",
+                            slotIndex.ToString(CultureInfo.InvariantCulture)));
+                    fields.Add(KeyValuePair.Create("candidate",
+                        i.ToString(CultureInfo.InvariantCulture)));
+                    fields.Add(KeyValuePair.Create("provider", e.Provider));
+                    fields.Add(KeyValuePair.Create("run", request.RunId));
+                    fields.Add(KeyValuePair.Create("outcome", e.AgentResult.Outcome.ToString()));
+
+                    var newMarker = AiboardLogMarker.Build(
+                        AiboardLogMarker.KindCandidate, fields);
+                    await commentRouter.PostAsync(
+                        request.CardId, AiboardLogMarker.KindCandidate,
+                        sb.ToString(), newMarker, cancellationToken);
+                }
+                else
+                {
+                    await boardClient.UpsertAgentCommentAsync(
+                        request.CardId, sb.ToString(), marker, cancellationToken);
+                }
             }
             catch (Exception ex)
             {

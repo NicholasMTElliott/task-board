@@ -53,13 +53,17 @@ internal static class AgentOutputParser
                 // for updating its managed step section. Null on legacy roles or
                 // when the agent omitted the field; the orchestrator's writer is
                 // mechanical and a null result simply means "no description change".
-                var section = ParseSectionUpdate(structured);
+                // The raw JSON text is captured alongside the parsed object so it
+                // can be persisted into step_result.section_update_json (V24)
+                // for replay/debugging.
+                var section = ParseSectionUpdate(structured, out var sectionRawJson);
 
                 return new AgentResult(
                     outcome, detail, questions, null, requestedSteps, estimate,
                     winnerIndex, scores, usage,
                     StructurerFallbackUsed: null,
-                    Section: section);
+                    Section: section,
+                    SectionUpdateJson: sectionRawJson);
             }
 
             // Try result field
@@ -126,7 +130,20 @@ internal static class AgentOutputParser
     /// placeholder coercion happens in the description writer, not here.
     /// </summary>
     internal static SectionUpdate? ParseSectionUpdate(JsonElement structured)
+        => ParseSectionUpdate(structured, out _);
+
+    /// <summary>
+    /// Same as <see cref="ParseSectionUpdate(JsonElement)"/> but also returns
+    /// the raw <c>section_update</c> JSON text via <paramref name="rawJson"/>.
+    /// The raw form is persisted to <c>step_result.section_update_json</c>
+    /// (V24) for replay and debugging. <paramref name="rawJson"/> is only set
+    /// when the field exists and parses to a valid <see cref="SectionUpdate"/>;
+    /// callers can treat null as "no directive to record."
+    /// </summary>
+    internal static SectionUpdate? ParseSectionUpdate(
+        JsonElement structured, out string? rawJson)
     {
+        rawJson = null;
         if (!structured.TryGetProperty("section_update", out var el)
             || el.ValueKind != JsonValueKind.Object)
             return null;
@@ -149,8 +166,27 @@ internal static class AgentOutputParser
         if (el.TryGetProperty("content", out var cEl) && cEl.ValueKind == JsonValueKind.String)
             content = cEl.GetString();
 
+        // Enforce content non-empty for non-leave strategies. The OpenAI schema
+        // requires `content` in `required` (with type ["string","null"]) and
+        // many providers treat the leave-strategy fall-through as ambiguous —
+        // a missing/empty content under `replace` / `append_with_revision_notes`
+        // would silently coerce to the FirstRunLeavePlaceholder in
+        // DescriptionWriter, turning a malformed agent output into bogus
+        // durable state. Reject as malformed instead so the cache treats this
+        // step as drifted and a re-run produces a real section.
+        if (strategy.Value != SectionUpdateStrategy.Leave
+            && string.IsNullOrWhiteSpace(content))
+        {
+            return null;
+        }
+
         var openQuestions = ReadStringArray(el, "open_questions");
         var resolvedDecisions = ReadStringArray(el, "resolved_decisions");
+
+        // Capture the raw JSON for replay/debugging persistence (V24
+        // section_update_json column). GetRawText preserves whatever the agent
+        // sent, including any extra fields beyond the typed schema.
+        rawJson = el.GetRawText();
 
         return new SectionUpdate(strategy.Value, content, openQuestions, resolvedDecisions);
     }

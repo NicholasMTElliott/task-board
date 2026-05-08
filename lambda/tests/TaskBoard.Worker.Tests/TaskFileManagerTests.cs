@@ -272,14 +272,21 @@ public class TaskFileManagerTests : IDisposable
     // --- Comment classification and file structure tests ---
 
     [Theory]
-    [InlineData("<!-- agent-step:create_design -->some content", true)]
-    [InlineData("<!-- agent-step:optional:security_audit -->content", true)]
-    [InlineData("<!-- agent-run:abc123 -->content", true)]
-    [InlineData("<!-- gate-check:Ready for Design -->content", true)]
-    [InlineData("<!-- merge-run:xyz789 -->content", true)]
-    [InlineData("<!-- completion-check:completion-20260407-120000-abcd -->content", true)]
-    [InlineData("<!-- agent-created-ticket:fix-auth-race -->content", true)]
-    [InlineData("<!-- agent-cross-comment:42:create_design -->content", true)]
+    // New aiboard-log shape (the only marker the new system emits — rerun
+    // redesign Problem 2 / Finding 6).
+    [InlineData("<!-- aiboard-log kind:step state:Designing step:create_design -->content", true)]
+    [InlineData("<!-- aiboard-log kind:gate state:Ready for Design -->content", true)]
+    [InlineData("<!-- aiboard-log kind:cache_hit step:create_design -->Skipped: inputs unchanged.", true)]
+    [InlineData("<!-- aiboard-log kind:dependency_blocked card:42 -->blocked", true)]
+    // Legacy markers are no longer recognised: existing development cards
+    // are recreated; legacy emit sites have been removed.
+    [InlineData("<!-- agent-step:create_design -->some content", false)]
+    [InlineData("<!-- agent-run:abc123 -->content", false)]
+    [InlineData("<!-- gate-check:Ready for Design -->content", false)]
+    [InlineData("<!-- merge-run:xyz789 -->content", false)]
+    [InlineData("<!-- completion-check:completion-20260407-120000-abcd -->content", false)]
+    [InlineData("<!-- agent-created-ticket:fix-auth-race -->content", false)]
+    [InlineData("<!-- agent-cross-comment:42:create_design -->content", false)]
     [InlineData("Just a regular human comment", false)]
     [InlineData("<!-- some-other-marker -->content", false)]
     [InlineData("", false)]
@@ -293,11 +300,11 @@ public class TaskFileManagerTests : IDisposable
     {
         var comments = new List<CardComment>
         {
-            new("user1", "<!-- agent-step:design -->**senior_engineer in Designing:**\n\nAgent output",
+            new("user1", "<!-- aiboard-log kind:step step:design -->**senior_engineer in Designing:**\n\nAgent output",
                 DateTimeOffset.Parse("2026-01-01T09:00:00Z")),
             new("user1", "Please use the new API endpoint instead.",
                 DateTimeOffset.Parse("2026-01-01T10:00:00Z")),
-            new("user1", "<!-- agent-step:implement -->**implementer in Implementing:**\n\nCode written",
+            new("user1", "<!-- aiboard-log kind:step step:implement -->**implementer in Implementing:**\n\nCode written",
                 DateTimeOffset.Parse("2026-01-01T11:00:00Z")),
         };
 
@@ -317,7 +324,7 @@ public class TaskFileManagerTests : IDisposable
         Assert.Contains("Please use the new API endpoint instead.", content);
 
         // Agent markers are stripped
-        Assert.DoesNotContain("<!-- agent-step:", content);
+        Assert.DoesNotContain("<!-- aiboard-log", content);
     }
 
     [Fact]
@@ -358,7 +365,7 @@ public class TaskFileManagerTests : IDisposable
     {
         var comments = new List<CardComment>
         {
-            new("user1", "<!-- agent-step:design -->Agent output only",
+            new("user1", "<!-- aiboard-log kind:step step:design -->Agent output only",
                 DateTimeOffset.Parse("2026-01-01T09:00:00Z")),
         };
 
@@ -377,9 +384,9 @@ public class TaskFileManagerTests : IDisposable
         var comments = new List<CardComment>
         {
             new("user1", "First human comment", DateTimeOffset.Parse("2026-01-01T08:00:00Z")),
-            new("user1", "<!-- agent-step:step1 -->Agent step 1", DateTimeOffset.Parse("2026-01-01T09:00:00Z")),
+            new("user1", "<!-- aiboard-log kind:step step:step1 -->Agent step 1", DateTimeOffset.Parse("2026-01-01T09:00:00Z")),
             new("user1", "Second human comment", DateTimeOffset.Parse("2026-01-01T10:00:00Z")),
-            new("user1", "<!-- agent-step:step2 -->Agent step 2", DateTimeOffset.Parse("2026-01-01T11:00:00Z")),
+            new("user1", "<!-- aiboard-log kind:step step:step2 -->Agent step 2", DateTimeOffset.Parse("2026-01-01T11:00:00Z")),
         };
 
         await _manager.WriteCommentsFileAsync(_tempDir, "card1", "Test", comments, CancellationToken.None);
@@ -403,7 +410,7 @@ public class TaskFileManagerTests : IDisposable
     {
         var comments = new List<CardComment>
         {
-            new("user1", "<!-- agent-step:x -->", DateTimeOffset.Parse("2026-01-01T09:00:00Z")),
+            new("user1", "<!-- aiboard-log kind:step step:x -->", DateTimeOffset.Parse("2026-01-01T09:00:00Z")),
         };
 
         await _manager.WriteCommentsFileAsync(_tempDir, "card1", "Test", comments, CancellationToken.None);
@@ -414,7 +421,7 @@ public class TaskFileManagerTests : IDisposable
     [Fact]
     public async Task WriteCommentsFileAsync_AgentComment_StripsConversationLog()
     {
-        var agentBody = "<!-- agent-step:design -->**senior_engineer in Designing:**\n\n" +
+        var agentBody = "<!-- aiboard-log kind:step step:design -->**senior_engineer in Designing:**\n\n" +
             "## Agent Complete\n\nDesign output here.\n\n" +
             "<details>\n<summary>Agent conversation log</summary>\n\n" +
             "Let me read the file...\n---\nAnalyzed and wrote the design.\n\n</details>";

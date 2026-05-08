@@ -340,9 +340,9 @@ public class AgentRunnerTests : IDisposable
 
         await _runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
 
-        // Verify comments were posted (step comment + run-level comment)
-        await _trelloClient.Received().UpsertAgentCommentAsync(
-            TargetCardId, Arg.Is<string>(s => s.Contains("Agent Complete")), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        // Verify the step comment was posted via the rerun-redesign Append path
+        await _trelloClient.Received().AppendAgentCommentAsync(
+            TargetCardId, Arg.Is<string>(s => s.Contains("Agent Complete")), Arg.Any<CancellationToken>());
 
         // Verify card was moved to COMPLETE column
         await _trelloClient.Received().MoveCardToColumnAsync(
@@ -764,16 +764,19 @@ public class AgentRunnerTests : IDisposable
 
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
 
-        // Should have exactly 2 step comments; no run-level comment for discard states (gitNote is null)
+        // Should have exactly 2 step comments via the rerun-redesign Append
+        // path; no run-level comment for discard states (gitNote is null).
+        // The aiboard-log marker is the first line of the body in the new
+        // shape (kind:step), not a separate marker arg as in the legacy upsert.
         var commentCalls = _trelloClient.ReceivedCalls()
-            .Where(c => c.GetMethodInfo().Name == "UpsertAgentCommentAsync")
+            .Where(c => c.GetMethodInfo().Name == "AppendAgentCommentAsync")
             .ToList();
         Assert.Equal(2, commentCalls.Count);
 
-        // Verify step markers are used
-        var markers = commentCalls.Select(c => (string)c.GetArguments()[2]!).ToList();
-        Assert.Contains(markers, m => m.Contains("agent-step:step_one"));
-        Assert.Contains(markers, m => m.Contains("agent-step:step_two"));
+        // Verify each comment carries the new aiboard-log step marker
+        var bodies = commentCalls.Select(c => (string)c.GetArguments()[1]!).ToList();
+        Assert.Contains(bodies, b => b.Contains("aiboard-log") && b.Contains("step:step_one"));
+        Assert.Contains(bodies, b => b.Contains("aiboard-log") && b.Contains("step:step_two"));
 
         // Card should be moved to COMPLETE column
         await _trelloClient.Received().MoveCardToColumnAsync(
@@ -941,17 +944,18 @@ public class AgentRunnerTests : IDisposable
 
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
 
+        // Rerun redesign: comments now flow through Append with the
+        // aiboard-log marker on the body's first line (no separate marker arg).
         var commentCalls = _trelloClient.ReceivedCalls()
-            .Where(c => c.GetMethodInfo().Name == "UpsertAgentCommentAsync")
+            .Where(c => c.GetMethodInfo().Name == "AppendAgentCommentAsync")
             .Select(c => new
             {
                 Body = (string)c.GetArguments()[1]!,
-                Marker = (string)c.GetArguments()[2]!,
             })
             .ToList();
 
-        var stepOneComment = commentCalls.Single(c => c.Marker.Contains("agent-step:review_related"));
-        var stepTwoComment = commentCalls.Single(c => c.Marker.Contains("agent-step:create_design"));
+        var stepOneComment = commentCalls.Single(c => c.Body.Contains("step:review_related"));
+        var stepTwoComment = commentCalls.Single(c => c.Body.Contains("step:create_design"));
 
         Assert.Contains("**board_analyst in", stepOneComment.Body);
         Assert.DoesNotContain("**senior_engineer in", stepOneComment.Body);
@@ -1148,10 +1152,9 @@ public class AgentRunnerTests : IDisposable
         await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
 
         // Step comments should not contain "conversation log"
-        await _trelloClient.Received().UpsertAgentCommentAsync(
+        await _trelloClient.Received().AppendAgentCommentAsync(
             TargetCardId,
             Arg.Is<string>(c => !c.Contains("Agent conversation log")),
-            Arg.Any<string>(),
             Arg.Any<CancellationToken>());
     }
 

@@ -107,10 +107,9 @@ public class AgentRunnerDesignTests : IDisposable
         Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
 
         // Comment should contain questions
-        await _trelloClient.Received(1).UpsertAgentCommentAsync(
+        await _trelloClient.Received(1).AppendAgentCommentAsync(
             TargetCardId,
             Arg.Is<string>(s => s.Contains("Questions")),
-            Arg.Any<string>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -129,10 +128,9 @@ public class AgentRunnerDesignTests : IDisposable
         Assert.Equal(AgentOutcome.ERROR, result.Outcome);
 
         // Comment should contain error info
-        await _trelloClient.Received(1).UpsertAgentCommentAsync(
+        await _trelloClient.Received(1).AppendAgentCommentAsync(
             TargetCardId,
             Arg.Is<string>(s => s.Contains("Agent Error")),
-            Arg.Any<string>(),
             Arg.Any<CancellationToken>());
     }
 

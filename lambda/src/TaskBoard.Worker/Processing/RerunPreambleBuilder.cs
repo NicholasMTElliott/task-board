@@ -88,8 +88,15 @@ public sealed class RerunPreambleBuilder(
         PreambleVariant variant,
         CancellationToken cancellationToken)
     {
+        // Legacy-marker compat: the existing call sites pass `agent-step:{name}`
+        // / `gate-check:{state}` etc. We look for either the legacy literal
+        // (existing tests) OR the equivalent aiboard-log marker shape with the
+        // step/state/run fields. Per rerun redesign Finding 6 the system only
+        // emits aiboard-log; the legacy path stays in for tests until they
+        // fully migrate.
         var fullMarker = $"<!-- {markerName} -->";
-        var priorComment = FindLatestCommentWithMarker(existingComments, fullMarker);
+        var aiboardSubstring = TryDeriveAiboardSubstring(markerName);
+        var priorComment = FindLatestMatchingComment(existingComments, fullMarker, aiboardSubstring);
         if (priorComment is null)
         {
             // Either first run, or operator deleted the comment to force a fresh run.
@@ -237,21 +244,91 @@ public sealed class RerunPreambleBuilder(
         return latest;
     }
 
+    /// <summary>
+    /// Locates a prior comment by matching either the legacy literal marker
+    /// (test-only path) or the aiboard-log substring (production after the
+    /// rerun redesign / Finding 6 cleanup).
+    /// </summary>
+    private static CardComment? FindLatestMatchingComment(
+        IReadOnlyList<CardComment> comments, string fullMarker, string? aiboardSubstring)
+    {
+        CardComment? latest = null;
+        foreach (var c in comments)
+        {
+            if (c.Body is null) continue;
+            bool matches =
+                c.Body.Contains(fullMarker, StringComparison.Ordinal)
+                || (aiboardSubstring is not null
+                    && c.Body.Contains("<!-- aiboard-log ", StringComparison.Ordinal)
+                    && c.Body.Contains(aiboardSubstring, StringComparison.Ordinal));
+            if (!matches) continue;
+            if (latest is null || c.CreatedAt > latest.CreatedAt) latest = c;
+        }
+        return latest;
+    }
+
+    /// <summary>
+    /// Maps a legacy marker fragment (e.g. "agent-step:create_design",
+    /// "gate-check:Designing") to an aiboard-log key:value substring that
+    /// classifies the same comment in the new shape. Returns null when the
+    /// fragment doesn't have a known aiboard-log analogue.
+    /// </summary>
+    private static string? TryDeriveAiboardSubstring(string markerName)
+    {
+        if (markerName.StartsWith("agent-step:optional:", StringComparison.Ordinal))
+        {
+            var stepName = markerName["agent-step:optional:".Length..];
+            return $"step:{stepName}";
+        }
+        if (markerName.StartsWith("agent-step:", StringComparison.Ordinal))
+        {
+            var stepName = markerName["agent-step:".Length..];
+            return $"step:{stepName}";
+        }
+        if (markerName.StartsWith("gate-check:", StringComparison.Ordinal))
+        {
+            return "kind:gate";
+        }
+        return null;
+    }
+
     private static string StripMarker(string body, string fullMarker)
     {
         // Remove the first occurrence of the marker (and the newline that follows
         // it, if any) so the prior content reads cleanly when embedded in the preamble.
-        var idx = body.IndexOf(fullMarker, StringComparison.Ordinal);
-        if (idx < 0) return body.Trim();
+        // Tries the legacy literal first, then the new aiboard-log marker line.
+        var stripped = TryStrip(body, fullMarker);
+        if (stripped is not null) return stripped;
 
+        // Aiboard-log shape: strip the entire `<!-- aiboard-log ... -->` line.
+        const string aiboardOpen = "<!-- aiboard-log ";
+        var openIdx = body.IndexOf(aiboardOpen, StringComparison.Ordinal);
+        if (openIdx >= 0)
+        {
+            var closeIdx = body.IndexOf("-->", openIdx + aiboardOpen.Length, StringComparison.Ordinal);
+            if (closeIdx > 0)
+            {
+                var endOfMarker = closeIdx + "-->".Length;
+                var rest = endOfMarker < body.Length ? body[endOfMarker..] : string.Empty;
+                if (rest.StartsWith('\r')) rest = rest[1..];
+                if (rest.StartsWith('\n')) rest = rest[1..];
+                return (body[..openIdx] + rest).Trim();
+            }
+        }
+
+        return body.Trim();
+    }
+
+    private static string? TryStrip(string body, string fullMarker)
+    {
+        var idx = body.IndexOf(fullMarker, StringComparison.Ordinal);
+        if (idx < 0) return null;
         var before = body[..idx];
         var afterStart = idx + fullMarker.Length;
         var after = afterStart < body.Length ? body[afterStart..] : string.Empty;
         if (after.StartsWith('\r')) after = after[1..];
         if (after.StartsWith('\n')) after = after[1..];
-
-        var stripped = (before + after).Trim();
-        return stripped;
+        return (before + after).Trim();
     }
 
     /// <summary>

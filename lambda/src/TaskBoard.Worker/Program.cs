@@ -610,6 +610,13 @@ builder.Services.AddSingleton(sp =>
 
 builder.Services.AddSingleton<UpdateFileProcessor>();
 builder.Services.AddSingleton<RerunPreambleBuilder>();
+// Rerun redesign Problem 2: per-kind comment routing (append / delete_and_repost / upsert).
+// Optional dep on every emit site — when not registered, sites fall back to legacy
+// upsert with the legacy marker (e.g. <!-- agent-step:create_design -->). When
+// registered, sites emit aiboard-log markers and route by kind via the workflow
+// config's rerun.comments.retentionPolicy block. The Bind(workflowConfig) call
+// runs immediately after the host is built (see below).
+builder.Services.AddSingleton<ICommentRouter, CommentRouter>();
 // Rerun redesign Problem 1: deterministic-skip cache gate. Optional dep on
 // AgentRunner — registering it here turns on the cache check for every
 // single-agent step on every card. Cache misses still pay the executor cost;
@@ -722,6 +729,15 @@ void LogMissingConfig(string requiredKeys)
     }
 
     var config = host.Services.GetRequiredService<WorkflowConfig>();
+
+    // Rerun redesign Problem 2: bind the per-kind retention policy from
+    // workflow config into the comment router. Late-binding via setter avoids
+    // a circular DI registration (router needs config; config registration is
+    // a factory that in turn lazily resolves services). After this call, every
+    // emit site that consults the router gets the per-kind override map; sites
+    // without an override fall through to CommentRouter.DefaultFor(kind).
+    if (host.Services.GetService<ICommentRouter>() is CommentRouter cr)
+        cr.Bind(config);
 
     // ── --unsafe gating ──────────────────────────────────────────────────────
     // Host CLI executors (claude-cli, codex) bypass the Docker filesystem

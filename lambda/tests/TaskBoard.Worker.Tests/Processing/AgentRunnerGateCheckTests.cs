@@ -97,11 +97,11 @@ public class AgentRunnerGateCheckTests : IDisposable
         await _boardClient.Received().MoveCardToColumnAsync(
             TargetCardId, "list-questions", Arg.Any<CancellationToken>());
 
-        // Gate comment posted
-        await _boardClient.Received().UpsertAgentCommentAsync(
+        // Gate comment posted via the new aiboard-log Append path
+        await _boardClient.Received().AppendAgentCommentAsync(
             TargetCardId,
-            Arg.Is<string>(s => s.Contains("Gate Check: Concerns")),
-            Arg.Is<string>(s => s.Contains("gate-check:")),
+            Arg.Is<string>(s => s.Contains("Gate Check: Concerns")
+                && s.Contains("aiboard-log") && s.Contains("kind:gate")),
             Arg.Any<CancellationToken>());
     }
 
@@ -265,11 +265,11 @@ public class AgentRunnerGateCheckTests : IDisposable
         // Pipeline proceeds despite gate failure
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
 
-        // Warning comment posted
-        await _boardClient.Received().UpsertAgentCommentAsync(
+        // Warning comment posted via the new aiboard-log marker shape
+        await _boardClient.Received().AppendAgentCommentAsync(
             TargetCardId,
-            Arg.Is<string>(s => s.Contains("Gate Check Warning") && s.Contains("timed out")),
-            Arg.Is<string>(s => s.Contains("gate-check:")),
+            Arg.Is<string>(s => s.Contains("Gate Check Warning") && s.Contains("timed out")
+                && s.Contains("aiboard-log") && s.Contains("kind:gate")),
             Arg.Any<CancellationToken>());
     }
 
@@ -327,13 +327,13 @@ public class AgentRunnerGateCheckTests : IDisposable
         var runner = CreateRunner(executor, BuildGateCheckConfig("discard"));
         SetupBoardCards(DesignListId);
 
-        // Simulate 2 prior gate failures via existing comments
-        // (must be after SetupBoardCards to override the empty default)
+        // Simulate 2 prior gate failures via existing comments using the
+        // new aiboard-log marker shape (rerun redesign Problem 2 / Finding 6).
         _boardClient.GetCardCommentsAsync(TargetCardId, Arg.Any<CancellationToken>())
             .Returns(new List<CardComment>
             {
-                new("bot", "<!-- gate-check:Design result:ERROR attempt:1 -->\n\nFailed first time", DateTimeOffset.UtcNow.AddHours(-2)),
-                new("bot", "<!-- gate-check:Design result:ERROR attempt:2 -->\n\nFailed second time", DateTimeOffset.UtcNow.AddHours(-1)),
+                new("bot", "<!-- aiboard-log kind:gate state:Design step:gate_check outcome:ERROR attempt:1 -->\n\nFailed first time", DateTimeOffset.UtcNow.AddHours(-2)),
+                new("bot", "<!-- aiboard-log kind:gate state:Design step:gate_check outcome:ERROR attempt:2 -->\n\nFailed second time", DateTimeOffset.UtcNow.AddHours(-1)),
             });
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
@@ -345,11 +345,10 @@ public class AgentRunnerGateCheckTests : IDisposable
         await _boardClient.Received().MoveCardToColumnAsync(
             TargetCardId, "list-questions", Arg.Any<CancellationToken>());
 
-        // Escalation comment posted
-        await _boardClient.Received().UpsertAgentCommentAsync(
+        // Escalation comment posted via the new aiboard-log Append path
+        await _boardClient.Received().AppendAgentCommentAsync(
             TargetCardId,
             Arg.Is<string>(s => s.Contains("Escalated to Human Review")),
-            Arg.Any<string>(),
             Arg.Any<CancellationToken>());
     }
 

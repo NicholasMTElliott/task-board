@@ -394,7 +394,77 @@ public static class WorkflowConfigValidator
         if (validatePolling)
             ValidatePollingConfig(config, errors);
 
+        ValidateRerunConfig(config, errors);
+
         return errors;
+    }
+
+    /// <summary>
+    /// Comment kinds known to the rerun-redesign retention map. Unknown keys in
+    /// <c>rerun.comments.retentionPolicy</c> are surfaced as a soft warning by
+    /// <see cref="Audit"/> so operator typos don't silently fall through to the
+    /// hardcoded default in <see cref="Processing.CommentRouter.DefaultFor"/>.
+    /// </summary>
+    internal static readonly HashSet<string> KnownRerunCommentKinds = new(StringComparer.Ordinal)
+    {
+        "step", "candidate", "evaluator", "gate", "optional", "cache_hit",
+        "dependency_blocked", "completion_progress", "rate_limit_notice",
+        "shutdown_notice", "cross_card_notification",
+        "created_ticket_dedupe",
+    };
+
+    /// <summary>
+    /// Retention policy values accepted by <see cref="Processing.CommentRouter.ResolveRetention"/>.
+    /// Anything else falls through to the hardcoded default and would be
+    /// silently ignored at runtime — promote to a hard error at validation.
+    /// </summary>
+    private static readonly HashSet<string> KnownRerunRetentionPolicies = new(StringComparer.Ordinal)
+    {
+        "append", "delete_and_repost", "upsert",
+    };
+
+    /// <summary>
+    /// Hard errors only — bad values that would silently fall through at runtime.
+    /// Soft warnings (unknown kind keys, etc.) are emitted via <see cref="Audit"/>.
+    /// </summary>
+    private static void ValidateRerunConfig(WorkflowConfig config, List<string> errors)
+    {
+        if (config.Rerun is not { } rerun) return;
+
+        // defaultBranch: null = auto-detect; empty/whitespace string = misconfigured.
+        if (rerun.DefaultBranch is not null && string.IsNullOrWhiteSpace(rerun.DefaultBranch))
+        {
+            errors.Add("rerun.defaultBranch is set to an empty/whitespace string. Use null to auto-detect via 'git symbolic-ref --short refs/remotes/origin/HEAD', or set a non-empty branch name.");
+        }
+
+        // diff.summaryThresholdBytes: must be a positive byte count when set.
+        // The runtime divides on this value, and a non-positive threshold would
+        // make the summary-mode branch fire on every diff (or never).
+        if (rerun.Diff is { SummaryThresholdBytes: { } threshold } && threshold <= 0)
+        {
+            errors.Add($"rerun.diff.summaryThresholdBytes must be a positive byte count; got {threshold}. Defaults to 51200 (50 KB) when omitted.");
+        }
+
+        // comments.retentionPolicy values: typos here silently fall through to
+        // CommentRouter.DefaultFor at runtime (with a Warning log buried in
+        // polling output). Promote to hard error so operators catch typos
+        // pre-flight.
+        if (rerun.Comments is { RetentionPolicy: { Count: > 0 } policy })
+        {
+            foreach (var (kind, raw) in policy)
+            {
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    errors.Add($"rerun.comments.retentionPolicy['{kind}'] is empty. Set to one of: {string.Join(", ", KnownRerunRetentionPolicies)}.");
+                    continue;
+                }
+                var normalised = raw.Trim().ToLowerInvariant();
+                if (!KnownRerunRetentionPolicies.Contains(normalised))
+                {
+                    errors.Add($"rerun.comments.retentionPolicy['{kind}'] = '{raw}' is not a recognised policy. Expected one of: {string.Join(", ", KnownRerunRetentionPolicies)}.");
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -480,7 +550,30 @@ public static class WorkflowConfigValidator
         AuditCodexSandboxDefaults(config, warnings);
         AuditCrossProviderCandidateModels(config, warnings);
         AuditFinalSlotRetries(config, warnings);
+        AuditRerunCommentKinds(config, warnings);
         return warnings;
+    }
+
+    /// <summary>
+    /// Soft warning when <c>rerun.comments.retentionPolicy</c> contains a kind
+    /// key the runtime doesn't recognise. This is one level below
+    /// <see cref="ValidateRerunConfig"/>'s hard errors: typo'd policy values
+    /// silently fall through (hard error), but typo'd kind keys never get
+    /// consulted at all (soft warning — could be a typo or a future kind).
+    /// </summary>
+    private static void AuditRerunCommentKinds(WorkflowConfig config, List<string> warnings)
+    {
+        if (config.Rerun?.Comments?.RetentionPolicy is not { Count: > 0 } policy) return;
+
+        foreach (var kind in policy.Keys)
+        {
+            if (!KnownRerunCommentKinds.Contains(kind))
+            {
+                warnings.Add(
+                    $"rerun.comments.retentionPolicy contains kind '{kind}' which is not a recognised comment kind. " +
+                    $"The override will never apply — emit sites only consult known kinds. Known kinds: {string.Join(", ", KnownRerunCommentKinds.OrderBy(k => k, StringComparer.Ordinal))}.");
+            }
+        }
     }
 
     /// <summary>

@@ -46,7 +46,12 @@ public sealed class DependencyGuard(
     ICardDependencyClient dependencyClient,
     WorkflowConfig workflowConfig,
     IDependencyWaitStore waitStore,
-    ILogger<DependencyGuard> logger)
+    ILogger<DependencyGuard> logger,
+    // Rerun redesign Problem 2: optional router. When wired, the blocked-comment
+    // is posted as kind:dependency_blocked → delete_and_repost so the latest
+    // status is always at the bottom of the chronological log instead of edited
+    // in place. Null falls back to legacy upsert with the BlockedCommentMarker.
+    ICommentRouter? commentRouter = null)
 {
     private const string BlockedCommentMarker = "<!-- agent-dependency-blocked -->";
 
@@ -127,8 +132,21 @@ public sealed class DependencyGuard(
 
         if (recordSideEffects && policy.CommentOnBlocked)
         {
-            await boardClient.UpsertAgentCommentAsync(
-                card.Id, BuildBlockedComment(unresolved), BlockedCommentMarker, ct);
+            var blockedBody = BuildBlockedComment(unresolved);
+            if (commentRouter is not null)
+            {
+                var marker = AiboardLogMarker.Build(
+                    AiboardLogMarker.KindDependencyBlocked,
+                    new[] { KeyValuePair.Create("card", card.Id) });
+                await commentRouter.PostAsync(
+                    card.Id, AiboardLogMarker.KindDependencyBlocked,
+                    blockedBody, marker, ct);
+            }
+            else
+            {
+                await boardClient.UpsertAgentCommentAsync(
+                    card.Id, blockedBody, BlockedCommentMarker, ct);
+            }
         }
 
         if (recordSideEffects)

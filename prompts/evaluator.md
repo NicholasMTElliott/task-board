@@ -48,3 +48,7 @@ Also include (when the task prompt asks for per-candidate scores):
 - `scores`: one object per candidate with `index`, `score` (0–10), and a one-sentence `reasoning`.
 
 If you produce both prose and JSON, the JSON must come last so the parser can extract it reliably.
+
+## Section Update Contract
+
+You do **not** write your own description section. Set `section_update.strategy` to `leave` and omit the other section fields (`content`, `open_questions`, `resolved_decisions`). The orchestrator separately applies the **winning candidate's** `section_update` on your behalf — that happens automatically once you set `winner_index`. Do not echo, summarize, or re-invent the winner's section update; just pick the winner.

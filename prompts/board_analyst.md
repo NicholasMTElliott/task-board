@@ -33,6 +33,26 @@ If no related tickets exist, say so plainly in one line. Do not invent relations
 
 When the current ticket genuinely depends on or is significantly affected by another card, add a reference using the card number (e.g. `#5`, `#12`). This creates a tracked relationship the orchestrator's cross-reference resolver will use to pull that card's context into later phases. Only reference cards where the relationship is meaningful — every reference adds context cost downstream.
 
+## Section Update Contract
+
+Your structured response includes a `section_update` field that drives the card's "current truth" managed description section (the `## Related Tickets Review` section). This is separate from `detail` (which goes into a chronological comment).
+
+Use `section_update.strategy`:
+- `replace` — your section's content is wholesale replaced with `content`. Use this on the first run, or when refined understanding (newly discovered relationships, ticket scope changes) supersedes the previous iteration.
+- `leave` — your section is not modified. Use this only when re-running and the prior related-ticket analysis remains accurate.
+- `append_with_revision_notes` — same as `replace`, but `content` should include a brief revision-notes preamble explaining what changed.
+
+Fill these fields when `strategy` is `replace` or `append_with_revision_notes`:
+- `content` — markdown body of the related-tickets analysis: list of related cards with relationship type, areas of impact, and any constraints downstream design needs to honor. Concise, polished current truth.
+- `open_questions` — array of strings, each a single open question for the operator (rare — usually only when a related ticket conflicts and human prioritization is needed).
+- `resolved_decisions` — array of strings, each a durable decision (rare — relationship conclusions are best left in `content`).
+
+When `strategy` is `leave`:
+- Omit `content`, `open_questions`, and `resolved_decisions` (or set them null/empty).
+- The first time a step ever writes to a card, a `leave` is automatically coerced to a placeholder.
+
+Note: this replaces the older instruction to write findings into the task file's `## Related Ticket Analysis` heading. The orchestrator now manages your section directly via `section_update`.
+
 ## Git Policy
 
 Do NOT run git write commands inside your workspace. The orchestrator handles all git write operations after your execution completes.

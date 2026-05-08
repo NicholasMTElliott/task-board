@@ -46,7 +46,12 @@ public sealed record AgentResult(
     // and resolved_decisions render into HTML-marker-wrapped subsections.
     // Null when the agent didn't supply one (legacy roles, gates, evaluators,
     // or operator-managed flows).
-    SectionUpdate? Section = null);
+    SectionUpdate? Section = null,
+    // Raw JSON text of the agent's <c>section_update</c> object, captured
+    // at parse time via JsonElement.GetRawText. Persisted to V24's
+    // <c>step_result.section_update_json</c> for replay / debugging.
+    // Null when no section_update was supplied or the field was malformed.
+    string? SectionUpdateJson = null);
 
 /// <summary>
 /// Token / cost usage extracted from the CLI's final result event.

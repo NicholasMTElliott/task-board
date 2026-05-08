@@ -90,12 +90,14 @@ public sealed class PgRunStore(
                  selected, quality_score, evaluator_reasoning, slot_index,
                  cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                  fast_path_hit, structurer_fallback_used, evaluator_prompt_chars, winner_regressed,
-                 input_hash, section_output_hash, execution_kind, source_run_id, source_step_result_id, output_summary)
+                 input_hash, section_output_hash, execution_kind, source_run_id, source_step_result_id, output_summary,
+                 section_update_json)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16, $17, $18,
                     $19, $20, $21, $22, $23, $24, $25,
                     $26, $27, $28, $29, $30,
                     $31, $32, $33, $34,
-                    $35, $36, $37, $38, $39, $40)
+                    $35, $36, $37, $38, $39, $40,
+                    $41::jsonb)
             ON CONFLICT (tenant_id, run_id, step_name) DO NOTHING
             """;
         cmd.Parameters.AddWithValue(tenant.Value);
@@ -155,6 +157,14 @@ public sealed class PgRunStore(
         cmd.Parameters.AddWithValue(result.SourceRunId is null ? DBNull.Value : (object)result.SourceRunId);
         cmd.Parameters.AddWithValue(result.SourceStepResultId.HasValue ? (object)result.SourceStepResultId.Value : DBNull.Value);
         cmd.Parameters.AddWithValue(result.OutputSummary is null ? DBNull.Value : (object)result.OutputSummary);
+
+        // V24 section_update_json: raw agent-supplied section_update directive,
+        // serialised as JSON. Bound through an explicit JSONB parameter so
+        // Npgsql doesn't try to infer the type from the .NET string.
+        var sectionUpdateJsonParam = cmd.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Jsonb });
+        sectionUpdateJsonParam.Value = result.SectionUpdateJson is null
+            ? DBNull.Value
+            : (object)result.SectionUpdateJson;
 
         await cmd.ExecuteNonQueryAsync(ct);
 

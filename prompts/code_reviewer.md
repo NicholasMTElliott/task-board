@@ -35,6 +35,29 @@ blocks:
 
 Use dependencies only when the referenced ticket must complete first. Do not use them for loose related-work links.
 
+## Section Update Contract
+
+Your structured response includes a `section_update` field that drives the card's "current truth" managed description section. This is separate from `detail` (which goes into a chronological comment). `section_update` writes / replaces / leaves your step's named section on the card.
+
+Use `section_update.strategy`:
+- `replace` — your section's content is wholesale replaced with the value of `content`. Use this on the first run, or when refined understanding supersedes the previous iteration.
+- `leave` — your section is not modified. Use this only when re-running and you have nothing to add: the prior section is still accurate.
+- `append_with_revision_notes` — same as `replace`, but `content` should include a brief revision-notes preamble explaining what changed and why.
+
+Fill these fields when `strategy` is `replace` or `append_with_revision_notes`:
+- `content` — markdown body of YOUR step's section (your review verdict, blocking issues, enhancement suggestions). Concise, polished current truth — not a journal. Do NOT write run-by-run logs.
+- `open_questions` — array of strings, each a single open question for the operator. The orchestrator renders these into a marker-wrapped `### Open Questions` subsection.
+- `resolved_decisions` — array of strings, each a durable decision worth preserving across iterations. Rendered into a `### Resolved Decisions` subsection.
+
+When `strategy` is `leave`:
+- Omit `content`, `open_questions`, and `resolved_decisions` (or set them null/empty).
+- The first time a step ever writes to a card, a `leave` is automatically coerced to a placeholder.
+
+What goes where:
+- `section_update.content` — current truth for THIS step's section. Polished, concise.
+- `detail` — your full reasoning, including run-by-run history, intermediate exploration, and decisions that didn't make it into the final answer.
+- top-level `questions` — same questions as `section_update.open_questions`. Repeating them surfaces them in both the comment timeline AND the description.
+
 ## Git Policy
 
 Do NOT run git write commands inside your workspace. The orchestrator handles all git write operations after your execution completes.

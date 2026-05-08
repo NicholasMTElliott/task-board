@@ -29,7 +29,14 @@ public sealed partial class AgentRunner(
     // Rerun redesign Problem 1 + 3 wiring. Optional so existing tests that
     // don't inject these continue to work — non-cached single-agent steps
     // run identically to the pre-rerun-redesign flow.
-    RerunCacheGate? cacheGate = null)
+    RerunCacheGate? cacheGate = null,
+    // Rerun redesign Problem 2: per-kind comment routing. Optional — when
+    // null, the legacy emit sites continue to upsert with their legacy markers
+    // (`<!-- agent-step:... -->`, `<!-- gate-check:... -->`, etc.) for full
+    // backward compatibility with existing tests. Production wires this
+    // via DI so the new aiboard-log marker shape and per-kind retention
+    // (append/delete_and_repost/upsert) take effect.
+    ICommentRouter? commentRouter = null)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
 
@@ -182,19 +189,24 @@ public sealed partial class AgentRunner(
             // diff. First run captures runStartCanonicalSha. Subsequent runs
             // copy forward the earliest stored value. The column already
             // exists on agent_run (V24); SetStateEntryShaAsync is idempotent.
+            //
+            // The actual UPDATE is deferred until AFTER CreateRunAsync below —
+            // SetStateEntryShaAsync targets a row keyed by runId and would no-op
+            // if invoked here.
             string? stateEntrySha = null;
+            bool stateEntryCarriedForward = false;
             try
             {
                 var priorStateEntry = await runStore.GetEarliestStateEntryShaAsync(
                     cardId, state.Name, cancellationToken);
-                stateEntrySha = priorStateEntry ?? runStartCanonicalSha;
-                if (stateEntrySha is not null)
+                if (priorStateEntry is not null)
                 {
-                    await runStore.SetStateEntryShaAsync(runId, stateEntrySha, cancellationToken);
-                    logger.LogDebug(
-                        "State-entry SHA for card {CardId} state {State}: {Sha} ({Origin})",
-                        cardId, state.Name, stateEntrySha,
-                        priorStateEntry is not null ? "carried-forward" : "captured-now");
+                    stateEntrySha = priorStateEntry;
+                    stateEntryCarriedForward = true;
+                }
+                else
+                {
+                    stateEntrySha = runStartCanonicalSha;
                 }
             }
             catch (Exception ex)
@@ -315,6 +327,29 @@ public sealed partial class AgentRunner(
                 TotalSteps: state.Steps.Count,
                 StartedAtUtc: DateTimeOffset.UtcNow);
             await SafeDbCallAsync(() => runStore.CreateRunAsync(runRecord, cancellationToken));
+
+            // Now that the agent_run row exists, persist the state-entry SHA
+            // resolved above. Done after CreateRunAsync because SetStateEntryShaAsync
+            // is an UPDATE keyed on (tenant, run_id) — running it before the row
+            // exists silently no-ops and the SHA is lost.
+            if (stateEntrySha is not null)
+            {
+                try
+                {
+                    await runStore.SetStateEntryShaAsync(runId, stateEntrySha, cancellationToken);
+                    logger.LogDebug(
+                        "State-entry SHA for card {CardId} state {State}: {Sha} ({Origin})",
+                        cardId, state.Name, stateEntrySha,
+                        stateEntryCarriedForward ? "carried-forward" : "captured-now");
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex,
+                        "Failed to persist state-entry SHA for card {CardId} state {State}; gate diff will fall back to runStartCanonicalSha",
+                        cardId, state.Name);
+                }
+            }
+
             await WritePriorStepContextAsync(worktreePath, cardId, state.Name, cancellationToken);
 
             // 5.5 Build mount context for Docker workspace/credential mounts (if builder is available)
@@ -470,8 +505,13 @@ public sealed partial class AgentRunner(
                               $"Card returned to **{targetCard.ColumnId}** for re-processing."
                             : $"{commentPrefix}\n\n**Shutdown requested** — {stepIndex}/{state.Steps.Count} steps completed. " +
                               $"Card returned to **{targetCard.ColumnId}** for re-processing.";
-                        await boardClient.UpsertAgentCommentAsync(
-                            cardId, shutdownComment, $"<!-- agent-shutdown:{cardId} -->", cancellationToken);
+                        // kind:shutdown_notice → delete_and_repost (router policy)
+                        // or append fallback when router not wired (test-only).
+                        var shutdownMarker = AiboardLogMarker.Build(
+                            AiboardLogMarker.KindShutdownNotice,
+                            new[] { KeyValuePair.Create("card", cardId) });
+                        await PostKindCommentAsync(cardId, AiboardLogMarker.KindShutdownNotice,
+                            shutdownComment, shutdownMarker, cancellationToken);
                     }
                     catch (Exception restoreEx)
                     {
@@ -502,40 +542,31 @@ public sealed partial class AgentRunner(
                 var resolvedPrompt = await ResolveStepTaskPromptAsync(
                     step, worktreePath, targetCard, workflowConfig.ConfigDirectory, cancellationToken, promptContext);
 
+                // Capture the plain (pre-preamble, pre-augmentation) task prompt
+                // for cache-hash purposes. The deterministic-skip cache must hash
+                // the canonical task input, not run-specific scaffolding (re-run
+                // preamble, merge advisory) — otherwise a re-run with identical
+                // operator inputs always misses the cache because its hashed
+                // prompt includes the "bail if unchanged" preamble that the
+                // original run never saw.
+                var cacheKeyPrompt = resolvedPrompt;
+
                 // 6b-ii. Re-run fast-path: if the step's marker is already on the card AND the
                 //        prior run completed this step with COMPLETE, prepend a "bail if nothing
                 //        changed" preamble so the agent can short-circuit without redoing work.
                 //        Operator force-rerun: delete the comment from the card → preamble suppressed.
+                //        Computed lazily (only when cache misses) — see step 6c.
+                string? rerunPreamble = null;
                 bool rerunPreambleInjected = false;
                 if (rerunPreambleBuilder is not null)
                 {
-                    var rerunPreamble = await rerunPreambleBuilder.TryBuildPreambleAsync(
+                    rerunPreamble = await rerunPreambleBuilder.TryBuildPreambleAsync(
                         cardId, state.Name, step.Name,
                         markerName: $"agent-step:{step.Name}",
                         currentRunId: runId,
                         existingComments: comments,
                         variant: PreambleVariant.TaskPrompt,
                         cancellationToken);
-                    if (rerunPreamble is not null)
-                    {
-                        resolvedPrompt = rerunPreamble + "\n\n---\n\n" + resolvedPrompt;
-                        rerunPreambleInjected = true;
-                        logger.LogInformation(
-                            "Re-run preamble injected for step '{StepName}' on card {CardId}; agent may fast-path if no changes",
-                            step.Name, cardId);
-                    }
-                }
-
-                if (isExistingBranch && stepIndex == 0)
-                {
-                    resolvedPrompt += "\n\nNote: This task has been worked on previously. A branch with prior changes already exists. " +
-                        "Review the existing state of the codebase and any changes already made before beginning new work. " +
-                        "Avoid duplicating or overwriting prior progress.";
-
-                    if (mergePromptAugmentation is not null)
-                    {
-                        resolvedPrompt += "\n\n" + mergePromptAugmentation;
-                    }
                 }
 
                 // 6b-iv. Cache gate (rerun redesign Problem 1).
@@ -552,7 +583,15 @@ public sealed partial class AgentRunner(
                 CacheGateResult? cacheResult = null;
                 bool cacheHit = false;
                 var effectiveSlots = step.GetEffectiveSlots();
-                if (cacheGate is not null && effectiveSlots.Count == 0)
+                // Rerun redesign Problem 1: cache decision applies to ALL step
+                // shapes — single-agent AND slot-driven candidate groups. The
+                // cache identity is the (state, step) pair; on a hit, the entire
+                // step (including any candidate fan-out) is skipped because the
+                // input bundle (operator content + comments + prior section
+                // hashes + step config + prompts) hasn't changed since the
+                // prior COMPLETE. This replaces RerunPreambleBuilder's
+                // LLM-judgment fast-path for candidate steps.
+                if (cacheGate is not null)
                 {
                     string systemPromptContents = "";
                     try
@@ -590,7 +629,7 @@ public sealed partial class AgentRunner(
                     {
                         cacheResult = await cacheGate.EvaluateAsync(
                             cardId, currentBody, state, step, stepRole,
-                            stepConfigJson, systemPromptContents, resolvedPrompt,
+                            stepConfigJson, systemPromptContents, cacheKeyPrompt,
                             comments, priorSectionHashes, cancellationToken);
                     }
                     catch (Exception ex)
@@ -600,12 +639,53 @@ public sealed partial class AgentRunner(
                             step.Name, cardId);
                     }
 
+                    // Surface any malformed-section diagnostics from the cache
+                    // decision as an operator-visible comment (Finding 5). The
+                    // diagnostic explains why the cache treated this step as
+                    // drifted and how to fix the markup.
+                    if (cacheResult?.Diagnostic is not null)
+                    {
+                        await SurfaceSectionDiagnosticAsync(
+                            cardId, state.Name, runId, cacheResult.Diagnostic, cancellationToken);
+                    }
+
                     if (cacheResult is not null && cacheResult.IsHit)
                     {
                         cacheHit = true;
                         logger.LogInformation(
                             "Cache HIT — skipping executor for step '{Step}' on card {CardId}",
                             step.Name, cardId);
+                    }
+                }
+
+                // 6b-iii. On cache MISS, augment the executor's prompt with the
+                //         re-run preamble (when applicable) and existing-branch
+                //         advisory. These are run-specific scaffolding that
+                //         intentionally does NOT participate in the cache-hash
+                //         (see cacheKeyPrompt above) — a re-run with identical
+                //         operator inputs must produce the same hash whether
+                //         or not the preamble was injected.
+                if (!cacheHit)
+                {
+                    if (rerunPreamble is not null)
+                    {
+                        resolvedPrompt = rerunPreamble + "\n\n---\n\n" + resolvedPrompt;
+                        rerunPreambleInjected = true;
+                        logger.LogInformation(
+                            "Re-run preamble injected for step '{StepName}' on card {CardId}; agent may fast-path if no changes",
+                            step.Name, cardId);
+                    }
+
+                    if (isExistingBranch && stepIndex == 0)
+                    {
+                        resolvedPrompt += "\n\nNote: This task has been worked on previously. A branch with prior changes already exists. " +
+                            "Review the existing state of the codebase and any changes already made before beginning new work. " +
+                            "Avoid duplicating or overwriting prior progress.";
+
+                        if (mergePromptAugmentation is not null)
+                        {
+                            resolvedPrompt += "\n\n" + mergePromptAugmentation;
+                        }
                     }
                 }
 
@@ -813,7 +893,13 @@ public sealed partial class AgentRunner(
                                 step.Name, cardId);
                         }
                     }
-                    sectionOutputHash = RerunHashBuilder.ComputeSectionHash(currentBody, step.Name);
+                    sectionOutputHash = RerunHashBuilder.ComputeSectionHash(
+                        currentBody, step.Name, out var sectionDiagnostic);
+                    if (sectionDiagnostic is not null)
+                    {
+                        await SurfaceSectionDiagnosticAsync(
+                            cardId, state.Name, runId, sectionDiagnostic, cancellationToken);
+                    }
                 }
                 else
                 {
@@ -933,7 +1019,10 @@ public sealed partial class AgentRunner(
                         ExecutionKind: cacheHit ? "cache_hit" : "full_run",
                         SourceRunId: cacheHit ? cacheResult!.Source!.RunId : null,
                         SourceStepResultId: cacheHit ? cacheResult!.Source!.Id : null,
-                        OutputSummary: cacheHit ? cacheResult!.Source!.OutputSummary : null);
+                        OutputSummary: cacheHit
+                            ? cacheResult!.Source!.OutputSummary
+                            : BuildOutputSummary(lastResult),
+                        SectionUpdateJson: lastResult.SectionUpdateJson);
                     await SafeDbCallAsync(() => runStore.SaveStepResultAsync(stepRecord, cancellationToken));
                 }
                 await SafeDbCallAsync(() => runStore.UpdateRunProgressAsync(runId, stepIndex + 1, cancellationToken));
@@ -946,31 +1035,53 @@ public sealed partial class AgentRunner(
                 // redesign migration; legacy markers continue to classify as
                 // agent-generated for the hash builder).
                 var stepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role, stepRole.Provider, stepRole.Model);
+
+                // Resolve attempt count for the step's marker fields. Uses the
+                // canonical step name (slot/candidate/evaluator suffixes are
+                // collapsed to the same identity at the IRunStore layer). Best
+                // effort — a DB hiccup defaults to 1 (current run is at least
+                // attempt 1).
+                int stepAttempt = await ResolveStepAttemptAsync(
+                    cardId, state.Name, step.Name, cancellationToken);
+
                 if (cacheHit)
                 {
                     var src = cacheResult!.Source!;
-                    var cacheMarker = AiboardLogMarker.Build(
-                        AiboardLogMarker.KindCacheHit,
+                    var cacheFields = new[]
+                    {
+                        KeyValuePair.Create("state", state.Name),
+                        KeyValuePair.Create("step", step.Name),
+                        KeyValuePair.Create("run", runId),
+                        KeyValuePair.Create("outcome", AgentOutcome.COMPLETE.ToString()),
+                        KeyValuePair.Create("attempt", stepAttempt.ToString(CultureInfo.InvariantCulture)),
+                        KeyValuePair.Create("source_run", src.RunId),
+                    };
+                    var cacheMarker = AiboardLogMarker.Build(AiboardLogMarker.KindCacheHit, cacheFields);
+                    var cacheBody =
+                        $"{stepPrefix}\n\n" +
+                        $"**Step: {step.Name}** — cache hit\n\n" +
+                        $"Skipped: inputs unchanged since run `{src.RunId}` (completed " +
+                        $"{src.CompletedAtUtc.UtcDateTime:yyyy-MM-dd HH:mm} UTC). Prior result reused.";
+                    await PostKindCommentAsync(cardId, AiboardLogMarker.KindCacheHit,
+                        cacheBody, cacheMarker, cancellationToken);
+                }
+                else
+                {
+                    var stepBody = $"{stepPrefix}\n\n**Step: {step.Name}**\n\n{FormatComment(lastResult, includeConversationLog: runStore is NullRunStore)}";
+                    if (updateResult.HasUpdates)
+                        stepBody += FormatUpdateSummary(updateResult);
+                    var marker = AiboardLogMarker.Build(
+                        AiboardLogMarker.KindStep,
                         new[]
                         {
                             KeyValuePair.Create("state", state.Name),
                             KeyValuePair.Create("step", step.Name),
-                            KeyValuePair.Create("source_run", src.RunId),
+                            KeyValuePair.Create("run", runId),
+                            KeyValuePair.Create("outcome", lastResult.Outcome.ToString()),
+                            KeyValuePair.Create("attempt", stepAttempt.ToString(CultureInfo.InvariantCulture)),
                         });
-                    var cacheBody =
-                        $"{cacheMarker}\n\n{stepPrefix}\n\n" +
-                        $"**Step: {step.Name}** — cache hit\n\n" +
-                        $"Skipped: inputs unchanged since run `{src.RunId}` (completed " +
-                        $"{src.CompletedAtUtc.UtcDateTime:yyyy-MM-dd HH:mm} UTC). Prior result reused.";
-                    await boardClient.AppendAgentCommentAsync(cardId, cacheBody, cancellationToken);
-                }
-                else
-                {
-                    var stepMarker = $"<!-- agent-step:{step.Name} -->";
-                    var stepComment = $"{stepPrefix}\n\n**Step: {step.Name}**\n\n{FormatComment(lastResult, includeConversationLog: runStore is NullRunStore)}";
-                    if (updateResult.HasUpdates)
-                        stepComment += FormatUpdateSummary(updateResult);
-                    await boardClient.UpsertAgentCommentAsync(cardId, stepComment, stepMarker, cancellationToken);
+                    await PostKindCommentAsync(cardId, AiboardLogMarker.KindStep,
+                        stepBody, marker, cancellationToken);
                 }
 
                 // 6e-ii. Refresh comments file so the next step sees this step's output
@@ -1034,7 +1145,7 @@ public sealed partial class AgentRunner(
             // behind an empty HEAD diff.
             var gateDiffBase = stateEntrySha ?? runStartCanonicalSha;
             var gateCheckResult = await RunGateCheckAsync(
-                session, state, lastResult!, worktreePath, targetCard, cardId, runId,
+                session, state, lastResult!, worktreePath, targetCard, currentBody, cardId, runId,
                 gateDiffBase, allCreatedTickets, allUnrecognizedFiles, cancellationToken);
 
             if (gateCheckResult.BlockingResult is not null)
@@ -1054,7 +1165,7 @@ public sealed partial class AgentRunner(
             {
                 var optionalResult = await ExecuteOptionalStepsAsync(
                     session, gateCheckResult.RequestedSteps, state, worktreePath, targetCard, cardId,
-                    runId, commentsFilePath, cancellationToken);
+                    runId, commentsFilePath, currentBody, cancellationToken);
 
                 if (optionalResult is not null)
                 {
@@ -1153,8 +1264,22 @@ public sealed partial class AgentRunner(
                     $"**Rate limited** — card returned to **{targetCard.ColumnId}** for re-processing.\n\n" +
                     $"This is not a problem with the ticket — the agent's usage limit was reached. " +
                     $"The card can be picked up again when the limit resets, or by another agent.";
-                await boardClient.UpsertAgentCommentAsync(
-                    cardId, rateLimitComment, $"<!-- agent-rate-limit:{cardId} -->", cancellationToken);
+                if (commentRouter is not null)
+                {
+                    // kind:rate_limit_notice → delete_and_repost (status notice;
+                    // the latest one chronologically is the "live" state of the
+                    // card's rate-limit context).
+                    var marker = AiboardLogMarker.Build(
+                        AiboardLogMarker.KindRateLimitNotice,
+                        new[] { KeyValuePair.Create("card", cardId) });
+                    await commentRouter.PostAsync(cardId, AiboardLogMarker.KindRateLimitNotice,
+                        rateLimitComment, marker, cancellationToken);
+                }
+                else
+                {
+                    await boardClient.UpsertAgentCommentAsync(
+                        cardId, rateLimitComment, $"<!-- agent-rate-limit:{cardId} -->", cancellationToken);
+                }
             }
             catch (Exception restoreEx)
             {
@@ -1412,6 +1537,7 @@ public sealed partial class AgentRunner(
         AgentResult lastStepResult,
         string worktreePath,
         BoardCard targetCard,
+        string currentBody,
         string cardId,
         string runId,
         string? runStartCanonicalSha,
@@ -1445,15 +1571,23 @@ public sealed partial class AgentRunner(
             // surfaces the cumulative work for this run. Falls back to HEAD
             // (uncommitted-only) when the SHA capture failed.
             //
-            // Problem 4 (rerun redesign): when the diff exceeds
-            // gateCheck.MaxDiffChars, switch to a structured summary packet
-            // instead of returning a "...truncated..." marker. The packet
-            // includes a per-file table, top-K files inline, and an omitted
-            // list — enough for the gate to judge intent without seeing every
-            // byte. Eliminates the "diff truncated, can't verify" rejection.
+            // Problem 4 (rerun redesign): when the diff exceeds the configured
+            // threshold, switch to a structured summary packet instead of
+            // returning a "...truncated..." marker. The packet includes a
+            // per-file table, top-K files inline, and an omitted list — enough
+            // for the gate to judge intent without seeing every byte.
+            //
+            // Threshold precedence (rerun redesign): workflow-level
+            // rerun.diff.summaryThresholdBytes (when set) takes priority over
+            // the per-gate gateCheck.MaxDiffChars. The rerun config is the
+            // intended single source of truth; gateCheck.MaxDiffChars stays as
+            // the legacy fallback so existing workflow.json files keep working.
+            var diffThresholdBytes =
+                workflowConfig.Rerun?.Diff?.SummaryThresholdBytes
+                ?? gateCheck.MaxDiffChars;
             var packet = await gitWorkspaceManager.GetDiffPacketAsync(
                 worktreePath,
-                thresholdBytes: gateCheck.MaxDiffChars,
+                thresholdBytes: diffThresholdBytes,
                 cancellationToken,
                 baseRef: runStartCanonicalSha);
             changes = packet.Content;
@@ -1461,7 +1595,7 @@ public sealed partial class AgentRunner(
             {
                 logger.LogInformation(
                     "Gate diff in summary mode for card {CardId} state {State}: raw={RawBytes:N0}B, threshold={Threshold:N0}B, files={Files}, inline={Inline}",
-                    cardId, state.Name, packet.RawByteSize, gateCheck.MaxDiffChars,
+                    cardId, state.Name, packet.RawByteSize, diffThresholdBytes,
                     packet.FilesChanged, packet.FilesIncludedInline);
             }
         }
@@ -1561,13 +1695,37 @@ public sealed partial class AgentRunner(
         }
 
         var agentReport = lastStepResult.Detail ?? "(no self-report provided)";
+        // Build a step-history block from persisted step records for THIS run
+        // (rerun redesign Problem 3, Finding 3): the gate sees each step's
+        // outcome, role/provider, execution kind (full_run vs cache_hit), and
+        // a short summary. Empty when no DB or no rows yet — the placeholder
+        // resolves to a friendly "(none)" so prompt templates that reference
+        // it don't break for fresh cards.
+        var stepHistoryBlock = await BuildStepHistoryBlockAsync(cardId, runId, cancellationToken);
+        // Use currentBody for {TaskBody}, not targetCard.Body. The latter is the
+        // body as of the initial card fetch — stale by the time the gate runs
+        // because section_update writes through the run advance currentBody but
+        // do NOT mutate targetCard. Without this, the gate sees the
+        // pre-step description and can't reason about the managed sections that
+        // the just-completed steps wrote (rerun redesign Problem 2 / Problem 3).
         var gatePrompt = ResolvePromptPlaceholders(gatePromptTemplate, targetCard);
         gatePrompt = gatePrompt
-            .Replace("{TaskBody}", targetCard.Body ?? "")
+            .Replace("{TaskBody}", currentBody ?? "")
             .Replace("{Diff}", changes)
             .Replace("{AgentReport}", agentReport)
             .Replace("{CreatedTickets}", createdTicketsBlock)
-            .Replace("{UnrecognizedFiles}", unrecognizedFilesBlock);
+            .Replace("{UnrecognizedFiles}", unrecognizedFilesBlock)
+            .Replace("{StepHistory}", stepHistoryBlock);
+
+        // Append the step history at the end of the prompt when the template
+        // didn't reference {StepHistory} explicitly — keeps backward-compat
+        // with existing gate templates while still surfacing the records.
+        if (!gatePromptTemplate.Contains("{StepHistory}", StringComparison.Ordinal)
+            && !string.IsNullOrEmpty(stepHistoryBlock)
+            && stepHistoryBlock != "(no prior step records)")
+        {
+            gatePrompt += "\n\n## Step History (this run)\n\n" + stepHistoryBlock;
+        }
 
         // Re-run fast-path for the gate check: if a prior run completed this gate with COMPLETE
         // and the canonical gate-check comment is still on the card, prepend a "confirm or update"
@@ -1681,7 +1839,9 @@ public sealed partial class AgentRunner(
                 CacheReadTokens: gateResult.Usage?.CacheReadTokens,
                 CacheCreationTokens: gateResult.Usage?.CacheCreationTokens,
                 FastPathHit: gateFastPathHit,
-                StructurerFallbackUsed: gateResult.StructurerFallbackUsed);
+                StructurerFallbackUsed: gateResult.StructurerFallbackUsed,
+                SectionUpdateJson: gateResult.SectionUpdateJson,
+                OutputSummary: BuildOutputSummary(gateResult));
             await SafeDbCallAsync(() => runStore.SaveStepResultAsync(gateRecord, cancellationToken));
         }
         catch (Exception ex)
@@ -1689,10 +1849,9 @@ public sealed partial class AgentRunner(
             // Gate check infrastructure failure is non-blocking
             logger.LogError(ex, "Gate check failed to execute for card {CardId} — proceeding without verification", cardId);
             var gateIdentity = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
-            var warningComment = $"<!-- gate-check:{state.Name} -->\n\n" +
+            var warningBody =
                 $"## Gate Check Warning {gateIdentity}\n\nGate check failed to execute: {ex.Message}\nProceeding without verification.";
-            await boardClient.UpsertAgentCommentAsync(cardId, warningComment,
-                $"<!-- gate-check:{state.Name} -->", cancellationToken);
+            await PostGateCommentAsync(cardId, state, runId, "warning", warningBody, cancellationToken);
             return new GateCheckResult(null, null);
         }
 
@@ -1708,10 +1867,9 @@ public sealed partial class AgentRunner(
             {
                 // CONCERNS — route to questions column
                 var gateIdentityConcerns = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
-                var comment = $"<!-- gate-check:{state.Name} -->\n\n" +
+                var concernsBody =
                     $"## Gate Check: Concerns {gateIdentityConcerns}\n\n{gateResult.Detail ?? "The gate check raised concerns."}";
-                await boardClient.UpsertAgentCommentAsync(cardId, comment,
-                    $"<!-- gate-check:{state.Name} -->", cancellationToken);
+                await PostGateCommentAsync(cardId, state, runId, "NEEDS_INFO", concernsBody, cancellationToken);
 
                 if (state.Transitions.TryGetValue(TransitionKeys.NeedsInfo, out var questionsTarget))
                     await TransitionExecutor.ExecuteAsync(
@@ -1750,12 +1908,14 @@ public sealed partial class AgentRunner(
                     logger.LogWarning("Gate check for card {CardId} has failed {Count} times — escalating to NEEDS_INFO",
                         cardId, previousFailures + 1);
                     var gateIdentityEscalate = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
-                    var escalateComment = $"<!-- gate-check:{state.Name} result:ERROR attempt:{previousFailures + 1} -->\n\n" +
+                    var escalateBody =
                         $"## Gate Check: Escalated to Human Review {gateIdentityEscalate}\n\n" +
                         $"The gate check has failed {previousFailures + 1} consecutive times. Escalating for human review.\n\n" +
                         $"**Latest failure reason:**\n{gateResult.Detail ?? "No detail provided."}";
-                    await boardClient.UpsertAgentCommentAsync(cardId, escalateComment,
-                        $"<!-- gate-check:{state.Name} -->", cancellationToken);
+                    await PostGateCommentAsync(cardId, state, runId, "escalated",
+                        escalateBody, cancellationToken,
+                        legacyMarkerExtras: $" result:ERROR attempt:{previousFailures + 1}",
+                        attemptForKindFields: previousFailures + 1);
 
                     if (state.Transitions.TryGetValue(TransitionKeys.NeedsInfo, out var questionsCol))
                         await TransitionExecutor.ExecuteAsync(
@@ -1768,10 +1928,12 @@ public sealed partial class AgentRunner(
 
                 // Route via GATE_FAIL (re-trigger) or fall back to ERROR
                 var gateIdentityFail = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
-                var failComment = $"<!-- gate-check:{state.Name} result:ERROR attempt:{previousFailures + 1} -->\n\n" +
+                var failBody =
                     $"## Gate Check: Failed {gateIdentityFail}\n\n{gateResult.Detail ?? "The gate check detected issues with the agent's output."}";
-                await boardClient.UpsertAgentCommentAsync(cardId, failComment,
-                    $"<!-- gate-check:{state.Name} -->", cancellationToken);
+                await PostGateCommentAsync(cardId, state, runId, "ERROR",
+                    failBody, cancellationToken,
+                    legacyMarkerExtras: $" result:ERROR attempt:{previousFailures + 1}",
+                    attemptForKindFields: previousFailures + 1);
 
                 var transitionKey = state.Transitions.ContainsKey(TransitionKeys.GateFail) ? TransitionKeys.GateFail : TransitionKeys.Error;
                 if (state.Transitions.TryGetValue(transitionKey, out var gateFailTarget))
@@ -1781,6 +1943,50 @@ public sealed partial class AgentRunner(
                 return new GateCheckResult(new AgentRunResult(AgentOutcome.ERROR, gateResult.Detail), null);
             }
         }
+    }
+
+    /// <summary>
+    /// Posts a gate-check comment via the comment router (kind:gate, append) when
+    /// the router is wired, or via the legacy upsert path with the
+    /// <c>&lt;!-- gate-check:{state.Name} --&gt;</c> marker when it isn't. Centralises
+    /// the dual-path so the gate's four emit sites (warning / NEEDS_INFO / escalate
+    /// / ERROR) stay aligned.
+    /// </summary>
+    /// <param name="legacyMarkerExtras">
+    /// Extra fields appended INSIDE the legacy marker (e.g. " result:ERROR attempt:3").
+    /// Ignored when the router is wired (the new marker carries those as
+    /// structured key:value fields instead).
+    /// </param>
+    /// <param name="attemptForKindFields">
+    /// When &gt; 0, included as the marker's <c>attempt</c> key in the new shape.
+    /// </param>
+    private async Task PostGateCommentAsync(
+        string cardId,
+        WorkflowState state,
+        string runId,
+        string outcomeLabel,
+        string body,
+        CancellationToken cancellationToken,
+        string legacyMarkerExtras = "",
+        int attemptForKindFields = 0)
+    {
+        var fields = new List<KeyValuePair<string, string>>
+        {
+            KeyValuePair.Create("state", state.Name),
+            KeyValuePair.Create("step", "gate_check"),
+            KeyValuePair.Create("run", runId),
+            KeyValuePair.Create("outcome", outcomeLabel),
+        };
+        if (attemptForKindFields > 0)
+            fields.Add(KeyValuePair.Create("attempt",
+                attemptForKindFields.ToString(CultureInfo.InvariantCulture)));
+
+        var marker = AiboardLogMarker.Build(AiboardLogMarker.KindGate, fields);
+        // Rerun redesign Problem 2: emit only aiboard-log markers. The
+        // legacyMarkerExtras parameter is preserved for binary-compat with
+        // call sites pending cleanup but is no longer interpreted.
+        _ = legacyMarkerExtras;
+        await PostKindCommentAsync(cardId, AiboardLogMarker.KindGate, body, marker, cancellationToken);
     }
 
     /// <summary>
@@ -1797,8 +2003,13 @@ public sealed partial class AgentRunner(
         string cardId,
         string runId,
         string? commentsFilePath,
+        string currentBody,
         CancellationToken cancellationToken)
     {
+        // Track in-process body so DescriptionWriter section updates from
+        // optional reviewers compose cleanly across multiple optional steps.
+        var optionalCurrentBody = currentBody;
+
         // Build lookup of available optional steps
         var catalog = state.OptionalSteps!
             .ToDictionary(s => s.Name, StringComparer.OrdinalIgnoreCase);
@@ -1892,6 +2103,47 @@ public sealed partial class AgentRunner(
             var (result, optionalSessionExecMs) = await ExecuteWithSessionAsync(
                 session, stepRole.Provider, context, $"optional:{step.Name}", runId, cancellationToken);
 
+            // Update card body. Mirrors the regular-step path: when the agent
+            // returned a structured section_update directive (rerun redesign
+            // Problem 2), apply it via DescriptionWriter — optional reviewers
+            // ARE allowed to write description sections per spec. Otherwise
+            // sync from the worktree task file as before.
+            string? optionalSectionOutputHash = null;
+            if (result.Section is not null)
+            {
+                var newBody = DescriptionWriter.ApplySectionUpdate(
+                    optionalCurrentBody, $"optional:{step.Name}", result.Section);
+                if (!ReferenceEquals(newBody, optionalCurrentBody) && newBody != optionalCurrentBody)
+                {
+                    try
+                    {
+                        await boardClient.UpdateCardBodyAsync(cardId, newBody, cancellationToken);
+                        optionalCurrentBody = newBody;
+                        logger.LogInformation(
+                            "Applied section_update (strategy={Strategy}) for optional step '{Step}' on card {CardId}",
+                            result.Section.Strategy, step.Name, cardId);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex,
+                            "Failed to write section_update for optional step '{Step}' on card {CardId}; description unchanged",
+                            step.Name, cardId);
+                    }
+                }
+                optionalSectionOutputHash = RerunHashBuilder.ComputeSectionHash(
+                    optionalCurrentBody, $"optional:{step.Name}", out var optDiagnostic);
+                if (optDiagnostic is not null)
+                {
+                    await SurfaceSectionDiagnosticAsync(
+                        cardId, state.Name, runId, optDiagnostic, cancellationToken);
+                }
+            }
+            else
+            {
+                await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken,
+                    trimForBoard: runStore is not NullRunStore);
+            }
+
             // Save optional step result to DB.
             // Optional steps come after main steps + gate; base index on Steps.Count,
             // with 0 as a safe default when Steps is null.
@@ -1922,19 +2174,33 @@ public sealed partial class AgentRunner(
                 FastPathHit: optPreambleInjected
                     ? result.Outcome == AgentOutcome.COMPLETE
                     : (bool?)null,
-                StructurerFallbackUsed: result.StructurerFallbackUsed);
+                StructurerFallbackUsed: result.StructurerFallbackUsed,
+                SectionUpdateJson: result.SectionUpdateJson,
+                SectionOutputHash: optionalSectionOutputHash,
+                OutputSummary: BuildOutputSummary(result));
             await SafeDbCallAsync(() => runStore.SaveStepResultAsync(optionalStepRecord, cancellationToken));
-
-            // Update card body
-            await UpdateCardBodyFromTaskFileAsync(targetCard, worktreePath, cancellationToken,
-                trimForBoard: runStore is not NullRunStore);
 
             // Post step-specific comment with optional: prefix to avoid marker collision.
             // Build a per-step prefix so the header reflects the actual specialist-reviewer role.
             var optionalStepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role, stepRole.Provider, stepRole.Model);
-            var stepMarker = $"<!-- agent-step:optional:{step.Name} -->";
-            var stepComment = $"{optionalStepPrefix}\n\n**Optional Step: {step.Name}**\n\n{FormatComment(result, includeConversationLog: runStore is NullRunStore)}";
-            await boardClient.UpsertAgentCommentAsync(cardId, stepComment, stepMarker, cancellationToken);
+            var stepBody = $"{optionalStepPrefix}\n\n**Optional Step: {step.Name}**\n\n{FormatComment(result, includeConversationLog: runStore is NullRunStore)}";
+            int optionalAttempt = await ResolveStepAttemptAsync(
+                cardId, state.Name, $"optional:{step.Name}", cancellationToken);
+            // kind:optional → append (chronological log entry). Marker carries
+            // attempt for cross-run correlation; no legacy fallback (rerun
+            // redesign Problem 2: only aiboard-log markers are emitted).
+            var optMarker = AiboardLogMarker.Build(
+                AiboardLogMarker.KindOptional,
+                new[]
+                {
+                    KeyValuePair.Create("state", state.Name),
+                    KeyValuePair.Create("step", step.Name),
+                    KeyValuePair.Create("run", runId),
+                    KeyValuePair.Create("outcome", result.Outcome.ToString()),
+                    KeyValuePair.Create("attempt", optionalAttempt.ToString(CultureInfo.InvariantCulture)),
+                });
+            await PostKindCommentAsync(cardId, AiboardLogMarker.KindOptional,
+                stepBody, optMarker, cancellationToken);
 
             // Refresh comments file for the next step
             var comments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
@@ -2149,8 +2415,13 @@ public sealed partial class AgentRunner(
         try
         {
             var comments = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
-            var marker = $"gate-check:{stateName} result:ERROR";
-            return comments.Count(c => c.Body.Contains(marker, StringComparison.Ordinal));
+            // Match the new aiboard-log shape (kind:gate ... outcome:ERROR ...)
+            // for the given state.
+            return comments.Count(c =>
+                c.Body.Contains("<!-- aiboard-log ", StringComparison.Ordinal)
+                && c.Body.Contains("kind:gate", StringComparison.Ordinal)
+                && c.Body.Contains($"state:{stateName}", StringComparison.Ordinal)
+                && c.Body.Contains("outcome:ERROR", StringComparison.Ordinal));
         }
         catch (Exception ex)
         {
@@ -2191,16 +2462,24 @@ public sealed partial class AgentRunner(
         // 2. Pull work branch
         await gitWorkspaceManager.PullWorkBranchAsync(worktreePath, branchName, cancellationToken);
 
-        // 3. Detect default branch
+        // 3. Detect default branch — honours rerun.defaultBranch override
+        // when set (rerun redesign Finding 10). Detection failure now
+        // hard-fails so operators see misconfigured remotes immediately
+        // rather than silently skipping the merge step.
         string defaultBranch;
         try
         {
-            defaultBranch = await gitWorkspaceManager.GetDefaultBranchAsync(worktreePath, cancellationToken);
+            defaultBranch = await gitWorkspaceManager.GetDefaultBranchAsync(
+                worktreePath, cancellationToken,
+                configuredOverride: workflowConfig.Rerun?.DefaultBranch);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Cannot detect default branch — skipping merge step");
-            return new MergeStepOutcome(MergeStepAction.Proceed);
+            logger.LogError(ex,
+                "Cannot detect default branch for card {CardId}: {Message}. "
+                + "Set rerun.defaultBranch in workflow.json or run `git remote set-head origin --auto`.",
+                cardId, ex.Message);
+            throw;
         }
 
         // 4. Attempt merge
@@ -2531,6 +2810,194 @@ public sealed partial class AgentRunner(
             await boardClient.UpdateCardBodyAsync(originalCard.Id, cleanBody, cancellationToken);
             logger.LogInformation("Updated card body for {CardId}{Trimmed}",
                 originalCard.Id, trimForBoard ? " (trimmed for board)" : "");
+        }
+    }
+
+    /// <summary>
+    /// Reads the latest run's persisted step records for this (card, state) and
+    /// renders them as a structured block for the gate prompt. Surfaces each
+    /// step's outcome, role/provider, execution kind (full_run vs cache_hit),
+    /// and a short summary so the gate can reason about what happened — including
+    /// the cache decisions for steps that were skipped (rerun redesign Problem 3
+    /// / Finding 3).
+    /// </summary>
+    private async Task<string> BuildStepHistoryBlockAsync(
+        string cardId, string runId, CancellationToken ct)
+    {
+        if (runStore is NullRunStore)
+            return "(no prior step records)";
+
+        IReadOnlyList<StepResultRecord> rows;
+        try
+        {
+            rows = await runStore.GetStepResultsForCardAsync(cardId, null, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Failed to read step records for gate-prompt history on card {Card}",
+                cardId);
+            return "(step history unavailable)";
+        }
+
+        // Filter to this run only — the gate is judging THIS run's work, not
+        // the entire card's history. (Cross-run context for the agent is
+        // already piped via WritePriorStepContextAsync.)
+        var thisRun = rows.Where(r => r.RunId == runId).ToList();
+        if (thisRun.Count == 0)
+            return "(no prior step records)";
+
+        var sb = new StringBuilder();
+        sb.AppendLine("| Step | Role | Provider | Outcome | Kind | Summary |");
+        sb.AppendLine("|------|------|----------|---------|------|---------|");
+        foreach (var r in thisRun)
+        {
+            var summary = r.OutputSummary ?? r.Summary ?? "";
+            // Single-line summary: clamp newlines and length to keep the table tidy.
+            summary = summary.Replace('\n', ' ').Replace('\r', ' ').Replace('|', '∣');
+            if (summary.Length > 160) summary = summary[..160] + "…";
+            sb.AppendLine(
+                $"| `{r.StepName}` | {r.Role} | {r.Provider ?? "(?)"} | {r.Outcome} | "
+                + $"{r.ExecutionKind ?? "full_run"} | {summary} |");
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// Builds a concise <c>output_summary</c> from an <see cref="AgentResult"/> for
+    /// persistence on <c>step_result.output_summary</c>. Used by cache-hit
+    /// comments on subsequent runs as the "what happened last time" callback
+    /// (Problem 1, Finding 11). When detail is short (≤ 600 chars), uses it
+    /// directly; longer details are truncated to the first non-empty line(s)
+    /// up to 600 chars so cache-hit comments stay scannable.
+    /// </summary>
+    private static string? BuildOutputSummary(AgentResult result)
+    {
+        if (result.Outcome != AgentOutcome.COMPLETE)
+            return null;
+        var detail = result.Detail;
+        if (string.IsNullOrWhiteSpace(detail))
+            return null;
+        var trimmed = detail.Trim();
+        if (trimmed.Length <= 600)
+            return trimmed;
+        // Keep the first paragraph; cap at 600 chars so log comments stay short.
+        var paraEnd = trimmed.IndexOf("\n\n", StringComparison.Ordinal);
+        var firstPara = paraEnd > 0 ? trimmed[..paraEnd] : trimmed;
+        if (firstPara.Length > 600)
+            firstPara = firstPara[..600] + "…";
+        return firstPara;
+    }
+
+    /// <summary>
+    /// Resolves the attempt count (1-based) for the current step on this card.
+    /// Predicate: count of prior persisted rows for (card, state, step) PLUS 1
+    /// for the current attempt. Best-effort — a DB lookup failure logs and
+    /// returns 1 so the run continues.
+    /// </summary>
+    private async Task<int> ResolveStepAttemptAsync(
+        string cardId, string stateName, string stepName, CancellationToken ct)
+    {
+        try
+        {
+            var prior = await runStore.GetStepAttemptCountAsync(cardId, stateName, stepName, ct);
+            return prior + 1;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Failed to resolve attempt count for card {Card} state {State} step {Step}; defaulting to 1",
+                cardId, stateName, stepName);
+            return 1;
+        }
+    }
+
+    /// <summary>
+    /// Posts an agent comment via <see cref="ICommentRouter"/> when wired,
+    /// falling back to a direct append with the same aiboard-log marker when
+    /// the router was not registered (test-only path). The marker shape is
+    /// identical across both branches — legacy per-shape markers (agent-step,
+    /// agent-run, gate-check, etc.) are not emitted any longer (rerun
+    /// redesign Problem 2: only aiboard-log).
+    /// </summary>
+    private async Task PostKindCommentAsync(
+        string cardId, string kind, string body, string marker, CancellationToken ct)
+    {
+        if (commentRouter is not null)
+        {
+            await commentRouter.PostAsync(cardId, kind, body, marker, ct);
+            return;
+        }
+        // Test-only fallback: route shape always matches "Append" semantics.
+        // Production wires the router via DI, so this branch is unreachable.
+        await boardClient.AppendAgentCommentAsync(cardId, $"{marker}\n{body}", ct);
+    }
+
+    /// <summary>
+    /// Surfaces a malformed-section diagnostic to the operator via a comment
+    /// (kind:gate, append) so the issue is visible on the card timeline as well
+    /// as in logs. Best-effort: a comment-post failure is logged but does not
+    /// break the run. Logs are always emitted regardless of comment success.
+    /// </summary>
+    private async Task SurfaceSectionDiagnosticAsync(
+        string cardId,
+        string stateName,
+        string runId,
+        SectionHashDiagnostic diagnostic,
+        CancellationToken cancellationToken)
+    {
+        logger.LogWarning(
+            "Section markers for step '{Step}' on card {CardId} are malformed: {Kind} (count={Count}). "
+            + "Cache will treat this step as drifted on the next run. Operator should re-run this step "
+            + "to rewrite the section cleanly.",
+            diagnostic.StepName, cardId, diagnostic.Kind, diagnostic.Count);
+
+        var body =
+            $"## ⚠️ Malformed Step Section Detected\n\n"
+            + $"The managed step section `{diagnostic.StepName}` in this card's description "
+            + $"is structurally broken: **{diagnostic.Kind}** (count={diagnostic.Count}).\n\n"
+            + $"The deterministic-skip cache will treat this step as drifted, forcing a re-run "
+            + $"on the next pickup. To clear, either let the next run rewrite the section, or "
+            + $"manually fix the `<!-- step-section:{diagnostic.StepName} -->` / "
+            + $"`<!-- /step-section:{diagnostic.StepName} -->` markers in the description.";
+
+        try
+        {
+            if (commentRouter is not null)
+            {
+                var marker = AiboardLogMarker.Build(
+                    AiboardLogMarker.KindGate,
+                    new[]
+                    {
+                        KeyValuePair.Create("state", stateName),
+                        KeyValuePair.Create("step", diagnostic.StepName),
+                        KeyValuePair.Create("run", runId),
+                        KeyValuePair.Create("outcome", "section_diagnostic"),
+                        KeyValuePair.Create("kind_detail", diagnostic.Kind.ToString()),
+                    });
+                await commentRouter.PostAsync(cardId, AiboardLogMarker.KindGate,
+                    body, marker, cancellationToken);
+            }
+            else
+            {
+                var marker = AiboardLogMarker.Build(
+                    AiboardLogMarker.KindGate,
+                    new[]
+                    {
+                        KeyValuePair.Create("state", stateName),
+                        KeyValuePair.Create("step", diagnostic.StepName),
+                        KeyValuePair.Create("run", runId),
+                        KeyValuePair.Create("outcome", "section_diagnostic"),
+                    });
+                await boardClient.AppendAgentCommentAsync(
+                    cardId, $"{marker}\n{body}", cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Failed to post section diagnostic comment for card {CardId} step {Step}",
+                cardId, diagnostic.StepName);
         }
     }
 

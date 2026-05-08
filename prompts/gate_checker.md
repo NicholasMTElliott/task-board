@@ -52,6 +52,10 @@ Guidelines:
   manually by moving the card back.
 - Use the exact step name from the catalog. Do not invent step names.
 
+## Section Update Contract
+
+You do **not** write a description section. Set `section_update.strategy` to `leave` and omit the other section fields (`content`, `open_questions`, `resolved_decisions`). Your verdict goes in `detail` (rendered as a chronological comment); the orchestrator will not apply your section update.
+
 ## Git Policy
 
 Do NOT run git write commands inside your workspace. The orchestrator handles all git write operations after your execution completes.

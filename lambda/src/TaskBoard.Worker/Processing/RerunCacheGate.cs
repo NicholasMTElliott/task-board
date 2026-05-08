@@ -67,7 +67,8 @@ public sealed class RerunCacheGate(
             TaskPromptContents: taskPromptContents);
 
         var currentInputHash = RerunHashBuilder.ComputeInputHash(inputs);
-        var currentSectionHash = RerunHashBuilder.ComputeSectionHash(cardBody, step.Name);
+        var currentSectionHash = RerunHashBuilder.ComputeSectionHash(
+            cardBody, step.Name, out var sectionDiagnostic);
 
         // Look up prior COMPLETE.
         var prior = await runStore.GetMostRecentCompleteForStepAsync(
@@ -77,7 +78,7 @@ public sealed class RerunCacheGate(
             logger.LogDebug(
                 "Cache miss for step '{Step}' on card {Card}: no prior COMPLETE",
                 step.Name, cardId);
-            return new CacheGateResult(IsHit: false, currentInputHash, currentSectionHash, Source: null);
+            return new CacheGateResult(IsHit: false, currentInputHash, currentSectionHash, Source: null, Diagnostic: sectionDiagnostic);
         }
 
         // Hash mismatch → miss. Common cases: operator edited description, an
@@ -89,7 +90,7 @@ public sealed class RerunCacheGate(
                 "Cache miss for step '{Step}' on card {Card}: input_hash differs (prior={Prior}, current={Current})",
                 step.Name, cardId,
                 ShortHash(prior.InputHash), ShortHash(currentInputHash));
-            return new CacheGateResult(IsHit: false, currentInputHash, currentSectionHash, Source: null);
+            return new CacheGateResult(IsHit: false, currentInputHash, currentSectionHash, Source: null, Diagnostic: sectionDiagnostic);
         }
 
         // Section drift → miss. The step's own output section was edited
@@ -101,14 +102,14 @@ public sealed class RerunCacheGate(
                 "Cache miss for step '{Step}' on card {Card}: section_output_hash drifted (prior={Prior}, current={Current})",
                 step.Name, cardId,
                 ShortHash(prior.SectionOutputHash), ShortHash(currentSectionHash));
-            return new CacheGateResult(IsHit: false, currentInputHash, currentSectionHash, Source: null);
+            return new CacheGateResult(IsHit: false, currentInputHash, currentSectionHash, Source: null, Diagnostic: sectionDiagnostic);
         }
 
         // Hit.
         logger.LogInformation(
             "Cache HIT for step '{Step}' on card {Card}: reusing run {SourceRun} (completed {Completed})",
             step.Name, cardId, prior.RunId, prior.CompletedAtUtc);
-        return new CacheGateResult(IsHit: true, currentInputHash, currentSectionHash, Source: prior);
+        return new CacheGateResult(IsHit: true, currentInputHash, currentSectionHash, Source: prior, Diagnostic: sectionDiagnostic);
     }
 
     /// <summary>
@@ -180,4 +181,5 @@ public sealed record CacheGateResult(
     bool IsHit,
     string CurrentInputHash,
     string? CurrentSectionOutputHash,
-    CacheCandidateRecord? Source);
+    CacheCandidateRecord? Source,
+    SectionHashDiagnostic? Diagnostic = null);

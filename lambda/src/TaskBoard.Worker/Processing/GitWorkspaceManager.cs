@@ -488,9 +488,26 @@ public sealed class GitWorkspaceManager(
             ["commit", "-m", $"Merge origin/{defaultBranch} into {branchName}"], cancellationToken);
     }
 
-    public async Task<string> GetDefaultBranchAsync(string repoPath, CancellationToken cancellationToken)
+    public async Task<string> GetDefaultBranchAsync(
+        string repoPath,
+        CancellationToken cancellationToken,
+        string? configuredOverride = null)
     {
-        // Try symbolic-ref first
+        // Rerun redesign Finding 10: honour the workflow-config override
+        // (rerun.defaultBranch) when set. Operators can pin the default branch
+        // explicitly; we still validate it actually exists on origin so a
+        // typo fails loudly rather than silently picking up a stale ref.
+        if (!string.IsNullOrWhiteSpace(configuredOverride))
+        {
+            if (await RemoteBranchExistsAsync(repoPath, configuredOverride, cancellationToken))
+                return configuredOverride;
+            throw new GitOperationException(
+                $"Configured rerun.defaultBranch '{configuredOverride}' was not found on origin. "
+                + "Either run `git remote set-head origin --auto` to clear the override or "
+                + "fix the value in workflow.json's `rerun.defaultBranch`.", -1);
+        }
+
+        // Try symbolic-ref first (canonical path: origin/HEAD is configured).
         try
         {
             var (_, stdout, _) = await RunGitAsync(repoPath,
@@ -502,14 +519,15 @@ public sealed class GitWorkspaceManager(
         }
         catch (GitOperationException) { /* fallback to probing */ }
 
-        // Fallback: probe known defaults
-        foreach (var candidate in new[] { "main", "master", "mainline" })
-        {
-            if (await RemoteBranchExistsAsync(repoPath, candidate, cancellationToken))
-                return candidate;
-        }
-
-        throw new GitOperationException("Could not determine default branch", -1);
+        // Origin/HEAD missing: hard-fail with operator hint per rerun-redesign
+        // Finding 10. We accept "must have origin/HEAD configured OR set
+        // rerun.defaultBranch" as a setup requirement — the previous
+        // best-effort probing of main/master/mainline silently masked
+        // misconfigurations.
+        throw new GitOperationException(
+            "Could not determine default branch: origin/HEAD is not configured and "
+            + "rerun.defaultBranch is not set. Run `git remote set-head origin --auto` "
+            + "or set `rerun.defaultBranch` in workflow.json to fix.", -1);
     }
 
     public async Task<bool> IsAncestorAsync(

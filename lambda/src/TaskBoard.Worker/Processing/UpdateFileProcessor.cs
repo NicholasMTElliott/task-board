@@ -22,7 +22,14 @@ public sealed class UpdateFileProcessor(
     WorkflowConfig workflowConfig,
     AgentIdentity agentIdentity,
     ILogger<UpdateFileProcessor> logger,
-    ICardDependencyClient? dependencyClient = null)
+    ICardDependencyClient? dependencyClient = null,
+    // Rerun redesign Problem 2: optional router. When wired, the
+    // created-ticket-dedupe and cross-card notification comments use the
+    // new aiboard-log marker shape (kind:created_ticket_dedupe → upsert,
+    // kind:cross_card_notification → delete_and_repost). When null, falls
+    // back to legacy upsert with `agent-created-ticket:` / `agent-cross-comment:`
+    // markers so existing tests pass without DI changes.
+    ICommentRouter? commentRouter = null)
 {
     private readonly ICardDependencyClient _dependencyClient =
         dependencyClient ?? NullCardDependencyClient.Instance;
@@ -227,9 +234,23 @@ public sealed class UpdateFileProcessor(
 
                 if (generationConfig is null)
                 {
-                    var dedupMarker = $"<!-- agent-created-ticket:{p.Slug} -->";
                     var commentBody = $"**{agentIdentity.DisplayName}** created #{newCardId}: {p.Parsed.Title}";
-                    await boardClient.UpsertAgentCommentAsync(sourceCardId, commentBody, dedupMarker, ct);
+                    if (commentRouter is not null)
+                    {
+                        // kind:created_ticket_dedupe → upsert (true dedupe key,
+                        // not a status notice). The slug is the dedupe identity.
+                        var marker = AiboardLogMarker.Build(
+                            AiboardLogMarker.KindCreatedTicketDedupe,
+                            new[] { KeyValuePair.Create("slug", p.Slug) });
+                        await commentRouter.PostAsync(
+                            sourceCardId, AiboardLogMarker.KindCreatedTicketDedupe,
+                            commentBody, marker, ct);
+                    }
+                    else
+                    {
+                        var dedupMarker = $"<!-- agent-created-ticket:{p.Slug} -->";
+                        await boardClient.UpsertAgentCommentAsync(sourceCardId, commentBody, dedupMarker, ct);
+                    }
                 }
 
                 File.Delete(p.FilePath);
@@ -375,9 +396,28 @@ public sealed class UpdateFileProcessor(
             return null;
         }
 
-        var marker = $"<!-- agent-cross-comment:{sourceCardId}:{stepName} -->";
         var commentBody = $"**Note from card #{sourceCardId} (step: {stepName}):**\n\n{content}";
-        await boardClient.UpsertAgentCommentAsync(targetCardId, commentBody, marker, ct);
+        if (commentRouter is not null)
+        {
+            // kind:cross_card_notification → delete_and_repost. Each retry of
+            // the source step replaces the earlier cross-card note with a
+            // fresh one at the bottom of the target card's timeline.
+            var newMarker = AiboardLogMarker.Build(
+                AiboardLogMarker.KindCrossCardNotification,
+                new[]
+                {
+                    KeyValuePair.Create("source_card", sourceCardId),
+                    KeyValuePair.Create("source_step", stepName),
+                });
+            await commentRouter.PostAsync(
+                targetCardId, AiboardLogMarker.KindCrossCardNotification,
+                commentBody, newMarker, ct);
+        }
+        else
+        {
+            var marker = $"<!-- agent-cross-comment:{sourceCardId}:{stepName} -->";
+            await boardClient.UpsertAgentCommentAsync(targetCardId, commentBody, marker, ct);
+        }
 
         logger.LogInformation("Posted cross-card comment on #{TargetCardId} from #{SourceCardId} step {Step}",
             targetCardId, sourceCardId, stepName);
@@ -726,12 +766,25 @@ public sealed class UpdateFileProcessor(
 
     /// <summary>
     /// Returns true if any comment in the list contains the created-ticket marker for the given slug.
-    /// Used to prevent duplicate ticket creation across steps.
+    /// Used to prevent duplicate ticket creation across steps. Accepts both the
+    /// legacy <c>&lt;!-- agent-created-ticket:{slug} --&gt;</c> shape AND the new
+    /// <c>aiboard-log kind:created_ticket_dedupe slug:{slug}</c> shape so the
+    /// dedupe lookup keeps working across the rerun-redesign migration: a
+    /// step that previously created the ticket with a legacy marker won't
+    /// silently re-create it after the migration switches the emitter.
     /// </summary>
     internal static bool HasCreatedTicketMarker(IReadOnlyList<CardComment> comments, string slug)
     {
-        var marker = $"<!-- agent-created-ticket:{slug} -->";
-        return comments.Any(c => c.Body.Contains(marker, StringComparison.Ordinal));
+        var legacyMarker = $"<!-- agent-created-ticket:{slug} -->";
+        // The new marker has form `<!-- aiboard-log kind:created_ticket_dedupe slug:VALUE -->`.
+        // Slug values may be quoted or bare depending on AiboardLogMarker.AppendValue's
+        // logic — check both forms.
+        var newMarkerBare = $"kind:created_ticket_dedupe slug:{slug} ";
+        var newMarkerQuoted = $"kind:created_ticket_dedupe slug:\"{slug}\" ";
+        return comments.Any(c =>
+            c.Body.Contains(legacyMarker, StringComparison.Ordinal)
+            || c.Body.Contains(newMarkerBare, StringComparison.Ordinal)
+            || c.Body.Contains(newMarkerQuoted, StringComparison.Ordinal));
     }
 }
 

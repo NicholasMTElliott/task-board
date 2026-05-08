@@ -38,6 +38,29 @@ you are working on.
 This content will be preserved and made available to future agents working on this card.
 Use the task file for content that should appear on the ticket.
 
+## Section Update Contract
+
+Your structured response includes a `section_update` field that drives the card's "current truth" managed description section. This is separate from `detail` (which goes into a chronological comment). `section_update` writes / replaces / leaves your step's named section on the card.
+
+Use `section_update.strategy`:
+- `replace` — your section's content is wholesale replaced with the value of `content`. Use this on the first run, or when refined understanding supersedes the previous iteration.
+- `leave` — your section is not modified. Use this only when re-running and you have nothing to add: the prior section is still accurate.
+- `append_with_revision_notes` — same as `replace`, but `content` should include a brief revision-notes preamble explaining what changed and why (e.g. "Updated after operator clarified scope: removed Postgres option, kept MySQL").
+
+Fill these fields when `strategy` is `replace` or `append_with_revision_notes`:
+- `content` — markdown body of YOUR step's section. Concise, polished current truth — not a journal. Do NOT write run logs or "Run 3: no new info / Run 4: still no new info." Length matches the value: short for "no actions needed" cases, fuller when meaningful new information.
+- `open_questions` — array of strings, each a single open question for the operator. The orchestrator renders these into a marker-wrapped `### Open Questions` subsection. Operators may reply inline or via comment.
+- `resolved_decisions` — array of strings, each a durable decision worth preserving across iterations (e.g. "Postgres chosen over MySQL: index requirements met"). Rendered into a `### Resolved Decisions` subsection.
+
+When `strategy` is `leave`:
+- Omit `content`, `open_questions`, and `resolved_decisions` (or set them null/empty).
+- The first time a step ever writes to a card, a `leave` is automatically coerced to a placeholder so future runs have something to compare against — but your operator-visible signal is still that you found nothing new.
+
+What goes where:
+- `section_update.content` — current truth for THIS step's section. Polished, concise. Not run-by-run history.
+- `detail` — your full reasoning, including run-by-run history, intermediate exploration, and decisions that didn't make it into the final answer. Lives in a chronological comment.
+- top-level `questions` — same questions as `section_update.open_questions`. Repeating them at the top level surfaces them in the comment timeline AND in the description.
+
 ## Git Policy
 
 Do NOT run git write commands inside your workspace. The orchestrator handles all git write operations after your execution completes.

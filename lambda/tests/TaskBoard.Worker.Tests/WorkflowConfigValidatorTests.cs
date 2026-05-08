@@ -2243,4 +2243,154 @@ public class WorkflowConfigValidatorAllowedChildrenTests
 
         Assert.DoesNotContain(warnings, w => w.Contains("candidate #0"));
     }
+
+    // ── Rerun config validation ─────────────────────────────────────────────
+
+    private static WorkflowConfig MakeConfigWithRerun(RerunConfig? rerun)
+    {
+        var c = MakeValidConfig();
+        return c with { Rerun = rerun };
+    }
+
+    [Fact]
+    public void RerunConfig_NullDefaultBranch_NoError()
+    {
+        // null is the documented "auto-detect via origin/HEAD" sentinel.
+        var cfg = MakeConfigWithRerun(new RerunConfig(DefaultBranch: null));
+        var errors = WorkflowConfigValidator.Validate(cfg);
+        Assert.DoesNotContain(errors, e => e.Contains("rerun.defaultBranch"));
+    }
+
+    [Fact]
+    public void RerunConfig_EmptyDefaultBranch_ReportsError()
+    {
+        // An empty/whitespace string is a misconfiguration — the operator
+        // probably meant to pass null.
+        var cfg = MakeConfigWithRerun(new RerunConfig(DefaultBranch: "   "));
+        var errors = WorkflowConfigValidator.Validate(cfg);
+        Assert.Contains(errors, e => e.Contains("rerun.defaultBranch"));
+    }
+
+    [Fact]
+    public void RerunConfig_NonPositiveSummaryThresholdBytes_ReportsError()
+    {
+        var cfg = MakeConfigWithRerun(new RerunConfig(
+            Diff: new RerunDiffConfig(SummaryThresholdBytes: 0)));
+        var errors = WorkflowConfigValidator.Validate(cfg);
+        Assert.Contains(errors, e => e.Contains("summaryThresholdBytes"));
+    }
+
+    [Fact]
+    public void RerunConfig_NegativeSummaryThresholdBytes_ReportsError()
+    {
+        var cfg = MakeConfigWithRerun(new RerunConfig(
+            Diff: new RerunDiffConfig(SummaryThresholdBytes: -1)));
+        var errors = WorkflowConfigValidator.Validate(cfg);
+        Assert.Contains(errors, e => e.Contains("summaryThresholdBytes"));
+    }
+
+    [Fact]
+    public void RerunConfig_PositiveSummaryThresholdBytes_NoError()
+    {
+        var cfg = MakeConfigWithRerun(new RerunConfig(
+            Diff: new RerunDiffConfig(SummaryThresholdBytes: 51200)));
+        var errors = WorkflowConfigValidator.Validate(cfg);
+        Assert.DoesNotContain(errors, e => e.Contains("summaryThresholdBytes"));
+    }
+
+    [Fact]
+    public void RerunConfig_InvalidRetentionPolicyValue_ReportsError()
+    {
+        // Typo: "appended" instead of "append" — silently falls through at
+        // runtime to CommentRouter.DefaultFor, masking the operator's intent.
+        // Promote to a hard error at validation.
+        var cfg = MakeConfigWithRerun(new RerunConfig(
+            Comments: new RerunCommentsConfig(
+                RetentionPolicy: new Dictionary<string, string>
+                {
+                    ["step"] = "appended",
+                })));
+        var errors = WorkflowConfigValidator.Validate(cfg);
+        Assert.Contains(errors, e => e.Contains("rerun.comments.retentionPolicy") && e.Contains("appended"));
+    }
+
+    [Fact]
+    public void RerunConfig_EmptyRetentionPolicyValue_ReportsError()
+    {
+        var cfg = MakeConfigWithRerun(new RerunConfig(
+            Comments: new RerunCommentsConfig(
+                RetentionPolicy: new Dictionary<string, string>
+                {
+                    ["step"] = "",
+                })));
+        var errors = WorkflowConfigValidator.Validate(cfg);
+        Assert.Contains(errors, e => e.Contains("rerun.comments.retentionPolicy"));
+    }
+
+    [Theory]
+    [InlineData("append")]
+    [InlineData("delete_and_repost")]
+    [InlineData("upsert")]
+    public void RerunConfig_RecognisedRetentionPolicyValue_NoError(string policy)
+    {
+        var cfg = MakeConfigWithRerun(new RerunConfig(
+            Comments: new RerunCommentsConfig(
+                RetentionPolicy: new Dictionary<string, string>
+                {
+                    ["step"] = policy,
+                })));
+        var errors = WorkflowConfigValidator.Validate(cfg);
+        Assert.DoesNotContain(errors, e => e.Contains("rerun.comments.retentionPolicy"));
+    }
+
+    [Fact]
+    public void RerunConfig_RetentionPolicyValue_CaseInsensitive()
+    {
+        // Operators may write "Append" or "APPEND". Trim + ToLowerInvariant
+        // before matching keeps the validator forgiving — same as
+        // CommentRouter.ParsePolicy.
+        var cfg = MakeConfigWithRerun(new RerunConfig(
+            Comments: new RerunCommentsConfig(
+                RetentionPolicy: new Dictionary<string, string>
+                {
+                    ["step"] = "  Append ",
+                })));
+        var errors = WorkflowConfigValidator.Validate(cfg);
+        Assert.DoesNotContain(errors, e => e.Contains("rerun.comments.retentionPolicy"));
+    }
+
+    [Fact]
+    public void RerunConfig_UnknownKindKey_AuditWarns_NotAnError()
+    {
+        // Unknown kind key (typo or future kind) should not be a hard error —
+        // the runtime never consults it, so it's harmless. But it's worth a
+        // soft warning so operator typos don't silently fall through.
+        var cfg = MakeConfigWithRerun(new RerunConfig(
+            Comments: new RerunCommentsConfig(
+                RetentionPolicy: new Dictionary<string, string>
+                {
+                    ["typo_kind"] = "append",
+                })));
+
+        var errors = WorkflowConfigValidator.Validate(cfg);
+        Assert.DoesNotContain(errors, e => e.Contains("typo_kind"));
+
+        var warnings = WorkflowConfigValidator.Audit(cfg);
+        Assert.Contains(warnings, w => w.Contains("typo_kind"));
+    }
+
+    [Fact]
+    public void RerunConfig_KnownKindKey_NoAuditWarning()
+    {
+        var cfg = MakeConfigWithRerun(new RerunConfig(
+            Comments: new RerunCommentsConfig(
+                RetentionPolicy: new Dictionary<string, string>
+                {
+                    ["step"] = "append",
+                    ["dependency_blocked"] = "delete_and_repost",
+                    ["created_ticket_dedupe"] = "upsert",
+                })));
+        var warnings = WorkflowConfigValidator.Audit(cfg);
+        Assert.DoesNotContain(warnings, w => w.Contains("rerun.comments.retentionPolicy"));
+    }
 }

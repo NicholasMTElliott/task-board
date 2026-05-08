@@ -112,6 +112,142 @@ public class AgentOutputParserTests
     }
 
     // ──────────────────────────────────────────────────────────────────────────
+    // section_update parsing + raw-JSON capture (rerun redesign / Finding 7)
+    //
+    // The parser produces both a typed SectionUpdate (consumed by
+    // DescriptionWriter) AND the raw JSON of the section_update object
+    // (persisted to step_result.section_update_json for replay/debugging).
+    // The raw form must round-trip the agent's bytes — including any extra
+    // fields beyond the typed schema — so future replay tooling can
+    // reconstruct exactly what the agent emitted.
+    // ──────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ParseResult_SectionUpdate_PopulatesTypedAndRawJson()
+    {
+        var json = """
+            {
+              "structured_output": {
+                "outcome": "COMPLETE",
+                "section_update": {
+                  "strategy": "replace",
+                  "content": "## Technical Design\nUse Postgres.",
+                  "open_questions": ["What scale?"],
+                  "resolved_decisions": ["Postgres over MySQL"]
+                }
+              }
+            }
+            """;
+
+        var result = AgentOutputParser.ParseResult(json);
+
+        Assert.NotNull(result.Section);
+        Assert.Equal(SectionUpdateStrategy.Replace, result.Section!.Strategy);
+        Assert.Equal("## Technical Design\nUse Postgres.", result.Section.Content);
+        Assert.Equal(["What scale?"], result.Section.OpenQuestions);
+        Assert.Equal(["Postgres over MySQL"], result.Section.ResolvedDecisions);
+
+        Assert.NotNull(result.SectionUpdateJson);
+        // Raw JSON should parse back to the same shape; typed strategy must
+        // round-trip and content must be byte-identical.
+        var roundTripped = System.Text.Json.JsonDocument.Parse(result.SectionUpdateJson!);
+        Assert.Equal("replace", roundTripped.RootElement.GetProperty("strategy").GetString());
+        Assert.Equal("## Technical Design\nUse Postgres.",
+            roundTripped.RootElement.GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public void ParseResult_NoSectionUpdate_LeavesBothNull()
+    {
+        // Legacy roles / gates / evaluators don't supply section_update.
+        // Both the typed and raw fields stay null so persistence sites
+        // can use null as the "no directive" sentinel.
+        var json = """{"structured_output":{"outcome":"COMPLETE","detail":"ok"}}""";
+
+        var result = AgentOutputParser.ParseResult(json);
+
+        Assert.Null(result.Section);
+        Assert.Null(result.SectionUpdateJson);
+    }
+
+    [Fact]
+    public void ParseResult_SectionUpdate_LeaveStrategy_RawJsonStillCaptured()
+    {
+        // strategy=leave is the agent saying "no description change for this
+        // step." The typed Section is still produced (so DescriptionWriter
+        // sees the directive), and the raw JSON is captured for the audit
+        // trail. Without this we'd lose evidence that the agent considered
+        // the section and explicitly chose not to change it.
+        var json = """
+            {
+              "structured_output": {
+                "outcome": "COMPLETE",
+                "section_update": { "strategy": "leave" }
+              }
+            }
+            """;
+
+        var result = AgentOutputParser.ParseResult(json);
+
+        Assert.NotNull(result.Section);
+        Assert.Equal(SectionUpdateStrategy.Leave, result.Section!.Strategy);
+        Assert.NotNull(result.SectionUpdateJson);
+        Assert.Contains("leave", result.SectionUpdateJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParseResult_SectionUpdate_MalformedStrategy_BothNull()
+    {
+        // Unknown strategy value → ParseSectionUpdate returns null, and the
+        // raw JSON should NOT be captured (the directive is uninterpretable;
+        // persisting the raw bytes would mislead a replay reader into
+        // thinking we successfully extracted something).
+        var json = """
+            {
+              "structured_output": {
+                "outcome": "COMPLETE",
+                "section_update": { "strategy": "shred" }
+              }
+            }
+            """;
+
+        var result = AgentOutputParser.ParseResult(json);
+
+        Assert.Null(result.Section);
+        Assert.Null(result.SectionUpdateJson);
+    }
+
+    [Fact]
+    public void ParseResult_SectionUpdate_PreservesExtraFields()
+    {
+        // Agents sometimes emit fields beyond the typed contract (e.g. a
+        // future version adds a `confidence` score). The typed parser
+        // ignores the extra fields, but the raw JSON capture preserves
+        // them so replay/debug consumers see exactly what came over the
+        // wire — which is the whole point of having a separate column.
+        var json = """
+            {
+              "structured_output": {
+                "outcome": "COMPLETE",
+                "section_update": {
+                  "strategy": "replace",
+                  "content": "body",
+                  "confidence": 0.87,
+                  "_internal_marker": "abc123"
+                }
+              }
+            }
+            """;
+
+        var result = AgentOutputParser.ParseResult(json);
+
+        Assert.NotNull(result.SectionUpdateJson);
+        Assert.Contains("confidence", result.SectionUpdateJson, StringComparison.Ordinal);
+        Assert.Contains("_internal_marker", result.SectionUpdateJson, StringComparison.Ordinal);
+        Assert.Contains("abc123", result.SectionUpdateJson, StringComparison.Ordinal);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
     // StripMarkdownFences
     // ──────────────────────────────────────────────────────────────────────────
 

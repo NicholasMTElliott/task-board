@@ -72,27 +72,96 @@ internal static class RerunHashBuilder
 
     /// <summary>
     /// Computes the section_output_hash for a step's managed section. Returns
-    /// null when the section isn't present or is malformed (no closing
-    /// marker) — the cache decision treats null as "section drifted, must
-    /// re-run."
+    /// null when the section is missing, malformed (no closing marker), or
+    /// duplicated (multiple open or close markers for the same step name) —
+    /// the cache decision treats null as "section drifted, must re-run." The
+    /// duplicate case returns null so the cache forces a re-run rather than
+    /// silently picking one of the duplicates: the body is structurally broken
+    /// and the operator needs the step to re-write its section cleanly.
+    /// <para>
+    /// Diagnostic surfacing (operator-visible comment via the comment router)
+    /// is a follow-up: the hash builder is a pure function and doesn't talk to
+    /// the board. The caller's logger captures the warning when this method
+    /// returns null on a step the caller expected to find.
+    /// </para>
     /// </summary>
     internal static string? ComputeSectionHash(string body, string stepName)
+        => ComputeSectionHash(body, stepName, out _);
+
+    /// <summary>
+    /// Same as <see cref="ComputeSectionHash(string, string)"/> but reports a
+    /// structured diagnostic via <paramref name="diagnostic"/> when the hash
+    /// returns null due to a malformed or duplicated section. Callers that
+    /// want to log or surface the issue use this overload; callers that just
+    /// need the hash use the simpler one.
+    /// </summary>
+    internal static string? ComputeSectionHash(
+        string body, string stepName, out SectionHashDiagnostic? diagnostic)
     {
+        diagnostic = null;
         if (string.IsNullOrEmpty(body) || string.IsNullOrWhiteSpace(stepName))
             return null;
 
         var open = $"<!-- step-section:{stepName} -->";
         var close = $"<!-- /step-section:{stepName} -->";
 
-        var openIdx = body.IndexOf(open, StringComparison.Ordinal);
-        if (openIdx < 0) return null;
+        // Count occurrences in one pass each so duplicates are detected before
+        // we settle on a substring window. Multiple open markers for the same
+        // step name is a structural failure: ApplySectionUpdate would only
+        // rewrite the first, leaving the others stale and confusing every
+        // subsequent reader.
+        var openCount = CountOccurrences(body, open);
+        if (openCount == 0) return null;
+        if (openCount > 1)
+        {
+            diagnostic = new SectionHashDiagnostic(
+                stepName, SectionHashDiagnosticKind.DuplicateOpenMarker, openCount);
+            return null;
+        }
 
+        var closeCount = CountOccurrences(body, close);
+        if (closeCount == 0)
+        {
+            diagnostic = new SectionHashDiagnostic(
+                stepName, SectionHashDiagnosticKind.MissingCloseMarker, 0);
+            return null;
+        }
+        if (closeCount > 1)
+        {
+            diagnostic = new SectionHashDiagnostic(
+                stepName, SectionHashDiagnosticKind.DuplicateCloseMarker, closeCount);
+            return null;
+        }
+
+        var openIdx = body.IndexOf(open, StringComparison.Ordinal);
         var contentStart = openIdx + open.Length;
         var closeIdx = body.IndexOf(close, contentStart, StringComparison.Ordinal);
-        if (closeIdx < 0) return null;
+        if (closeIdx < 0)
+        {
+            // Open marker appears before close marker is required; if we got
+            // here with closeCount == 1 it means the close is before the open
+            // (also a structural failure).
+            diagnostic = new SectionHashDiagnostic(
+                stepName, SectionHashDiagnosticKind.CloseBeforeOpen, 1);
+            return null;
+        }
 
         var content = body.Substring(contentStart, closeIdx - contentStart);
         return Sha256Hex(Canonicalize(content));
+    }
+
+    private static int CountOccurrences(string body, string needle)
+    {
+        if (string.IsNullOrEmpty(body) || string.IsNullOrEmpty(needle))
+            return 0;
+        var count = 0;
+        var idx = 0;
+        while ((idx = body.IndexOf(needle, idx, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            idx += needle.Length;
+        }
+        return count;
     }
 
     /// <summary>
@@ -145,3 +214,23 @@ internal sealed record InputHashInputs(
     string StepConfigJson,
     string SystemPromptContents,
     string TaskPromptContents);
+
+/// <summary>
+/// Structured diagnostic emitted by
+/// <see cref="RerunHashBuilder.ComputeSectionHash(string, string, out SectionHashDiagnostic?)"/>
+/// when a managed section's markers are malformed. The hash builder remains
+/// a pure function — callers decide whether to log, surface to the operator
+/// via a comment, or both.
+/// </summary>
+public sealed record SectionHashDiagnostic(
+    string StepName,
+    SectionHashDiagnosticKind Kind,
+    int Count);
+
+public enum SectionHashDiagnosticKind
+{
+    DuplicateOpenMarker,
+    DuplicateCloseMarker,
+    MissingCloseMarker,
+    CloseBeforeOpen,
+}

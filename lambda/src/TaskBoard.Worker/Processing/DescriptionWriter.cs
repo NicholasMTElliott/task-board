@@ -98,9 +98,14 @@ internal static class DescriptionWriter
                 // Both render the agent-supplied content as the new section.
                 // append_with_revision_notes differs only in that the agent
                 // includes lessons-learned text inside `content` itself; the
-                // orchestrator is mechanical either way.
-                var content = update.Content ?? FirstRunLeavePlaceholder;
-                newSection = BuildSection(stepName, content, update.OpenQuestions, update.ResolvedDecisions);
+                // orchestrator is mechanical either way. Content MUST be
+                // present here — the parser already rejects null/empty
+                // content for non-leave strategies, but defensive bail-out
+                // keeps the writer from emitting a bogus placeholder section
+                // if it ever sees one (rerun redesign Finding 8).
+                if (string.IsNullOrWhiteSpace(update.Content))
+                    return body;
+                newSection = BuildSection(stepName, update.Content, update.OpenQuestions, update.ResolvedDecisions);
                 break;
 
             default:

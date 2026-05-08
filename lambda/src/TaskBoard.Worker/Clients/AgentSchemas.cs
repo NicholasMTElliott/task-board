@@ -191,6 +191,25 @@ internal static class AgentSchemas
             "requestedSteps": {
               "type": "array",
               "items": { "type": "string" }
+            },
+            "section_update": {
+              "type": "object",
+              "properties": {
+                "strategy": {
+                  "type": "string",
+                  "enum": ["leave", "replace", "append_with_revision_notes"]
+                },
+                "content": { "type": "string" },
+                "open_questions": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "resolved_decisions": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              },
+              "required": ["strategy"]
             }
           },
           "required": ["outcome", "winner_index"]
@@ -250,9 +269,29 @@ internal static class AgentSchemas
             "requestedSteps": {
               "type": ["array", "null"],
               "items": { "type": "string" }
+            },
+            "section_update": {
+              "type": ["object", "null"],
+              "properties": {
+                "strategy": {
+                  "type": "string",
+                  "enum": ["leave", "replace", "append_with_revision_notes"]
+                },
+                "content": { "type": ["string", "null"] },
+                "open_questions": {
+                  "type": ["array", "null"],
+                  "items": { "type": "string" }
+                },
+                "resolved_decisions": {
+                  "type": ["array", "null"],
+                  "items": { "type": "string" }
+                }
+              },
+              "required": ["strategy", "content", "open_questions", "resolved_decisions"],
+              "additionalProperties": false
             }
           },
-          "required": ["outcome", "detail", "winner_index", "scores", "questions", "requestedSteps"],
+          "required": ["outcome", "detail", "winner_index", "scores", "questions", "requestedSteps", "section_update"],
           "additionalProperties": false
         }
         """;

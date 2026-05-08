@@ -19,7 +19,11 @@ public sealed class CompletionRunner(
     ICrossReferenceResolver crossReferenceResolver,
     WorkflowConfig workflowConfig,
     AgentIdentity agentIdentity,
-    ILogger<CompletionRunner> logger)
+    ILogger<CompletionRunner> logger,
+    // Rerun redesign Problem 2: optional router. When wired, posts the
+    // children-completion progress comment as kind:completion_progress →
+    // delete_and_repost. Null falls back to legacy upsert keyed on runMarker.
+    ICommentRouter? commentRouter = null)
 {
     public async Task<AgentRunResult> ExecuteAsync(
         string cardId, string boardId, string workspacePath, CancellationToken ct)
@@ -77,7 +81,7 @@ public sealed class CompletionRunner(
             logger.LogWarning("Card {CardId} has no tracked children in children_complete state", cardId);
 
             var noChildrenComment = BuildComment([], [], state);
-            await boardClient.UpsertAgentCommentAsync(cardId, noChildrenComment, runMarker, ct);
+            await PostProgressCommentAsync(cardId, noChildrenComment, runMarker, ct);
 
             if (state.Transitions.TryGetValue(TransitionKeys.Error, out var errorTarget))
             {
@@ -116,7 +120,7 @@ public sealed class CompletionRunner(
 
         // 5. Post status comment
         var statusComment = BuildComment(completed, pending, state);
-        await boardClient.UpsertAgentCommentAsync(cardId, statusComment, runMarker, ct);
+        await PostProgressCommentAsync(cardId, statusComment, runMarker, ct);
 
         // 6. Evaluate and transition
         if (pending.Count == 0)
@@ -144,6 +148,29 @@ public sealed class CompletionRunner(
             $"Waiting for: {string.Join(", ", pending.Select(c => $"#{c.Id}"))}");
 
         } // end using logger scope
+    }
+
+    /// <summary>
+    /// Routes the children-progress comment through the comment router (kind:
+    /// completion_progress → delete_and_repost) when wired, or via legacy
+    /// upsert with the original <c>completion-check:{runId}</c> marker when not.
+    /// </summary>
+    private async Task PostProgressCommentAsync(
+        string cardId, string body, string legacyRunMarker, CancellationToken ct)
+    {
+        if (commentRouter is not null)
+        {
+            var marker = AiboardLogMarker.Build(
+                AiboardLogMarker.KindCompletionProgress,
+                new[] { KeyValuePair.Create("card", cardId) });
+            await commentRouter.PostAsync(
+                cardId, AiboardLogMarker.KindCompletionProgress,
+                body, marker, ct);
+        }
+        else
+        {
+            await boardClient.UpsertAgentCommentAsync(cardId, body, legacyRunMarker, ct);
+        }
     }
 
     private async Task<Dictionary<string, string>> BuildTemplateContextAsync(CancellationToken ct)

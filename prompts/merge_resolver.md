@@ -21,3 +21,7 @@ You are given a worktree where the main branch has been merged (or attempted to 
 
 - **COMPLETE**: The merge is clean, the build passes, and the result looks correct. Summarize what was merged and validated.
 - **ERROR**: The merge cannot be resolved cleanly, the build fails after resolution, or the merged result is semantically incorrect. Explain what went wrong and why manual intervention is needed.
+
+## Section Update Contract
+
+You do **not** write a description section. Set `section_update.strategy` to `leave` and omit the other section fields (`content`, `open_questions`, `resolved_decisions`). Your verdict goes in `detail` (rendered as a chronological comment); the orchestrator will not apply your section update.

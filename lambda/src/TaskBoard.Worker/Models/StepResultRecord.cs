@@ -145,4 +145,15 @@ public sealed record StepResultRecord(
     /// the full agent narrative — output_summary is what the cache hit
     /// surfaces as the "what was previously concluded" callback.
     /// </summary>
-    string? OutputSummary = null);
+    string? OutputSummary = null,
+    /// <summary>
+    /// Raw agent-supplied <c>section_update</c> directive, serialised as JSON.
+    /// Persisted into the V24 <c>section_update_json</c> JSONB column for
+    /// replay and debugging — the canonical record of what the agent asked
+    /// the orchestrator to do, separate from <see cref="SectionOutputHash"/>
+    /// which records the resulting on-card section after DescriptionWriter
+    /// applied the directive.
+    /// Null when the step didn't return a <c>section_update</c> (legacy
+    /// agents, gates, evaluators, or steps that opted out).
+    /// </summary>
+    string? SectionUpdateJson = null);

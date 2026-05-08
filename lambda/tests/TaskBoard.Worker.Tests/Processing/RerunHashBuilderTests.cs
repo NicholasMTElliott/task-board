@@ -258,4 +258,171 @@ public class RerunHashBuilderTests
 
         Assert.Equal(once, twice);
     }
+
+    // ── Finding 8: malformed / duplicate section marker detection ───────
+    //
+    // Pre-fix, ComputeSectionHash silently took the first IndexOf occurrence
+    // when a step section's open/close marker appeared more than once,
+    // producing a hash for whichever pair appeared first. That hides a real
+    // structural failure — multiple managed sections for the same step name
+    // mean DescriptionWriter.ApplySectionUpdate would only rewrite one of
+    // them, leaving the others stale. The fix returns null + a structured
+    // SectionHashDiagnostic so the caller can log and the cache misses,
+    // forcing the step to re-run and (presumably) clean up the duplicate.
+
+    [Fact]
+    public void ComputeSectionHash_DuplicateOpenMarker_ReturnsNullWithDiagnostic()
+    {
+        // Two `<!-- step-section:create_design -->` markers — operator likely
+        // copy/pasted a section, or a buggy writer ran twice. The hash builder
+        // refuses to pick one and returns null with a Duplicate diagnostic.
+        var body =
+            "<!-- step-section:create_design -->\n" +
+            "first content\n" +
+            "<!-- /step-section:create_design -->\n" +
+            "<!-- step-section:create_design -->\n" +
+            "second content\n" +
+            "<!-- /step-section:create_design -->\n";
+
+        var hash = RerunHashBuilder.ComputeSectionHash(
+            body, "create_design", out var diagnostic);
+
+        Assert.Null(hash);
+        Assert.NotNull(diagnostic);
+        Assert.Equal("create_design", diagnostic!.StepName);
+        Assert.Equal(SectionHashDiagnosticKind.DuplicateOpenMarker, diagnostic.Kind);
+        Assert.Equal(2, diagnostic.Count);
+    }
+
+    [Fact]
+    public void ComputeSectionHash_DuplicateCloseMarker_ReturnsNullWithDiagnostic()
+    {
+        // One open marker, two close markers — also structurally broken.
+        // The hash builder returns null so the cache misses; left to its
+        // own devices, IndexOf would have settled on the first close, but
+        // the operator can't reason about which content is "current" when
+        // there are stray close markers.
+        var body =
+            "<!-- step-section:create_design -->\n" +
+            "content one\n" +
+            "<!-- /step-section:create_design -->\n" +
+            "stray text\n" +
+            "<!-- /step-section:create_design -->\n";
+
+        var hash = RerunHashBuilder.ComputeSectionHash(
+            body, "create_design", out var diagnostic);
+
+        Assert.Null(hash);
+        Assert.NotNull(diagnostic);
+        Assert.Equal(SectionHashDiagnosticKind.DuplicateCloseMarker, diagnostic.Kind);
+        Assert.Equal(2, diagnostic.Count);
+    }
+
+    [Fact]
+    public void ComputeSectionHash_MissingCloseMarker_ReturnsDiagnostic()
+    {
+        // Open marker without a close marker — the writer was interrupted
+        // or the body was hand-edited. Same null-with-diagnostic shape so
+        // call sites can surface the issue.
+        var body =
+            "<!-- step-section:create_design -->\n" +
+            "## Design\n";
+
+        var hash = RerunHashBuilder.ComputeSectionHash(
+            body, "create_design", out var diagnostic);
+
+        Assert.Null(hash);
+        Assert.NotNull(diagnostic);
+        Assert.Equal(SectionHashDiagnosticKind.MissingCloseMarker, diagnostic.Kind);
+    }
+
+    [Fact]
+    public void ComputeSectionHash_MissingOpenMarker_ReturnsNullWithoutDiagnostic()
+    {
+        // Section simply isn't there yet (first run before any agent wrote
+        // it). Not a structural failure — the cache treats it as "no prior
+        // section" and the step runs full. No diagnostic emitted because
+        // there's nothing to surface to the operator.
+        var body = "# Story\nNo managed section yet.\n";
+
+        var hash = RerunHashBuilder.ComputeSectionHash(
+            body, "create_design", out var diagnostic);
+
+        Assert.Null(hash);
+        Assert.Null(diagnostic);
+    }
+
+    [Fact]
+    public void ComputeSectionHash_HappyPath_NoDiagnostic()
+    {
+        // Well-formed single section produces a hash and no diagnostic —
+        // the diagnostic out-parameter is reserved for malformed input.
+        var body =
+            "<!-- step-section:create_design -->\n" +
+            "## Technical Design\nUse Postgres.\n" +
+            "<!-- /step-section:create_design -->\n";
+
+        var hash = RerunHashBuilder.ComputeSectionHash(
+            body, "create_design", out var diagnostic);
+
+        Assert.NotNull(hash);
+        Assert.Equal(64, hash!.Length);
+        Assert.Null(diagnostic);
+    }
+
+    [Fact]
+    public void ComputeSectionHash_DuplicateOpenForOtherStep_DoesNotAffectThisStep()
+    {
+        // Duplicate markers for step 'foo' should not poison the hash for
+        // step 'bar'. The diagnostic / null return is per-step-name —
+        // ComputeSectionHash counts only markers carrying its argument's
+        // step name. Without this isolation, one step's malformed body
+        // would force every step on the card to re-run.
+        var body =
+            "<!-- step-section:foo -->\nfoo1\n<!-- /step-section:foo -->\n" +
+            "<!-- step-section:foo -->\nfoo2\n<!-- /step-section:foo -->\n" +
+            "<!-- step-section:bar -->\nbar content\n<!-- /step-section:bar -->\n";
+
+        var fooHash = RerunHashBuilder.ComputeSectionHash(body, "foo", out var fooDiag);
+        var barHash = RerunHashBuilder.ComputeSectionHash(body, "bar", out var barDiag);
+
+        Assert.Null(fooHash);
+        Assert.NotNull(fooDiag);
+        Assert.NotNull(barHash);
+        Assert.Null(barDiag);
+    }
+
+    // ── Finding 8: backward-compat overload returns hash without diagnostic ──
+    //
+    // The single-argument overload (kept for callers that don't care about
+    // the diagnostic) must match the two-argument overload's null/non-null
+    // decision exactly. Pinned so future refactors can't subtly diverge the
+    // two paths.
+
+    [Fact]
+    public void ComputeSectionHash_OverloadParity_OnDuplicate()
+    {
+        var body =
+            "<!-- step-section:s -->\na\n<!-- /step-section:s -->\n" +
+            "<!-- step-section:s -->\nb\n<!-- /step-section:s -->\n";
+
+        var simple = RerunHashBuilder.ComputeSectionHash(body, "s");
+        var withDiag = RerunHashBuilder.ComputeSectionHash(body, "s", out var diag);
+
+        Assert.Null(simple);
+        Assert.Null(withDiag);
+        Assert.NotNull(diag);
+    }
+
+    [Fact]
+    public void ComputeSectionHash_OverloadParity_OnHappyPath()
+    {
+        var body = "<!-- step-section:s -->\nx\n<!-- /step-section:s -->\n";
+
+        var simple = RerunHashBuilder.ComputeSectionHash(body, "s");
+        var withDiag = RerunHashBuilder.ComputeSectionHash(body, "s", out var diag);
+
+        Assert.Equal(simple, withDiag);
+        Assert.Null(diag);
+    }
 }
