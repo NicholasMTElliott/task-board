@@ -1,7 +1,38 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 
 namespace TaskBoard.Worker.Processing;
+
+/// <summary>Mode of a <see cref="DiffPacket"/> — Empty (no changes), Full (raw diff fits within threshold), or Summary (structured large-diff packet).</summary>
+public enum DiffMode
+{
+    Empty,
+    Full,
+    Summary,
+}
+
+/// <summary>
+/// Result of <see cref="GitWorkspaceManager.GetDiffPacketAsync"/>: either the
+/// raw diff (Full mode) or a structured large-diff summary (Summary mode).
+/// <see cref="Content"/> is ready to drop into a gate prompt's <c>{Diff}</c>
+/// placeholder either way.
+/// </summary>
+public sealed record DiffPacket(
+    DiffMode Mode,
+    string Content,
+    int RawByteSize,
+    int FilesChanged,
+    int FilesIncludedInline);
+
+/// <summary>Per-file metadata used when building <see cref="DiffMode.Summary"/> packets.</summary>
+internal sealed record DiffFileEntry(
+    string Path,
+    char Status,
+    int Added,
+    int Deleted,
+    bool IsBinary,
+    bool IsUntracked);
 
 public sealed class GitWorkspaceManager(
     ILogger<GitWorkspaceManager> logger,
@@ -663,6 +694,354 @@ public sealed class GitWorkspaceManager(
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Returns either the full diff (when its byte size is at or below
+    /// <paramref name="thresholdBytes"/>) or a structured large-diff summary
+    /// packet (when above). The summary packet contains a name+status table,
+    /// per-file line counts, the top-K files by churn included inline, and an
+    /// omitted-file list with line counts. Build/test command output is not
+    /// captured here — the gate prompt's <c>{AgentReport}</c> placeholder
+    /// already carries the agent's narrative including any test results.
+    ///
+    /// Replaces the old "diff truncated, can't verify" rejection: the gate
+    /// can still decide based on visible files + agent report, and only
+    /// returns NEEDS_INFO/ERROR when the visible evidence is genuinely
+    /// insufficient — not because the raw diff was too large.
+    /// </summary>
+    public async Task<DiffPacket> GetDiffPacketAsync(
+        string repoPath,
+        int thresholdBytes,
+        CancellationToken cancellationToken = default,
+        string? baseRef = null,
+        int topInlineFiles = 10,
+        int perFileInlineCharLimit = 5_000)
+    {
+        var effectiveBase = string.IsNullOrWhiteSpace(baseRef) ? "HEAD" : baseRef;
+
+        // Build the would-be full diff first. Same shape as GetDiffSummaryAsync
+        // but without the truncation step. We need the raw bytes both to decide
+        // mode and to return as Content when below threshold.
+        var fullDiff = new StringBuilder();
+        await AppendTrackedDiffAsync(repoPath, effectiveBase, fullDiff, cancellationToken);
+        var untrackedFiles = await ListUntrackedFilesAsync(repoPath, cancellationToken);
+        foreach (var file in untrackedFiles)
+        {
+            await AppendUntrackedSyntheticDiffAsync(repoPath, file, fullDiff, perFileLimit: 10_000, cancellationToken);
+        }
+
+        var fullText = fullDiff.ToString();
+        if (fullText.Length == 0)
+        {
+            return new DiffPacket(DiffMode.Empty, "", 0, 0, 0);
+        }
+
+        // Collect per-file metadata for both Full and Summary modes (so callers
+        // can see the changed file count even on Full).
+        var fileEntries = await CollectFileEntriesAsync(
+            repoPath, effectiveBase, untrackedFiles, cancellationToken);
+
+        if (fullText.Length <= thresholdBytes)
+        {
+            return new DiffPacket(
+                DiffMode.Full,
+                fullText,
+                RawByteSize: fullText.Length,
+                FilesChanged: fileEntries.Count,
+                FilesIncludedInline: fileEntries.Count);
+        }
+
+        // Summary mode: structured packet with top-K inline files.
+        return await BuildSummaryPacketAsync(
+            repoPath, effectiveBase, fileEntries,
+            rawByteSize: fullText.Length,
+            thresholdBytes: thresholdBytes,
+            topInlineFiles: topInlineFiles,
+            perFileInlineCharLimit: perFileInlineCharLimit,
+            cancellationToken);
+    }
+
+    // ── Diff helpers ─────────────────────────────────────────────────
+
+    private async Task AppendTrackedDiffAsync(
+        string repoPath, string baseRef, StringBuilder sb, CancellationToken ct)
+    {
+        try
+        {
+            var (_, diffOutput, _) = await RunGitAsync(repoPath, ["diff", baseRef], ct);
+            if (!string.IsNullOrWhiteSpace(diffOutput))
+                sb.Append(diffOutput);
+        }
+        catch (GitOperationException ex)
+        {
+            logger.LogWarning(ex, "git diff {BaseRef} failed in {Repo}", baseRef, repoPath);
+        }
+    }
+
+    private async Task<List<string>> ListUntrackedFilesAsync(
+        string repoPath, CancellationToken ct)
+    {
+        try
+        {
+            var (_, lsOutput, _) = await RunGitAsync(repoPath,
+                ["ls-files", "--others", "--exclude-standard"], ct);
+
+            return lsOutput
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(f => f.Trim())
+                .Where(f => !string.IsNullOrWhiteSpace(f))
+                .ToList();
+        }
+        catch (GitOperationException ex)
+        {
+            logger.LogWarning(ex, "git ls-files failed in {Repo}", repoPath);
+            return [];
+        }
+    }
+
+    private async Task AppendUntrackedSyntheticDiffAsync(
+        string repoPath, string relativePath, StringBuilder sb,
+        int perFileLimit, CancellationToken ct)
+    {
+        sb.AppendLine();
+        sb.AppendLine($"--- /dev/null");
+        sb.AppendLine($"+++ b/{relativePath}");
+        sb.AppendLine("@@ -0,0 +1 @@");
+
+        var fullPath = Path.Combine(repoPath, relativePath);
+        if (!File.Exists(fullPath))
+            return;
+
+        try
+        {
+            var content = await File.ReadAllTextAsync(fullPath, ct);
+            if (content.Length > perFileLimit)
+                content = content[..perFileLimit] + "\n... (file truncated)";
+
+            foreach (var line in content.Split('\n'))
+                sb.AppendLine($"+{line}");
+        }
+        catch (Exception ex)
+        {
+            sb.AppendLine($"+[could not read file: {ex.Message}]");
+        }
+    }
+
+    private async Task<List<DiffFileEntry>> CollectFileEntriesAsync(
+        string repoPath, string baseRef, IReadOnlyList<string> untrackedFiles,
+        CancellationToken ct)
+    {
+        var entries = new List<DiffFileEntry>();
+
+        // Tracked changes via --numstat (line counts) + --name-status (status letter)
+        Dictionary<string, char> statusByPath = new(StringComparer.Ordinal);
+        try
+        {
+            var (_, nameStatus, _) = await RunGitAsync(
+                repoPath, ["diff", "--name-status", baseRef], ct);
+            foreach (var line in nameStatus.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Split('\t', 2);
+                if (parts.Length < 2 || parts[0].Length == 0) continue;
+                // Rename status is 'R<percent>'; we just use the first letter.
+                statusByPath[parts[1].Trim()] = parts[0][0];
+            }
+        }
+        catch (GitOperationException ex)
+        {
+            logger.LogWarning(ex, "git diff --name-status failed in {Repo}", repoPath);
+        }
+
+        try
+        {
+            var (_, numstat, _) = await RunGitAsync(
+                repoPath, ["diff", "--numstat", baseRef], ct);
+            foreach (var line in numstat.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Split('\t');
+                if (parts.Length < 3) continue;
+                var addedRaw = parts[0].Trim();
+                var deletedRaw = parts[1].Trim();
+                var path = parts[2].Trim();
+                // Binary files report "-\t-\t<path>"; treat as 0/0 with isBinary flag.
+                var isBinary = addedRaw == "-" && deletedRaw == "-";
+                int.TryParse(addedRaw, out var added);
+                int.TryParse(deletedRaw, out var deleted);
+                var status = statusByPath.TryGetValue(path, out var s) ? s : 'M';
+                entries.Add(new DiffFileEntry(path, status, added, deleted, isBinary, IsUntracked: false));
+            }
+        }
+        catch (GitOperationException ex)
+        {
+            logger.LogWarning(ex, "git diff --numstat failed in {Repo}", repoPath);
+        }
+
+        // Untracked files appear as new files; line count = file's line count.
+        foreach (var path in untrackedFiles)
+        {
+            var fullPath = Path.Combine(repoPath, path);
+            int lineCount = 0;
+            if (File.Exists(fullPath))
+            {
+                try
+                {
+                    lineCount = (await File.ReadAllLinesAsync(fullPath, ct)).Length;
+                }
+                catch
+                {
+                    // Best-effort; unreadable files just show 0 lines.
+                }
+            }
+            entries.Add(new DiffFileEntry(path, 'A', lineCount, 0, IsBinary: false, IsUntracked: true));
+        }
+
+        return entries;
+    }
+
+    private async Task<DiffPacket> BuildSummaryPacketAsync(
+        string repoPath, string baseRef, List<DiffFileEntry> fileEntries,
+        int rawByteSize, int thresholdBytes,
+        int topInlineFiles, int perFileInlineCharLimit,
+        CancellationToken ct)
+    {
+        // Sort by churn (added + deleted; binary files sort to the bottom of
+        // the inline tier since their diff would just be "binary files differ").
+        var sorted = fileEntries
+            .OrderByDescending(e => e.IsBinary ? -1 : (e.Added + e.Deleted))
+            .ToList();
+
+        var topK = Math.Min(topInlineFiles, sorted.Count);
+        var inline = sorted.Take(topK).ToList();
+        var omitted = sorted.Skip(topK).ToList();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("## Summary mode (large diff)");
+        sb.AppendLine();
+        sb.Append("The full diff is ")
+            .Append(rawByteSize.ToString("N0", CultureInfo.InvariantCulture))
+            .Append(" bytes, exceeding the configured threshold of ")
+            .Append(thresholdBytes.ToString("N0", CultureInfo.InvariantCulture))
+            .AppendLine(" bytes. Below is a structured summary: a name+status table for every changed file, the top files by churn shown inline, and the rest listed without inline diff content.");
+        sb.AppendLine();
+        sb.AppendLine("**Important:** Do not return a generic \"diff truncated, cannot verify\" rejection. Decide based on the visible files, line counts, and the agent's self-report. Only return `NEEDS_INFO` or `ERROR` when the visible evidence is genuinely insufficient — and when you do, name the specific files or evidence you would need.");
+        sb.AppendLine();
+
+        sb.Append("### Files changed (").Append(sorted.Count).AppendLine(")");
+        sb.AppendLine();
+        sb.AppendLine("| Status | File | +Added | -Deleted |");
+        sb.AppendLine("|--------|------|--------|----------|");
+        foreach (var e in sorted)
+        {
+            var added = e.IsBinary ? "(bin)" : e.Added.ToString(CultureInfo.InvariantCulture);
+            var deleted = e.IsBinary ? "(bin)" : e.Deleted.ToString(CultureInfo.InvariantCulture);
+            sb.Append("| ").Append(e.Status).Append(" | `").Append(e.Path).Append("` | ")
+                .Append(added).Append(" | ").Append(deleted).AppendLine(" |");
+        }
+        sb.AppendLine();
+
+        sb.Append("### Top ").Append(topK).AppendLine(" files by churn (inline)");
+        sb.AppendLine();
+
+        foreach (var e in inline)
+        {
+            sb.Append("#### `").Append(e.Path).Append("` (")
+                .Append(e.Status).Append(", +")
+                .Append(e.IsBinary ? "bin" : e.Added.ToString(CultureInfo.InvariantCulture))
+                .Append(" / -")
+                .Append(e.IsBinary ? "bin" : e.Deleted.ToString(CultureInfo.InvariantCulture))
+                .AppendLine(")");
+            sb.AppendLine();
+
+            string body;
+            if (e.IsBinary)
+            {
+                body = "(binary file — diff omitted)";
+            }
+            else if (e.IsUntracked)
+            {
+                body = await ReadUntrackedAsDiffAsync(repoPath, e.Path, perFileInlineCharLimit, ct);
+            }
+            else
+            {
+                body = await GetSingleFileDiffAsync(repoPath, baseRef, e.Path, perFileInlineCharLimit, ct);
+            }
+
+            sb.AppendLine("```diff");
+            sb.AppendLine(body);
+            sb.AppendLine("```");
+            sb.AppendLine();
+        }
+
+        if (omitted.Count > 0)
+        {
+            sb.Append("### Omitted files (").Append(omitted.Count).AppendLine(") — listed without inline diff");
+            sb.AppendLine();
+            foreach (var e in omitted)
+            {
+                sb.Append("- `").Append(e.Path).Append("` (")
+                    .Append(e.Status).Append(", +")
+                    .Append(e.IsBinary ? "bin" : e.Added.ToString(CultureInfo.InvariantCulture))
+                    .Append(" / -")
+                    .Append(e.IsBinary ? "bin" : e.Deleted.ToString(CultureInfo.InvariantCulture))
+                    .AppendLine(")");
+            }
+            sb.AppendLine();
+        }
+
+        return new DiffPacket(
+            DiffMode.Summary,
+            sb.ToString(),
+            RawByteSize: rawByteSize,
+            FilesChanged: sorted.Count,
+            FilesIncludedInline: topK);
+    }
+
+    private async Task<string> GetSingleFileDiffAsync(
+        string repoPath, string baseRef, string path, int perFileLimit, CancellationToken ct)
+    {
+        try
+        {
+            var (_, output, _) = await RunGitAsync(
+                repoPath, ["diff", baseRef, "--", path], ct);
+            if (output.Length > perFileLimit)
+            {
+                output = output[..perFileLimit] + "\n... (file diff truncated)";
+            }
+            return output;
+        }
+        catch (GitOperationException ex)
+        {
+            logger.LogWarning(ex, "git diff for file {Path} failed in {Repo}", path, repoPath);
+            return $"(failed to read diff: {ex.Message})";
+        }
+    }
+
+    private async Task<string> ReadUntrackedAsDiffAsync(
+        string repoPath, string path, int perFileLimit, CancellationToken ct)
+    {
+        var fullPath = Path.Combine(repoPath, path);
+        if (!File.Exists(fullPath))
+            return "(untracked file not found)";
+
+        try
+        {
+            var content = await File.ReadAllTextAsync(fullPath, ct);
+            if (content.Length > perFileLimit)
+                content = content[..perFileLimit] + "\n... (file truncated)";
+
+            var sb = new StringBuilder();
+            sb.AppendLine("--- /dev/null");
+            sb.AppendLine($"+++ b/{path}");
+            sb.AppendLine("@@ -0,0 +1 @@");
+            foreach (var line in content.Split('\n'))
+                sb.Append('+').AppendLine(line);
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"(could not read untracked file: {ex.Message})";
+        }
     }
 
     // ── Common git operations ────────────────────────────────────────

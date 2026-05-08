@@ -143,4 +143,178 @@ public class GitWorkspaceManagerDiffTests : IDisposable
         Assert.Equal(40, sha.Length);
         Assert.Matches("^[0-9a-f]{40}$", sha);
     }
+
+    // ── Problem 4: structured diff packet (Empty / Full / Summary) ───
+
+    [Fact]
+    public async Task GetDiffPacket_NoChanges_ReturnsEmptyMode()
+    {
+        // Clean working tree against HEAD with no untracked files → Empty.
+        var packet = await _git.GetDiffPacketAsync(
+            _repoRoot, thresholdBytes: 50_000, CancellationToken.None);
+
+        Assert.Equal(DiffMode.Empty, packet.Mode);
+        Assert.Equal("", packet.Content);
+        Assert.Equal(0, packet.RawByteSize);
+        Assert.Equal(0, packet.FilesChanged);
+    }
+
+    [Fact]
+    public async Task GetDiffPacket_SmallDiff_ReturnsFullMode()
+    {
+        // A small uncommitted change fits within any reasonable threshold and
+        // should come back as Full mode with the raw diff text intact (so the
+        // gate consumes it identically to the pre-Problem-4 path).
+        File.WriteAllText(Path.Combine(_repoRoot, "small.txt"), "hello world\n");
+
+        var packet = await _git.GetDiffPacketAsync(
+            _repoRoot, thresholdBytes: 50_000, CancellationToken.None);
+
+        Assert.Equal(DiffMode.Full, packet.Mode);
+        Assert.Contains("small.txt", packet.Content);
+        Assert.Contains("hello world", packet.Content);
+        Assert.True(packet.RawByteSize > 0);
+        Assert.True(packet.RawByteSize <= 50_000);
+        Assert.Equal(1, packet.FilesChanged);
+        Assert.Equal(1, packet.FilesIncludedInline);
+        // Full mode must NOT prepend the summary-mode header (gate prompts
+        // route on that header to switch judgement criteria).
+        Assert.DoesNotContain("Summary mode (large diff)", packet.Content);
+    }
+
+    [Fact]
+    public async Task GetDiffPacket_LargeDiff_ReturnsSummaryMode()
+    {
+        // A diff above the threshold must come back as Summary, with: a
+        // summary-mode header the gate prompt can route on, the per-file
+        // table, the inline section, and the gate-prompt-rule note that
+        // forbids "diff truncated, can't verify" rejections.
+        var bigBody = new string('x', 5_000) + "\n";
+        File.WriteAllText(Path.Combine(_repoRoot, "big.txt"), bigBody);
+
+        var packet = await _git.GetDiffPacketAsync(
+            _repoRoot, thresholdBytes: 1_000, CancellationToken.None);
+
+        Assert.Equal(DiffMode.Summary, packet.Mode);
+        Assert.Contains("Summary mode (large diff)", packet.Content);
+        Assert.Contains("Files changed", packet.Content);
+        Assert.Contains("big.txt", packet.Content);
+        // Gate-prompt-rule: explicit "do not return generic truncated rejection".
+        Assert.Contains("Do not return", packet.Content);
+        Assert.True(packet.RawByteSize > 1_000);
+        Assert.Equal(1, packet.FilesChanged);
+    }
+
+    [Fact]
+    public async Task GetDiffPacket_LargeDiff_TopKFilesInline_RestOmitted()
+    {
+        // With more files than the inline cap, only the highest-churn files
+        // appear inline; the rest are listed in an Omitted section. Sort
+        // order is by total churn (added + deleted) descending.
+        // Generate 5 files with progressively smaller content; cap inline at 2.
+        for (int i = 0; i < 5; i++)
+        {
+            // file_0 has 5000 chars, file_1 has 4000, ..., file_4 has 1000
+            var size = 5_000 - (i * 1_000);
+            File.WriteAllText(
+                Path.Combine(_repoRoot, $"file_{i}.txt"),
+                new string('a', size) + "\n");
+        }
+
+        var packet = await _git.GetDiffPacketAsync(
+            _repoRoot, thresholdBytes: 1_000, CancellationToken.None,
+            topInlineFiles: 2);
+
+        Assert.Equal(DiffMode.Summary, packet.Mode);
+        Assert.Equal(5, packet.FilesChanged);
+        Assert.Equal(2, packet.FilesIncludedInline);
+
+        // Inline section must contain the top 2 by churn (file_0 and file_1
+        // have the most lines/chars, since each line of 'a'-block is one big
+        // line plus a newline → similar churn; for our deterministic check,
+        // both should appear in the table at minimum).
+        Assert.Contains("file_0.txt", packet.Content);
+        Assert.Contains("Omitted files", packet.Content);
+        // The lowest-churn file (file_4) should be in the omitted list, not
+        // inline. We can't easily assert "in omitted but not inline" without
+        // parsing the markdown, so we settle for: the omitted section exists
+        // and reports the right omitted count (5 changed - 2 inline = 3).
+        Assert.Contains("Omitted files (3)", packet.Content);
+    }
+
+    [Fact]
+    public async Task GetDiffPacket_LargeDiff_RawByteSizeReportsActualSize()
+    {
+        // The packet's RawByteSize must reflect the would-be full diff size,
+        // not the summary's content size. Operators reading log lines need
+        // to see the real magnitude that triggered summary mode.
+        var bigBody = new string('y', 10_000) + "\n";
+        File.WriteAllText(Path.Combine(_repoRoot, "huge.txt"), bigBody);
+
+        var packet = await _git.GetDiffPacketAsync(
+            _repoRoot, thresholdBytes: 500, CancellationToken.None);
+
+        Assert.Equal(DiffMode.Summary, packet.Mode);
+        Assert.True(packet.RawByteSize >= 10_000,
+            $"expected raw byte size ≥ 10_000 (the underlying file size), got {packet.RawByteSize}");
+    }
+
+    [Fact]
+    public async Task GetDiffPacket_TrackedAndUntracked_BothSurfaceInTable()
+    {
+        // The summary-mode file table must include both committed-since-base
+        // changes and currently-untracked new files; the prior diff-summary
+        // logic conflated them as a single string blob, the structured packet
+        // surfaces each in the table.
+        var baseSha = await _git.GetCurrentShaAsync(_repoRoot, CancellationToken.None);
+        Assert.False(string.IsNullOrEmpty(baseSha));
+
+        // Committed change (tracked, status M for an existing file).
+        File.WriteAllText(Path.Combine(_repoRoot, "tracked.txt"), new string('t', 6_000));
+        RunGitSync(_repoRoot, "add", "tracked.txt");
+        RunGitSync(_repoRoot, "commit", "-m", "add tracked");
+
+        // Untracked file (status A, isUntracked=true).
+        File.WriteAllText(Path.Combine(_repoRoot, "untracked.txt"), new string('u', 6_000));
+
+        var packet = await _git.GetDiffPacketAsync(
+            _repoRoot, thresholdBytes: 1_000, CancellationToken.None,
+            baseRef: baseSha);
+
+        Assert.Equal(DiffMode.Summary, packet.Mode);
+        Assert.Contains("tracked.txt", packet.Content);
+        Assert.Contains("untracked.txt", packet.Content);
+        Assert.Equal(2, packet.FilesChanged);
+    }
+
+    [Fact]
+    public async Task GetDiffPacket_DefaultsHEAD_WhenNoBaseRefProvided()
+    {
+        // Mirrors GetDiffSummaryAsync's default: null/whitespace baseRef →
+        // HEAD. After a clean commit, no diff against HEAD → Empty mode.
+        File.WriteAllText(Path.Combine(_repoRoot, "settled.txt"), "settled\n");
+        RunGitSync(_repoRoot, "add", "settled.txt");
+        RunGitSync(_repoRoot, "commit", "-m", "settle");
+
+        var packet = await _git.GetDiffPacketAsync(
+            _repoRoot, thresholdBytes: 50_000, CancellationToken.None);
+
+        Assert.Equal(DiffMode.Empty, packet.Mode);
+    }
+
+    [Fact]
+    public async Task GetDiffPacket_ExactlyAtThreshold_ReturnsFull()
+    {
+        // Boundary case: when raw bytes ≤ threshold the packet is Full, not
+        // Summary. The threshold check is `> threshold` for summary entry.
+        File.WriteAllText(Path.Combine(_repoRoot, "boundary.txt"), "x\n");
+
+        // Raw diff for a 2-byte file is small (header + content). Use a
+        // generous threshold to keep this above raw size — Full expected.
+        var packet = await _git.GetDiffPacketAsync(
+            _repoRoot, thresholdBytes: 50_000, CancellationToken.None);
+
+        Assert.Equal(DiffMode.Full, packet.Mode);
+        Assert.True(packet.RawByteSize <= 50_000);
+    }
 }

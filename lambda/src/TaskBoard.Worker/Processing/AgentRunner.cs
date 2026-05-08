@@ -1216,9 +1216,26 @@ public sealed partial class AgentRunner(
             // present. The captured SHA predates any in-run promotion and so
             // surfaces the cumulative work for this run. Falls back to HEAD
             // (uncommitted-only) when the SHA capture failed.
-            changes = await gitWorkspaceManager.GetDiffSummaryAsync(
-                worktreePath, gateCheck.MaxDiffChars, cancellationToken,
+            //
+            // Problem 4 (rerun redesign): when the diff exceeds
+            // gateCheck.MaxDiffChars, switch to a structured summary packet
+            // instead of returning a "...truncated..." marker. The packet
+            // includes a per-file table, top-K files inline, and an omitted
+            // list — enough for the gate to judge intent without seeing every
+            // byte. Eliminates the "diff truncated, can't verify" rejection.
+            var packet = await gitWorkspaceManager.GetDiffPacketAsync(
+                worktreePath,
+                thresholdBytes: gateCheck.MaxDiffChars,
+                cancellationToken,
                 baseRef: runStartCanonicalSha);
+            changes = packet.Content;
+            if (packet.Mode == DiffMode.Summary)
+            {
+                logger.LogInformation(
+                    "Gate diff in summary mode for card {CardId} state {State}: raw={RawBytes:N0}B, threshold={Threshold:N0}B, files={Files}, inline={Inline}",
+                    cardId, state.Name, packet.RawByteSize, gateCheck.MaxDiffChars,
+                    packet.FilesChanged, packet.FilesIncludedInline);
+            }
         }
         else
         {
