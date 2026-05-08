@@ -381,17 +381,20 @@ public class CandidateExecutorFlowTests : IDisposable
         Assert.True(winnerVerdict.Selected);
     }
 
-    // ── Parallel-by-provider execution ───────────────────────────────────────
+    // ── Fully-parallel candidate execution ───────────────────────────────────
 
     [Fact]
-    public async Task ParallelByProvider_DifferentProvidersOverlap_SameProviderSerializes()
+    public async Task AllCandidates_RunInParallel_RegardlessOfProvider()
     {
         // Three candidates: docker-claude-cli×2, docker-opencode×1.
         // Each candidate sleeps 250ms before returning COMPLETE. Expected timing:
-        //   - claude[1] starts AFTER claude[0] finishes (same-provider serialization)
-        //   - opencode[2] starts BEFORE claude[0] finishes (cross-provider parallelism)
-        // Pure-sequential execution (the pre-fix shape) would fail the second
-        // assertion: opencode would only start after both claude calls complete.
+        // every candidate starts before any of them finishes (full parallelism).
+        // The pre-fix shape grouped by provider key and serialised same-provider
+        // candidates within each group, costing wall-clock time when one provider
+        // contributed several model variants.
+        //
+        // Concurrency caps that genuinely matter (a single shared local llama.cpp
+        // server) are now expressed via ResourcePool, not by reflexive grouping.
         var sleepDuration = TimeSpan.FromMilliseconds(250);
 
         var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
@@ -432,18 +435,21 @@ public class CandidateExecutorFlowTests : IDisposable
         var claude1 = candidateRecords[1];
         var opencode = candidateRecords[2];
 
-        // Same-provider serialization: claude[1] starts no earlier than claude[0] ends.
-        // 10ms slop accommodates clock-resolution + scheduling jitter.
-        Assert.True(
-            claude1.StartedAtUtc >= claude0.CompletedAtUtc - TimeSpan.FromMilliseconds(10),
-            $"Same-provider candidates should serialize. claude[0] completed at {claude0.CompletedAtUtc:O}, " +
-            $"claude[1] started at {claude1.StartedAtUtc:O} (gap {(claude1.StartedAtUtc - claude0.CompletedAtUtc).TotalMilliseconds:F0}ms — should be ≥0).");
+        // Full parallelism: every candidate starts before the first one finishes.
+        // Reference point is min(completed) — the fastest candidate to finish.
+        // Every other candidate must have started BEFORE that point, otherwise
+        // someone was waiting in line.
+        var earliestCompletion = new[] { claude0.CompletedAtUtc, claude1.CompletedAtUtc, opencode.CompletedAtUtc }.Min();
 
-        // Cross-provider parallelism: opencode starts before claude[0] finishes.
         Assert.True(
-            opencode.StartedAtUtc < claude0.CompletedAtUtc,
-            $"Different-provider candidates should overlap. claude[0] completed at {claude0.CompletedAtUtc:O}, " +
-            $"opencode started at {opencode.StartedAtUtc:O} (lag {(opencode.StartedAtUtc - claude0.CompletedAtUtc).TotalMilliseconds:F0}ms — should be <0).");
+            claude0.StartedAtUtc < earliestCompletion,
+            $"Candidate 0 (claude) should start before any candidate finishes. earliestCompletion={earliestCompletion:O}, claude0.StartedAtUtc={claude0.StartedAtUtc:O}");
+        Assert.True(
+            claude1.StartedAtUtc < earliestCompletion,
+            $"Candidate 1 (claude) should start before any candidate finishes — same-provider parallelism is now expected. earliestCompletion={earliestCompletion:O}, claude1.StartedAtUtc={claude1.StartedAtUtc:O}");
+        Assert.True(
+            opencode.StartedAtUtc < earliestCompletion,
+            $"Candidate 2 (opencode) should start before any candidate finishes. earliestCompletion={earliestCompletion:O}, opencode.StartedAtUtc={opencode.StartedAtUtc:O}");
     }
 
     // ── V22: ResourcePool serialization across providers ─────────────────────
@@ -876,7 +882,7 @@ public class CandidateExecutorFlowTests : IDisposable
 
     /// <summary>
     /// Executor that delays for a fixed duration before returning, to widen the
-    /// timing window the parallel-by-provider test inspects. Touches a marker
+    /// timing window the parallelism test inspects. Touches a marker
     /// file so commit_and_push promotion has something to commit.
     /// </summary>
     private sealed class SleepingExecutor(

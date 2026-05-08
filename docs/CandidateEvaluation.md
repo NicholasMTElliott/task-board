@@ -2,7 +2,7 @@
 
 Run a step with N agents racing on the same task, then have an evaluator pick a winner. The losers get discarded; the winner's branch is promoted into the canonical workflow. Per-(role, provider) win-rate and quality-score metrics build up over time so you can decide whether a free local model (e.g. Qwen via OpenCode) is "close enough" to a paid one (e.g. Claude Opus) for a given role.
 
-**Concurrency model**: candidates **of different providers run in parallel**; **candidates sharing a provider run sequentially within that group**. So `[claude×2, opencode×1, codex×2]` runs as three concurrent provider tracks (claude, opencode, codex), with each track processing its own candidates one at a time. Wall-clock time is bounded by the slowest provider track (sum of its candidates), not by the sum of all candidates. The constraint exists because a single CLI / credential pool / rate-limit window per provider makes concurrent same-provider invocations a fast route to a 429, while different providers don't contend on each other.
+**Concurrency model**: every candidate in a slot runs **fully in parallel**, regardless of provider. So `[claude×2, opencode×1, codex×2]` runs all five concurrently — wall-clock time is bounded by the slowest *single* candidate, not by the sum or by per-provider group totals. Account-level rate limits (Anthropic, OpenAI) are handled by the per-candidate retry loop, which converts a 429 to an ERROR-with-rate-limit-flag for slot/chain-level fallback. Genuine concurrency caps (a single shared local llama.cpp server backing both `docker-opencode` and `docker-claude-qwen`) are expressed declaratively via the [resource pool](#named-resource-concurrency-pool). Earlier versions of aiboard grouped candidates by provider and serialised same-provider candidates within each group; that grouping was removed in v0.0.24 because it cost wall-clock without preventing real failures.
 
 This is **opt-in per step**. Steps without `candidates` keep the existing single-agent path with zero behavioural changes.
 
@@ -26,7 +26,7 @@ Once the data is in, you can route each role to the best (or cheapest acceptable
 For a step that declares `candidates`, the runtime:
 
 1. Generates a `candidate_group_id` (UUID).
-2. Groups candidates by provider (case-insensitive) and runs the groups concurrently. Within each group, candidates run in declaration order. For each candidate:
+2. Runs all candidates concurrently via a single `Task.WhenAll`. For each candidate:
    - Creates a new branch off the canonical worktree's HEAD: `aiboard-cand/{cardId}-{groupShort}-{index}-{provider}`.
    - Spins up a fresh worktree, copies the canonical `.aiboard/{tasks,comments,images}/` into it.
    - Runs the candidate's executor (`docker-claude-cli`, `docker-opencode`, etc.) against that worktree with the candidate's optional model + providerParams overrides.
@@ -297,7 +297,9 @@ V22 also adds `agent_run.rate_limit_events INT NOT NULL DEFAULT 0` (incremented 
 
 ## Named-resource concurrency pool
 
-Multiple providers can share the same external resource and shouldn't all hammer it concurrently. The canonical case is `docker-opencode` and `docker-claude-qwen` both targeting the local llama.cpp server on `llm-net` — without serialization, parallel-by-provider candidate execution lets both hit the proxy at once, the second blocks for minutes waiting on the first, and the inactivity timer fires before any tokens stream back.
+Multiple providers can share the same external resource and shouldn't all hammer it concurrently. The canonical case is `docker-opencode` and `docker-claude-qwen` both targeting the local llama.cpp server on `llm-net` — `local-llm`'s `llama-server` runs `--parallel 1`, so two concurrent Qwen-target candidates fight over the single slot, the second blocks for minutes waiting on the first, and the inactivity timer fires before any tokens stream back.
+
+**This is required, not optional, when both Qwen-target providers are present in the same candidate slot.** Earlier versions of aiboard happened to mask the contention by serialising same-provider candidates, but candidates now run fully in parallel (see Concurrency model above), so explicit declaration is mandatory.
 
 Declare resources with caps in `appsettings.json` (or `./.aiboard/appsettings.json`):
 

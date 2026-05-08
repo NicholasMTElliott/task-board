@@ -10,13 +10,15 @@ namespace TaskBoard.Worker.Processing;
 /// </summary>
 /// <remarks>
 /// Use case: <c>docker-opencode</c> and <c>docker-claude-qwen</c> both run
-/// against the same local llama.cpp server on <c>llm-net</c>. Without
-/// serialisation, parallel-by-provider candidate execution lets both hit the
-/// proxy at once — the second request blocks for minutes waiting for the first
-/// to finish, and the inactivity timer fires before any tokens stream back.
-/// Declare a <c>local-llm</c> resource with <c>MaxConcurrent = 1</c> and tag
-/// both providers; the pool turns "parallel across providers" into "parallel
-/// across distinct backends" without the caller having to reason about it.
+/// against the same local llama.cpp server on <c>llm-net</c>. Candidates run
+/// fully in parallel by default, so without serialisation both providers hit
+/// the proxy at once — the second request blocks for minutes waiting for the
+/// first to finish, and the inactivity timer fires before any tokens stream
+/// back. Declare a <c>local-llm</c> resource with <c>MaxConcurrent = 1</c> and
+/// tag both providers; the pool turns "parallel across providers" into
+/// "parallel across distinct backends" without the caller having to reason
+/// about it. **Required** in any project pairing both Qwen-target providers in
+/// a candidate slot.
 /// </remarks>
 public interface IResourcePool
 {

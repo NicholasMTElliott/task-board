@@ -130,29 +130,35 @@ public sealed class CandidateExecutor(
         var slotStartCanonicalSha = await gitWorkspaceManager.GetCurrentShaAsync(
             request.WorktreePath, cancellationToken);
 
-        // ── Phase 1: run candidates with per-provider serialization ─────────
-        // Different providers run concurrently (a Codex CLI call can overlap
-        // with a docker-claude-cli call without contending). Same-provider
-        // candidates run sequentially within their group — one CLI/credential
-        // pool + per-provider rate-limit affinity make concurrent same-provider
-        // calls a fast route to a 429.
+        // ── Phase 1: run all candidates in parallel ─────────────────────────
+        // Every candidate runs concurrently — including same-provider, different-
+        // model candidates (e.g. Opus + Sonnet + Haiku on docker-claude-cli).
+        // Wall-clock time is bounded by the SLOWEST single candidate, not by
+        // the sum or any provider-group total.
         //
-        // Wall-clock time is bounded by the slowest provider group (sum of its
-        // own candidates' durations), not by the sum of all candidates. The
-        // original candidate-index is preserved in the returned list so
+        // Concurrency caps that genuinely matter (e.g. a single shared local
+        // llama.cpp server handling docker-opencode + docker-claude-qwen) are
+        // expressed via the ResourcePool — declare a named pool with a slot
+        // count and tag the providers that need it. Account-level rate limits
+        // (Anthropic, OpenAI) are best handled via the per-candidate retry
+        // loop in ExecuteCandidateWithRetriesAsync, which converts a 429 to an
+        // ERROR-with-rate-limit-flag for slot/chain-level fallback rather than
+        // by pre-emptively serialising siblings.
+        //
+        // The original candidate-index is preserved in the returned list so
         // downstream consumers (evaluator's "Candidate N" enumeration,
         // step_result.candidate_index, branch naming) see the declaration
         // order regardless of completion order.
-        var groupedByProvider = candidates
+        var indexedCandidates = candidates
             .Select((candidate, index) => (Index: index, Candidate: candidate))
-            .GroupBy(x => x.Candidate.Provider, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         logger.LogInformation(
-            "Slot {SlotIndex}/{TotalSlots} step '{StepName}' card {CardId}: fanning out {ProviderCount} provider group(s) in parallel ({Layout})",
+            "Slot {SlotIndex}/{TotalSlots} step '{StepName}' card {CardId}: fanning out {CandidateCount} candidate(s) in parallel ({Layout})",
             slotIndex, totalSlots, step.Name, request.CardId,
-            groupedByProvider.Count,
-            string.Join(", ", groupedByProvider.Select(g => $"{g.Key}×{g.Count()}")));
+            indexedCandidates.Count,
+            string.Join(", ", indexedCandidates.Select(c =>
+                $"#{c.Index}:{c.Candidate.Provider}{(c.Candidate.Model is null ? "" : "/" + c.Candidate.Model)}")));
 
         // Pre-compute the deterministic branch name for every candidate. Used
         // by the slot-throw catch block to sweep candidates whose tasks were
@@ -167,34 +173,26 @@ public sealed class CandidateExecutor(
                     SlugifyProvider(candidate.Provider))))
             .ToList();
 
-        var groupTasks = groupedByProvider.Select(async providerGroup =>
+        var candidateTasks = indexedCandidates.Select(async entry =>
         {
-            // Sequential per provider. Materialise the group up-front so the
-            // GroupBy iterator isn't enumerated concurrently from elsewhere.
-            var ordered = providerGroup.ToList();
-            var groupResults = new List<(int Index, CandidateExecution Execution)>(ordered.Count);
-            foreach (var entry in ordered)
-            {
-                var execution = await ExecuteSingleCandidateAsync(
-                    request, slotIndex, totalSlots, groupId, canonicalBranch,
-                    entry.Index, entry.Candidate, cancellationToken);
-                groupResults.Add((entry.Index, execution));
-            }
-            return groupResults;
+            var execution = await ExecuteSingleCandidateAsync(
+                request, slotIndex, totalSlots, groupId, canonicalBranch,
+                entry.Index, entry.Candidate, cancellationToken);
+            return (Index: entry.Index, Execution: execution);
         }).ToList();
 
-        // Task.WhenAll waits for every group to complete (or throw). On a thrown
-        // RateLimitException from any group, sibling groups still finish their
-        // current await before propagation. Because branch names embed a
-        // per-run UUID, leaked candidate worktrees from sibling groups are NOT
-        // self-cleaning on a re-run (the next attempt uses different paths) —
-        // so we sweep them here on the way out before rethrowing. AgentRunner
-        // still restores the card to the trigger column on RateLimitException;
-        // this just stops disk accumulation.
-        List<(int Index, CandidateExecution Execution)>[] allGroupResults;
+        // Task.WhenAll waits for every candidate to complete (or throw). On a
+        // thrown RateLimitException from any candidate, sibling candidates
+        // still finish their current await before propagation. Because branch
+        // names embed a per-run UUID, leaked candidate worktrees from siblings
+        // are NOT self-cleaning on a re-run (the next attempt uses different
+        // paths) — so we sweep them here on the way out before rethrowing.
+        // AgentRunner still restores the card to the trigger column on
+        // RateLimitException; this just stops disk accumulation.
+        (int Index, CandidateExecution Execution)[] allCandidateResults;
         try
         {
-            allGroupResults = await Task.WhenAll(groupTasks);
+            allCandidateResults = await Task.WhenAll(candidateTasks);
         }
         catch
         {
@@ -221,8 +219,7 @@ public sealed class CandidateExecutor(
             throw;
         }
 
-        var executions = allGroupResults
-            .SelectMany(r => r)
+        var executions = allCandidateResults
             .OrderBy(r => r.Index)
             .Select(r => r.Execution)
             .ToList();

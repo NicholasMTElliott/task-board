@@ -647,7 +647,7 @@ public class CandidateExecutorSlotsTests : IDisposable
 
     private sealed class RecordingRunStore : IRunStore
     {
-        // Lock-guarded: parallel-by-provider candidate execution can race List<T>.Add otherwise.
+        // Lock-guarded: parallel candidate execution can race List<T>.Add otherwise.
         private readonly object _lock = new();
         private readonly List<StepResultRecord> _savedSteps = new();
         private readonly List<RecordedVerdict> _recordedVerdicts = new();

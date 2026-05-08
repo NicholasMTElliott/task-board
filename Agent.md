@@ -643,7 +643,9 @@ If you copy `workflow.github.example.json` and adjust, you start with these role
 
 Opt-in per step. Lets you race N agents on the same task, have an evaluator pick a winner, promote the winner's branch, and accumulate per-(role, provider) win-rate metrics.
 
-**Concurrency model**: candidates are grouped by their `provider` key (case-insensitive). Different provider groups run **in parallel**; same-provider candidates run **sequentially within their group**. Wall-clock time is bounded by the slowest provider group's total duration, not by the sum of all candidates. Why: a single CLI / credential pool / rate-limit window per provider makes concurrent same-provider invocations a fast route to a 429, while different providers (e.g. codex + docker-claude-cli + docker-opencode) don't contend on each other. So `[claude×2, opencode×1, codex×2]` runs as 3 concurrent provider tracks; if each candidate is ~3 minutes, total wall-clock is ~6 minutes (the slowest two-candidate track), not ~15.
+**Concurrency model**: every candidate in a slot runs **fully in parallel**, regardless of provider. Wall-clock time is bounded by the slowest *single* candidate, not by the sum or by per-provider group totals. So `[claude×2, opencode×1, codex×2]` runs all five concurrently — if each candidate is ~3 minutes, total wall-clock is ~3 minutes.
+
+Genuine concurrency caps (a single shared local llama.cpp server backing multiple Qwen-target providers) are expressed declaratively via the **resource pool** — see §10.3 for `ResourcePool` config. Account-level rate limits (Anthropic, OpenAI) are handled by the per-candidate retry loop, which converts a 429 to an ERROR-with-rate-limit-flag for slot/chain-level fallback. Earlier versions of aiboard grouped candidates by provider and serialised same-provider candidates within each group; that grouping was removed in v0.0.24 because it cost wall-clock without preventing real failures.
 
 **How to opt in** — add `candidates[]` and `evaluator` to a step:
 
@@ -815,9 +817,9 @@ The runtime detects re-runs automatically and prepends a "RE-RUN; bail with COMP
 
 ### 10.3 Named-resource concurrency pool
 
-Some providers share an external resource — most notably `docker-opencode` and `docker-claude-qwen` both targeting the same local llama.cpp server. Without serialization, parallel-by-provider candidate execution lets both hit the proxy at once; the second waits minutes and the inactivity timer fires before any tokens stream back.
+Candidates within a slot run fully in parallel (§10.1), which is great for wall-clock but a problem when two providers share an external bottleneck. The most common case: `docker-opencode` and `docker-claude-qwen` both target the same local llama.cpp server, and `local-llm`'s `llama-server` runs `--parallel 1`. Without serialization, two concurrent Qwen-target candidates hammer the proxy at once; the second waits minutes for a slot, and the inactivity timer fires before any tokens stream back.
 
-Declare resources with concurrency caps in `appsettings.json` and tag the providers that need them:
+**This is required, not optional, when both Qwen-target providers are present in the same candidate slot.** Declare resources with concurrency caps in `appsettings.json` and tag the providers that need them:
 
 ```json
 "ResourcePool": {
@@ -1054,7 +1056,7 @@ Use the per-(role, provider) data to refine routing. If a role's win rate drops,
 | Card stuck in "Designing" / "Implementing" after a crash | Orchestrator died between IN_PROGRESS and COMPLETE. | Manually drag back to the "Ready for X" column to retry. |
 | `ApplicationException: rate limited` then retry | Rate limit detected from CLI stderr (`AgentCli`) or board API (`BoardApi`). | Wait — `PollingRunner` backs off 30 min for CLI, 2 min for board. |
 | Qwen first request takes 60+ seconds | Cold prefix cache. Normal. | `TimeoutSeconds: 600` in DockerAgents:OpenCode / DockerAgents:ClaudeQwen. |
-| Two concurrent candidates against Qwen are slow | `local-llm` server is `--parallel 1`. Concurrent calls bust the prefix cache. | `CandidateExecutor` runs candidates sequentially; if you ran them in parallel manually, don't. |
+| Two concurrent candidates against Qwen are slow / time out | `local-llm` server is `--parallel 1`. Concurrent calls bust the prefix cache; the second waits and may hit the inactivity timer. | Configure the `local-llm` resource pool (§10.3) and tag both `docker-opencode` and `docker-claude-qwen` to it. With `MaxConcurrent: 1`, the second candidate waits cleanly on the semaphore. **Required** for any project that pairs both Qwen-target providers in a candidate slot. |
 | OpenCode keeps returning ERROR with raw stdout | Model isn't producing parseable JSON; bounded retry exhausted. **Check the structurer ran** — startup logs `Docker/OpenCode invoking structurer for card N` on first parse failure (v0.0.22+). If the structurer also failed, look for `falling through to retry loop` followed by `OpenCode CLI produced no parseable Agent Contract JSON after N attempts`. | Check `CliFailureHintDetector.OpenCodeSignatures` matches in logs. May indicate model misconfiguration or upstream rate-limit on the proxy. If the agent's narrative looks correct but doesn't end with JSON, the structurer should be recovering it — verify `EnableStructurer: true` in `DockerAgents:OpenCode`. |
 | `Schema validation` stderr from Claude / Codex | Schema mismatch between the CLI version and what `AgentSchemas.OutcomeSchema` expects. | Update the CLI image; check schema SHA in startup logs. |
 
