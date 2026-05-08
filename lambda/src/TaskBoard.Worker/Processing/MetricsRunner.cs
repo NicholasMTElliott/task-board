@@ -35,7 +35,7 @@ public sealed class MetricsRunner(
             var providerRole = await metricsStore.GetProviderRoleMetricsAsync(since, ct);
             var headToHead = await metricsStore.GetCandidateHeadToHeadAsync(since, ct);
             var evalReliability = await metricsStore.GetEvaluatorReliabilityAsync(since, ct);
-            var fastPath = await metricsStore.GetFastPathHitRateAsync(since, ct);
+            var cacheHits = await metricsStore.GetCacheHitRateAsync(since, ct);
 
             PrintRunSummary(summary);
             PrintCardMetrics(cards);
@@ -45,7 +45,7 @@ public sealed class MetricsRunner(
             PrintProviderRoleMetrics(providerRole);
             PrintHeadToHead(headToHead);
             PrintEvaluatorReliability(evalReliability);
-            PrintFastPathHitRate(fastPath);
+            PrintCacheHitRate(cacheHits);
         }
         catch (Exception ex)
         {
@@ -215,11 +215,11 @@ public sealed class MetricsRunner(
         Console.WriteLine();
     }
 
-    private static void PrintFastPathHitRate(IReadOnlyList<FastPathHitRecord> rows)
+    private static void PrintCacheHitRate(IReadOnlyList<CacheHitRateRecord> rows)
     {
         if (rows.Count == 0) return;
 
-        Console.WriteLine("── Re-run Fast-Path Hit Rate ────────────────────────────");
+        Console.WriteLine("── Cache Hit Rate (deterministic skip) ──────────────────");
         Console.WriteLine(
             $"  {"State",-22}  {"Step",-26}  {"Role",-22}  {"Total",5}  {"Hits",5}  {"Rate",6}");
         Console.WriteLine(
@@ -229,7 +229,7 @@ public sealed class MetricsRunner(
         {
             var rate = r.HitRatePercent.HasValue ? $"{r.HitRatePercent.Value:F1}%" : "—";
             Console.WriteLine(
-                $"  {r.StateName,-22}  {r.StepName,-26}  {r.Role,-22}  {r.TotalInvocations,5}  {r.FastPathHits,5}  {rate,6}");
+                $"  {r.StateName,-22}  {r.StepName,-26}  {r.Role,-22}  {r.TotalInvocations,5}  {r.CacheHits,5}  {rate,6}");
         }
 
         Console.WriteLine();

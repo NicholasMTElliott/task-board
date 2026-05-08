@@ -171,7 +171,7 @@ public class MetricsRunnerTests
         public List<ProviderRoleMetric> ProviderRoleMetrics { get; set; } = [];
         public List<HeadToHeadRecord> HeadToHead { get; set; } = [];
         public List<EvaluatorReliabilityRecord> EvaluatorReliability { get; set; } = [];
-        public List<FastPathHitRecord> FastPathHits { get; set; } = [];
+        public List<CacheHitRateRecord> CacheHits { get; set; } = [];
 
         public Task<RunSummary> GetRunSummaryAsync(DateTimeOffset? since, CancellationToken ct)
             => Task.FromResult(Summary);
@@ -197,7 +197,7 @@ public class MetricsRunnerTests
         public Task<IReadOnlyList<EvaluatorReliabilityRecord>> GetEvaluatorReliabilityAsync(DateTimeOffset? since, CancellationToken ct)
             => Task.FromResult<IReadOnlyList<EvaluatorReliabilityRecord>>(EvaluatorReliability);
 
-        public Task<IReadOnlyList<FastPathHitRecord>> GetFastPathHitRateAsync(DateTimeOffset? since, CancellationToken ct)
-            => Task.FromResult<IReadOnlyList<FastPathHitRecord>>(FastPathHits);
+        public Task<IReadOnlyList<CacheHitRateRecord>> GetCacheHitRateAsync(DateTimeOffset? since, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<CacheHitRateRecord>>(CacheHits);
     }
 }

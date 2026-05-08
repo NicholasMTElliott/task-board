@@ -41,7 +41,7 @@ public sealed class NullMetricsStore : IMetricsStore
         DateTimeOffset? since, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<EvaluatorReliabilityRecord>>([]);
 
-    public Task<IReadOnlyList<FastPathHitRecord>> GetFastPathHitRateAsync(
+    public Task<IReadOnlyList<CacheHitRateRecord>> GetCacheHitRateAsync(
         DateTimeOffset? since, CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<FastPathHitRecord>>([]);
+        => Task.FromResult<IReadOnlyList<CacheHitRateRecord>>([]);
 }

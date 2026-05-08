@@ -90,18 +90,18 @@ public sealed record EvaluatorReliabilityRecord(
     double? RegressionRatePercent);
 
 /// <summary>
-/// Per-(state, step, role, provider) re-run fast-path hit rate. High hit rate
-/// means the preamble is paying off; zero rate on a step that re-runs often
-/// means something is preventing the fast path (operator deletes comments,
-/// markers diverging, etc).
+/// Per-(state, step, role, provider) cache-hit rate from the rerun-redesign
+/// deterministic-skip cache (Problem 1). High hit rate means re-runs are
+/// finding cached results to reuse; low rate on a step that re-runs often
+/// signals operator-edit drift, marker churn, or input-bundle changes.
 /// </summary>
-public sealed record FastPathHitRecord(
+public sealed record CacheHitRateRecord(
     string StateName,
     string StepName,
     string Role,
     string Provider,
     int TotalInvocations,
-    int FastPathHits,
+    int CacheHits,
     double? HitRatePercent);
 
 /// <summary>

@@ -323,7 +323,7 @@ public sealed class PgMetricsStore(
         return results;
     }
 
-    public async Task<IReadOnlyList<FastPathHitRecord>> GetFastPathHitRateAsync(
+    public async Task<IReadOnlyList<CacheHitRateRecord>> GetCacheHitRateAsync(
         DateTimeOffset? since, CancellationToken ct)
     {
         await using var conn = await dataSource.OpenConnectionAsync(ct);
@@ -357,17 +357,17 @@ public sealed class PgMetricsStore(
         cmd.Parameters.AddWithValue(tenant.Value);
         cmd.Parameters.AddWithValue(since.HasValue ? (object)since.Value : DBNull.Value);
 
-        var results = new List<FastPathHitRecord>();
+        var results = new List<CacheHitRateRecord>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            results.Add(new FastPathHitRecord(
+            results.Add(new CacheHitRateRecord(
                 StateName: reader.GetString(0),
                 StepName: reader.GetString(1),
                 Role: reader.GetString(2),
                 Provider: reader.GetString(3),
                 TotalInvocations: (int)reader.GetInt64(4),
-                FastPathHits: (int)reader.GetInt64(5),
+                CacheHits: (int)reader.GetInt64(5),
                 HitRatePercent: reader.IsDBNull(6) ? null : (double?)reader.GetDouble(6)));
         }
         return results;

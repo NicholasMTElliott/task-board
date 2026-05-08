@@ -44,9 +44,10 @@ public interface IMetricsStore
         DateTimeOffset? since, CancellationToken ct);
 
     /// <summary>
-    /// Per-(state, step, role, provider) re-run fast-path hit rate. Lets
-    /// operators verify the re-run preamble is actually short-circuiting work.
+    /// Per-(state, step, role, provider) cache hit rate from the rerun-redesign
+    /// deterministic-skip cache. Lets operators verify the cache is actually
+    /// short-circuiting steps when inputs are unchanged across re-runs.
     /// </summary>
-    Task<IReadOnlyList<FastPathHitRecord>> GetFastPathHitRateAsync(
+    Task<IReadOnlyList<CacheHitRateRecord>> GetCacheHitRateAsync(
         DateTimeOffset? since, CancellationToken ct);
 }

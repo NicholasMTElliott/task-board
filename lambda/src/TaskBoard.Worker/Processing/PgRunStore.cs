@@ -457,6 +457,14 @@ public sealed class PgRunStore(
         // Multi-slot that succeeds at slot N: N+1 attempts (canonical + slots 1..N).
         //
         // All outcomes counted (COMPLETE / NEEDS_INFO / ERROR) per spec.
+        //
+        // The LIKE pattern uses ESCAPE '\' so any '_' or '%' chars in the
+        // operator-supplied step name are treated as literals — without this,
+        // a step named "create_design" would also match "createXdesign:slot-..."
+        // because '_' is LIKE's single-char wildcard. The literal-prefix part
+        // is parameter $5 (escaped); the candidate-shape suffix is appended
+        // as a literal in the SQL.
+        var stepNameLikePrefix = EscapeLikePattern(stepName);
         cmd.CommandText = """
             SELECT COUNT(*)::INT
             FROM step_result
@@ -468,7 +476,7 @@ public sealed class PgRunStore(
                   step_name = $4
                   -- First-candidate row from slots beyond slot 0 — additional
                   -- attempts not absorbed into the canonical row.
-                  OR (step_name LIKE $4 || ':slot-%:cand-0:%'
+                  OR (step_name LIKE $5 || ':slot-%:cand-0:%' ESCAPE '\'
                       AND slot_index >= 1
                       AND candidate_index = 0)
               )
@@ -477,10 +485,24 @@ public sealed class PgRunStore(
         cmd.Parameters.AddWithValue(cardId);
         cmd.Parameters.AddWithValue(stateName);
         cmd.Parameters.AddWithValue(stepName);
+        cmd.Parameters.AddWithValue(stepNameLikePrefix);
 
         var result = await cmd.ExecuteScalarAsync(ct);
         return result is int n ? n : 0;
     }
+
+    /// <summary>
+    /// Escapes the LIKE meta-characters <c>%</c>, <c>_</c>, and <c>\</c> so a
+    /// caller-supplied string can be safely concatenated into a LIKE pattern
+    /// alongside literal wildcards. Pair with <c>ESCAPE '\'</c> in the SQL.
+    /// Without this, common chars in step names (notably underscores in
+    /// snake_case) would be treated as wildcards and falsely match other steps.
+    /// </summary>
+    private static string EscapeLikePattern(string value)
+        => value
+            .Replace("\\", "\\\\")
+            .Replace("%", "\\%")
+            .Replace("_", "\\_");
 
     public async Task<CacheCandidateRecord?> GetMostRecentCompleteForStepAsync(
         string cardId, string stateName, string stepName, CancellationToken ct)

@@ -205,7 +205,7 @@ Rule of thumb: if your step's `gitBehavior` is `discard`, don't point at `code_r
   ──────────────────────────  ──────────────────────  ────────  ─────────  ──────
   evaluator                   docker-claude-cli             24          1    4.2%
 
-── Re-run Fast-Path Hit Rate ────────────────────────────
+── Cache Hit Rate (deterministic skip) ──────────────────
   State                   Step                        Role                    Total   Hits    Rate
   ──────────────────────  ──────────────────────────  ──────────────────────  ─────  ─────  ──────
   Ready for Design        review_related_tickets      board_analyst              17     11   64.7%
@@ -222,7 +222,7 @@ The **Grafana** dashboard (auto-provisioned in the local-dev stack) gets two new
 - **Cost$ / InTok / OutTok** (V22) = total USD cost and total input/output tokens consumed by candidates of this `(role, provider)` over the time window. Cost is null for Codex (ChatGPT subscription) and local-LLM providers (no monetary cost). Tokens are populated whenever the CLI's wire format reports `usage.{input_tokens, output_tokens}` — for local LLMs against llama.cpp this is the **headline signal for context-fill pressure** on Qwen-target steps. Cache tokens (Claude only) are summed in the underlying view but not in the console table to keep it readable; query `v_provider_role_metrics` directly when you need them.
 - **Struct%** (V22) = share of this provider's candidates where the DockerOpenCode no-think structurer fallback recovered the result from prose narrative instead of the agent emitting a clean JSON envelope. High rates flag a thinking model that's struggling with the structured-output contract; consider routing through `docker-claude-qwen` (server-enforced schema) for that role instead.
 - **Evaluator Reliability** (V22) = `regression_rate_percent` is the share of evaluator verdicts where the picked winner was later flagged `winner_regressed = true` by the same run's gate check. Answers "is this evaluator a reliable judge?" with data instead of opinion. Cross-run regressions are not yet detected.
-- **Fast-Path Hit Rate** (V22) = share of re-run preamble injections where the agent returned `COMPLETE` without redoing work. High rate means the feature is paying off; zero rate on a step that re-runs often signals something's preventing the fast path (operator deletes comments, marker drift, etc).
+- **Cache Hit Rate** (V25) = share of step invocations where the rerun-redesign deterministic-skip cache reused a prior `COMPLETE` step_result instead of invoking the LLM. High rate means re-runs with unchanged inputs are being detected; low rate on a step that re-runs often signals input-bundle drift (operator-edited managed sections, comment churn, prompt or model changes). Replaces the V22 "Fast-Path Hit Rate" metric, which was tied to the (now-removed) LLM-judgment preamble.
 - **Downstream acceptance** (does the winner's work actually pass the gate check, the human Tested gate, and final merge?) is the union of `winner_regressed` (in-run signal, V22) plus the existing post-hoc analysis over `v_card_metrics` + `v_card_rework` + `selected`. The v1 metrics surface ships the in-run signal directly; cross-run analysis remains a join you write yourself.
 
 ---
@@ -244,13 +244,15 @@ After promotion, AgentRunner's existing post-step processors run unchanged: `Tas
 - **Gate checks can't have candidates yet.** `gateCheck` is a state-level field, not a `steps[]` entry. To compare gate checkers (e.g. Qwen vs Haiku for the `gate_checker` role), run separate cards with each provider routed and compare in the metrics. A future change could either (a) extend `GateCheckConfig` to support `candidates` + `evaluator` directly, or (b) inline the gate as a regular step.
 - **Evaluator reliability is in-run only.** `winner_regressed` is set when the same run's gate check fires GATE_FAIL after a candidate group. A winner that survived the gate but later broke at the human Tested gate or in production is not flagged; that's a cross-run signal we haven't wired yet. The `selected` × `v_card_rework` join covers it manually.
 
-## Re-run fast-path
+## Re-run cache (deterministic skip)
 
-When a card returns from a Questions column for a re-run, candidate-group steps are subject to the same fast-path detection as single-agent steps. The runtime checks for the canonical step marker on the card (`<!-- agent-step:{step.Name} -->`) and the prior run's evaluator outcome (`step_result` row whose name ends with `:evaluator` or `:slot-N:evaluator`, with `outcome = COMPLETE`). If both signals fire, every candidate in every slot receives a "RE-RUN; bail with COMPLETE if nothing relevant changed" preamble that includes the prior winning output. Candidates that agree return `outcome: COMPLETE` with `detail: "Confirmed prior output remains accurate."` in seconds; candidates that disagree produce updated outputs.
+When a card returns from a Questions column for a re-run, candidate-group steps participate in the same deterministic-skip cache as single-agent steps (rerun redesign Problem 1). The runtime hashes the input bundle (operator content + comments + prior section hashes + step config + prompts) and compares against the prior `COMPLETE` `step_result` row's `input_hash`. On match, the entire step is skipped — no LLM invocation, no candidate fan-out, no evaluator. The prior winner's output is reused via the existing canonical row, and a `kind:cache_hit` aiboard-log comment marks the timeline.
 
-The evaluator gets its own variant of the preamble: "if all candidates confirmed prior, pick any with `winner_index: 0`; otherwise evaluate normally." So a unanimous "no change" re-run completes cheaply with the existing winner re-elected; a re-run where one candidate proposes updates produces a real comparison.
+On mismatch (any input changed: operator edited a managed section, comments were added, the system or task prompt changed, or a candidate/model was added or removed), the cache misses and every slot runs fresh.
 
-**Force a fresh re-run** by deleting the canonical `<!-- agent-step:{step.Name} -->` comment from the card before moving back to "Ready". With the marker gone, the preamble is suppressed and all candidates run from scratch. Slot ordering is unaffected — slot 0 still tries first.
+**Force a fresh re-run** by editing any input that participates in the hash — the easiest is to delete the canonical `<!-- aiboard-log kind:step ... -->` comment from the card. Comment deletion changes the comments-since-prior-completion bundle and invalidates the cache. With the canonical row's input_hash no longer matching, every slot runs from scratch.
+
+The previous LLM-judgment preamble ("if your prior output remains accurate, respond COMPLETE") was removed in Round-4 of the rerun redesign — the deterministic cache handles "no change" decisively without the LLM judging itself.
 
 ---
 
@@ -283,7 +285,7 @@ V22 widens `step_result` further:
 | `cost_usd` | NUMERIC(10,6) NULL | Claude only (`total_cost_usd` from `stream-json`); null for Codex / local-LLM. |
 | `input_tokens` / `output_tokens` | BIGINT NULL | Token counts from the CLI's `usage` block. Local-LLM rows include these so you can reason about Qwen prefix-cache pressure. |
 | `cache_read_tokens` / `cache_creation_tokens` | BIGINT NULL | Claude-specific cache token counts. |
-| `fast_path_hit` | BOOLEAN NULL | True when the re-run preamble was injected AND outcome was COMPLETE; false when injected but the agent redid work; null when the fast-path didn't apply. |
+| `fast_path_hit` | BOOLEAN NULL | **Deprecated** (Round-4 rerun redesign). Was true when the re-run preamble was injected AND outcome was COMPLETE; column preserved on the schema for back-compat but no longer populated by the runtime. The cache decision is recorded in `execution_kind` instead (`'cache_hit'` vs `'full_run'`). |
 | `structurer_fallback_used` | BOOLEAN NULL | True only on DockerOpenCode rows where the no-think structurer recovered the result from prose narrative. |
 | `evaluator_prompt_chars` | INT NULL | Set on `:evaluator` rows so context-truncation trends are visible. |
 | `winner_regressed` | BOOLEAN NULL | Set true on candidate winners (`selected = true`) when the same run's gate check returned GATE_FAIL. |
@@ -291,7 +293,7 @@ V22 widens `step_result` further:
 V22 also adds `agent_run.rate_limit_events INT NOT NULL DEFAULT 0` (incremented per `RateLimitException` caught), recreates `v_step_duration` and `v_candidate_outcomes` to project the new columns, extends `v_provider_role_metrics` with cost / token / cache / structurer aggregates, and introduces two new views:
 
 - **`v_evaluator_reliability`** — per-`(evaluator-role, evaluator-provider)` regression rate via LEFT JOIN of evaluator step rows to their `selected = true` siblings within the same `(run_id, state_name)`. Surfaces evaluators whose verdicts don't survive scrutiny.
-- **`v_fast_path_hit_rate`** — per-`(state, step, role, provider)` re-run preamble payoff. Useful for confirming the feature is actually short-circuiting work where it should.
+- **`v_fast_path_hit_rate`** — **dropped in V25** (Round-5 rerun redesign). Replaced by `v_cache_hit_rate`, which reports the same operator question ("how often is this step skipped?") sourced from `execution_kind = 'cache_hit'` instead of the deprecated `fast_path_hit` column.
 
 ---
 
