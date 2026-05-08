@@ -112,4 +112,37 @@ public sealed record StepResultRecord(
     /// downstream scrutiny. Null when GATE_FAIL hasn't fired yet or this row
     /// is not a candidate winner.
     /// </summary>
-    bool? WinnerRegressed = null);
+    bool? WinnerRegressed = null,
+    // ── Rerun redesign Problem 1: deterministic skip cache ───────────
+    /// <summary>
+    /// SHA-256 hex of the input bundle for this step at the time it ran.
+    /// Set on every full_run row so Problem 1's cache decision can find a
+    /// matching prior run. Null on legacy rows persisted before the cache
+    /// shipped and on cache_hit rows (which inherit identity via
+    /// SourceStepResultId).
+    /// </summary>
+    string? InputHash = null,
+    /// <summary>
+    /// SHA-256 hex of the step's normalized managed section content as of
+    /// the moment this row was persisted. The cache decision compares this
+    /// to the section currently on the card to detect operator drift —
+    /// when the section was edited externally, the cache misses for the
+    /// owning step.
+    /// </summary>
+    string? SectionOutputHash = null,
+    /// <summary>
+    /// "full_run" (the agent ran the LLM call) or "cache_hit" (the prior
+    /// COMPLETE step_result was reused without invoking the agent).
+    /// </summary>
+    string ExecutionKind = "full_run",
+    /// <summary>For cache_hit rows, the prior run_id whose step_result was reused.</summary>
+    string? SourceRunId = null,
+    /// <summary>For cache_hit rows, the prior step_result.id whose row was reused.</summary>
+    Guid? SourceStepResultId = null,
+    /// <summary>
+    /// Brief output summary captured for the cache (one or two sentences).
+    /// Complements the existing Summary/Detail columns which sometimes hold
+    /// the full agent narrative — output_summary is what the cache hit
+    /// surfaces as the "what was previously concluded" callback.
+    /// </summary>
+    string? OutputSummary = null);

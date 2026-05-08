@@ -65,4 +65,35 @@ public interface IRunStore
     /// <c>aiboard-log</c> marker preamble.
     /// </summary>
     Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct);
+
+    /// <summary>
+    /// Returns the most recent <c>outcome = 'COMPLETE'</c> step_result for
+    /// the (tenant, card, state, step) cache key, plus its <c>input_hash</c>,
+    /// <c>section_output_hash</c>, and <c>id</c> for cache-decision matching.
+    /// Returns null when no matching COMPLETE row exists.
+    /// <para>
+    /// Predicate excludes per-candidate rows
+    /// (<c>candidate_index IS NULL OR candidate_index = 0</c>) so the cache
+    /// decision uses the slot-level identity, not individual losing
+    /// candidates whose work was discarded.
+    /// </para>
+    /// </summary>
+    Task<CacheCandidateRecord?> GetMostRecentCompleteForStepAsync(
+        string cardId, string stateName, string stepName, CancellationToken ct);
 }
+
+/// <summary>
+/// Compact projection of a step_result row used by Problem 1's cache decision.
+/// Carries only the fields the cache check needs (id for back-reference,
+/// hashes for matching, run_id + completed_at for the cache_hit comment's
+/// "since run X" callback). Avoids materialising the full StepResultRecord
+/// when only these fields are read.
+/// </summary>
+public sealed record CacheCandidateRecord(
+    Guid Id,
+    string RunId,
+    DateTimeOffset CompletedAtUtc,
+    string? InputHash,
+    string? SectionOutputHash,
+    string? OutputSummary,
+    string? Detail);

@@ -669,6 +669,7 @@ public class CandidateExecutorSlotsTests : IDisposable
         public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;
         public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct) => Task.CompletedTask;
         public Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct) => Task.FromResult(0);
+        public Task<CacheCandidateRecord?> GetMostRecentCompleteForStepAsync(string cardId, string stateName, string stepName, CancellationToken ct) => Task.FromResult<CacheCandidateRecord?>(null);
     }
 
     private sealed record RecordedVerdict(string RunId, Guid GroupId, int CandidateIndex, bool Selected, decimal? QualityScore, string? Reasoning);

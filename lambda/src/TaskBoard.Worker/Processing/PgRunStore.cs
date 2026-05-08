@@ -89,11 +89,13 @@ public sealed class PgRunStore(
                  provider, candidate_group_id, candidate_index,
                  selected, quality_score, evaluator_reasoning, slot_index,
                  cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                 fast_path_hit, structurer_fallback_used, evaluator_prompt_chars, winner_regressed)
+                 fast_path_hit, structurer_fallback_used, evaluator_prompt_chars, winner_regressed,
+                 input_hash, section_output_hash, execution_kind, source_run_id, source_step_result_id, output_summary)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16, $17, $18,
                     $19, $20, $21, $22, $23, $24, $25,
                     $26, $27, $28, $29, $30,
-                    $31, $32, $33, $34)
+                    $31, $32, $33, $34,
+                    $35, $36, $37, $38, $39, $40)
             ON CONFLICT (tenant_id, run_id, step_name) DO NOTHING
             """;
         cmd.Parameters.AddWithValue(tenant.Value);
@@ -142,6 +144,17 @@ public sealed class PgRunStore(
         cmd.Parameters.AddWithValue(result.StructurerFallbackUsed.HasValue ? (object)result.StructurerFallbackUsed.Value : DBNull.Value);
         cmd.Parameters.AddWithValue(result.EvaluatorPromptChars.HasValue ? (object)result.EvaluatorPromptChars.Value : DBNull.Value);
         cmd.Parameters.AddWithValue(result.WinnerRegressed.HasValue ? (object)result.WinnerRegressed.Value : DBNull.Value);
+
+        // V24 rerun-redesign cache columns. input_hash + section_output_hash
+        // populate the deterministic-skip cache; execution_kind distinguishes
+        // full_run from cache_hit; source_run_id + source_step_result_id
+        // anchor cache_hit rows to the original COMPLETE row they reused.
+        cmd.Parameters.AddWithValue(result.InputHash is null ? DBNull.Value : (object)result.InputHash);
+        cmd.Parameters.AddWithValue(result.SectionOutputHash is null ? DBNull.Value : (object)result.SectionOutputHash);
+        cmd.Parameters.AddWithValue(result.ExecutionKind);
+        cmd.Parameters.AddWithValue(result.SourceRunId is null ? DBNull.Value : (object)result.SourceRunId);
+        cmd.Parameters.AddWithValue(result.SourceStepResultId.HasValue ? (object)result.SourceStepResultId.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue(result.OutputSummary is null ? DBNull.Value : (object)result.OutputSummary);
 
         await cmd.ExecuteNonQueryAsync(ct);
 
@@ -419,5 +432,41 @@ public sealed class PgRunStore(
 
         var result = await cmd.ExecuteScalarAsync(ct);
         return result is int n ? n : 0;
+    }
+
+    public async Task<CacheCandidateRecord?> GetMostRecentCompleteForStepAsync(
+        string cardId, string stateName, string stepName, CancellationToken ct)
+    {
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, run_id, completed_at_utc, input_hash, section_output_hash, output_summary, detail
+            FROM step_result
+            WHERE tenant_id = $1
+              AND card_id = $2
+              AND state_name = $3
+              AND step_name = $4
+              AND outcome = 'COMPLETE'
+              AND (candidate_index IS NULL OR candidate_index = 0)
+            ORDER BY completed_at_utc DESC
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue(tenant.Value);
+        cmd.Parameters.AddWithValue(cardId);
+        cmd.Parameters.AddWithValue(stateName);
+        cmd.Parameters.AddWithValue(stepName);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return null;
+
+        return new CacheCandidateRecord(
+            Id: reader.GetGuid(0),
+            RunId: reader.GetString(1),
+            CompletedAtUtc: reader.GetFieldValue<DateTimeOffset>(2),
+            InputHash: reader.IsDBNull(3) ? null : reader.GetString(3),
+            SectionOutputHash: reader.IsDBNull(4) ? null : reader.GetString(4),
+            OutputSummary: reader.IsDBNull(5) ? null : reader.GetString(5),
+            Detail: reader.IsDBNull(6) ? null : reader.GetString(6));
     }
 }
