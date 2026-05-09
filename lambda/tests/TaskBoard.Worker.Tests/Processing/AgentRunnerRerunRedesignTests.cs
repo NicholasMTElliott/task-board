@@ -817,6 +817,423 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         Assert.DoesNotContain(":evaluator", capturedGateContext.TaskPrompt);
     }
 
+    // ── Round-9 Group A: mid-candidate-group interrupt + rerun ───────
+
+    [Fact]
+    public async Task InterruptedCandidateGroup_NoChange_RerunsAllCandidatesFresh_ProducesCanonicalRow()
+    {
+        // Scenario: a polling-mode runner was killed mid-candidate-group on a
+        // prior run — 3 of 5 candidates persisted their step_result rows
+        // (with suffixed step_name and candidate_group_id != null), but no
+        // evaluator ran and no canonical row was written. Operator manually
+        // moves the card back to Ready. We re-run.
+        //
+        // Pinned behaviour (per user's selected option): re-run all 5
+        // candidates fresh — stale per-candidate rows from the killed run
+        // remain in the DB as telemetry but DO NOT satisfy the cache lookup.
+        //
+        // The cache miss is enforced by PgRunStore's SQL predicate:
+        // `step_name = $4` matches the canonical step name only — partial
+        // candidate rows have suffixed step_names like `create_design:cand-0:claude`
+        // and never match. This test pins that invariant through the
+        // AgentRunner pipeline.
+
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(new AgentResult(AgentOutcome.COMPLETE, "Fresh run"));
+
+        var store = new ReplayingRunStore();
+        SeedPartialCandidateRows(store, candidateCount: 3);
+
+        var runner = CreateRunner(executor, BuildBasicConfig(),
+            runStore: store,
+            cacheGate: new RerunCacheGate(store, NullLogger<RerunCacheGate>.Instance));
+        SetupBoardCards(DesignListId, initialBody: "Operator content (unchanged from killed run)");
+
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // The agent ran (cache miss). Pre-seeded partial rows didn't short-circuit it.
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+        await executor.Received(1).ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>());
+
+        // A new canonical row was written with execution_kind=full_run and a
+        // computed input_hash (so a future run can cache against it).
+        var canonicalRow = store.SavedStepResults
+            .Where(r => r.StepName == "create_design"
+                && r.CandidateGroupId is null
+                && r.RunId == store.RunIds[0])
+            .Single();
+        Assert.Equal("full_run", canonicalRow.ExecutionKind);
+        Assert.NotNull(canonicalRow.InputHash);
+
+        // The 3 partial rows from the killed run remain — they're telemetry,
+        // not destructive cleanup. Verify by stepname suffix / candidate-group
+        // presence: SeedPartialCandidateRows used candidate_group_id != null
+        // and stepname suffixes.
+        var partialRows = store.SavedStepResults
+            .Where(r => r.CandidateGroupId is not null && r.RunId == "killed-run-1")
+            .ToList();
+        Assert.Equal(3, partialRows.Count);
+    }
+
+    [Fact]
+    public async Task InterruptedCandidateGroup_DescriptionEdited_NewCanonicalHashDiffersFromUnchangedBaseline()
+    {
+        // Two-run: baseline run with body "ORIG" and partial rows; reset; new
+        // run with body "EDITED" and partial rows. The canonical input_hash
+        // from the EDITED run must differ from the ORIG run — proving an
+        // operator description change is reflected in the cache key even
+        // when partial-run telemetry is present (which would otherwise be a
+        // distractor signal).
+
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(new AgentResult(AgentOutcome.COMPLETE, "ran"));
+
+        // Baseline: body "ORIG", partial rows present.
+        var baselineStore = new ReplayingRunStore();
+        SeedPartialCandidateRows(baselineStore, candidateCount: 3);
+        var baselineRunner = CreateRunner(executor, BuildBasicConfig(),
+            runStore: baselineStore,
+            cacheGate: new RerunCacheGate(baselineStore, NullLogger<RerunCacheGate>.Instance));
+        SetupBoardCards(DesignListId, initialBody: "ORIG operator content");
+        await baselineRunner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        var baselineHash = baselineStore.SavedStepResults
+            .Single(r => r.StepName == "create_design" && r.CandidateGroupId is null)
+            .InputHash;
+        Assert.NotNull(baselineHash);
+
+        // Edited: body "EDITED", partial rows present (fresh store + fresh
+        // board client substitute under a new dispose; reuse the existing
+        // board client by re-seeding the new body).
+        var editedStore = new ReplayingRunStore();
+        SeedPartialCandidateRows(editedStore, candidateCount: 3);
+        var editedRunner = CreateRunner(executor, BuildBasicConfig(),
+            runStore: editedStore,
+            cacheGate: new RerunCacheGate(editedStore, NullLogger<RerunCacheGate>.Instance));
+        SetupBoardCards(DesignListId, initialBody: "EDITED operator content (different from ORIG)");
+        await editedRunner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        var editedHash = editedStore.SavedStepResults
+            .Single(r => r.StepName == "create_design" && r.CandidateGroupId is null)
+            .InputHash;
+
+        Assert.NotEqual(baselineHash, editedHash);
+    }
+
+    [Fact]
+    public async Task InterruptedCandidateGroup_OperatorCommentAdded_NewCanonicalHashDiffersFromBaseline()
+    {
+        // Baseline: no comments. Modified: one operator comment added before
+        // run 2. The canonical input_hash on the modified run must differ —
+        // operator comments are part of the input bundle.
+
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(new AgentResult(AgentOutcome.COMPLETE, "ran"));
+
+        var baselineStore = new ReplayingRunStore();
+        SeedPartialCandidateRows(baselineStore, candidateCount: 3);
+        var baselineRunner = CreateRunner(executor, BuildBasicConfig(),
+            runStore: baselineStore,
+            cacheGate: new RerunCacheGate(baselineStore, NullLogger<RerunCacheGate>.Instance));
+        // No board comments.
+        SetupBoardCards(DesignListId, initialBody: "Operator content");
+        await baselineRunner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        var baselineHash = baselineStore.SavedStepResults
+            .Single(r => r.StepName == "create_design" && r.CandidateGroupId is null)
+            .InputHash;
+
+        var modifiedStore = new ReplayingRunStore();
+        SeedPartialCandidateRows(modifiedStore, candidateCount: 3);
+        var modifiedRunner = CreateRunner(executor, BuildBasicConfig(),
+            runStore: modifiedStore,
+            cacheGate: new RerunCacheGate(modifiedStore, NullLogger<RerunCacheGate>.Instance));
+        // One operator comment (no aiboard-log marker → operator-classified).
+        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Returns(new List<BoardCard>
+            {
+                new(TargetCardId, TargetCardTitle, "Operator content", DesignListId),
+            });
+        _boardClient.GetCardCommentsAsync(TargetCardId, Arg.Any<CancellationToken>())
+            .Returns(new List<CardComment>
+            {
+                new("op", "Operator question added between killed run and rerun", DateTimeOffset.UtcNow.AddMinutes(-1)),
+            });
+        await modifiedRunner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        var modifiedHash = modifiedStore.SavedStepResults
+            .Single(r => r.StepName == "create_design" && r.CandidateGroupId is null)
+            .InputHash;
+
+        Assert.NotEqual(baselineHash, modifiedHash);
+    }
+
+    [Fact]
+    public async Task InterruptedCandidateGroup_AiboardLogCommentAdded_HashUnaffected()
+    {
+        // Most adversarial of the four: an aiboard-log marker comment is
+        // present on the board on run 2 (left over from one of the partial
+        // run-1 candidates that posted its kind:candidate comment before
+        // being killed). The hash must IGNORE this comment — it's
+        // agent-generated, classified as such by the permissive
+        // AiboardLogMarker.IsAgentGenerated prefix match.
+        //
+        // Pre-fix would-be regression: if the filter ever incorrectly
+        // includes aiboard-log comments, every cache check after a
+        // partial-run interruption would see different hashes purely
+        // because of orphan candidate comments — defeats the whole
+        // "irrelevant change doesn't bust the cache" guarantee.
+
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(new AgentResult(AgentOutcome.COMPLETE, "ran"));
+
+        // Baseline: no comments.
+        var baselineStore = new ReplayingRunStore();
+        SeedPartialCandidateRows(baselineStore, candidateCount: 3);
+        var baselineRunner = CreateRunner(executor, BuildBasicConfig(),
+            runStore: baselineStore,
+            cacheGate: new RerunCacheGate(baselineStore, NullLogger<RerunCacheGate>.Instance));
+        SetupBoardCards(DesignListId, initialBody: "Operator content");
+        await baselineRunner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        var baselineHash = baselineStore.SavedStepResults
+            .Single(r => r.StepName == "create_design" && r.CandidateGroupId is null)
+            .InputHash;
+
+        // Modified: one aiboard-log marked candidate comment (orphan from
+        // killed run 1). Same body, no operator comments.
+        var modifiedStore = new ReplayingRunStore();
+        SeedPartialCandidateRows(modifiedStore, candidateCount: 3);
+        var modifiedRunner = CreateRunner(executor, BuildBasicConfig(),
+            runStore: modifiedStore,
+            cacheGate: new RerunCacheGate(modifiedStore, NullLogger<RerunCacheGate>.Instance));
+        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Returns(new List<BoardCard>
+            {
+                new(TargetCardId, TargetCardTitle, "Operator content", DesignListId),
+            });
+        _boardClient.GetCardCommentsAsync(TargetCardId, Arg.Any<CancellationToken>())
+            .Returns(new List<CardComment>
+            {
+                new("bot",
+                    "<!-- aiboard-log kind:candidate state:Design step:create_design candidate:0 -->\n" +
+                    "Orphan candidate comment from a killed run.",
+                    DateTimeOffset.UtcNow.AddMinutes(-1)),
+            });
+        await modifiedRunner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        var modifiedHash = modifiedStore.SavedStepResults
+            .Single(r => r.StepName == "create_design" && r.CandidateGroupId is null)
+            .InputHash;
+
+        // Identical hashes — the aiboard-log comment didn't influence the
+        // input bundle.
+        Assert.Equal(baselineHash, modifiedHash);
+    }
+
+    /// <summary>
+    /// Seeds <paramref name="candidateCount"/> per-candidate step_result rows
+    /// into <paramref name="store"/> under a synthetic "killed-run-1" run id.
+    /// Mirrors what the database would look like after a polling-mode runner
+    /// was killed mid-candidate-group: per-candidate rows persisted with
+    /// suffixed step_names and candidate_group_id != null, NO canonical row,
+    /// NO evaluator row.
+    /// </summary>
+    private static void SeedPartialCandidateRows(ReplayingRunStore store, int candidateCount)
+    {
+        var groupId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow.AddMinutes(-30);
+        for (var i = 0; i < candidateCount; i++)
+        {
+            store.SavedStepResults.Add(new StepResultRecord(
+                RunId: "killed-run-1",
+                CardId: TargetCardId,
+                StateName: "Design",
+                StepName: $"create_design:cand-{i}:claude",
+                StepIndex: 0,
+                Role: "senior_engineer",
+                Model: "opus-4.6",
+                Outcome: AgentOutcome.COMPLETE,
+                Summary: $"Partial candidate {i} output",
+                Detail: null,
+                ReferenceContent: null,
+                ConversationLog: null,
+                Questions: null,
+                RequestedSteps: null,
+                StartedAtUtc: now.AddSeconds(i * 2),
+                CompletedAtUtc: now.AddSeconds(i * 2 + 1),
+                CandidateGroupId: groupId,
+                CandidateIndex: i,
+                Selected: null));
+        }
+    }
+
+    // ── Round-9 Group C: cross-step transitive cache propagation ─────
+
+    [Fact]
+    public async Task MultiStepState_BothStepsCacheHit_OnSecondRunWithUnchangedInputs()
+    {
+        // Run 1: both steps execute fresh. Run 2 with no input changes:
+        // step A cache hits; step B's input bundle includes A's
+        // section_output_hash unchanged → step B also cache hits.
+        // Asserts that transitive cache propagation works end-to-end:
+        // upstream cache hit produces a stable section that downstream
+        // sees as identical.
+
+        var body = "Operator requirements.";
+        SetupMutableBoard(DesignListId, () => body, nextBody => body = nextBody);
+
+        var executor = Substitute.For<IAgentExecutor>();
+        var callIndex = 0;
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callIndex++;
+                return callIndex switch
+                {
+                    1 => new AgentResult(AgentOutcome.COMPLETE, "Step A first run",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "Step A output content.")),
+                    2 => new AgentResult(AgentOutcome.COMPLETE, "Step B first run",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "Step B output content.")),
+                    _ => new AgentResult(AgentOutcome.ERROR, "should not reach — both steps should cache-hit"),
+                };
+            });
+
+        var store = new ReplayingRunStore();
+        var runner = CreateRunner(executor, BuildTwoStepNoGateConfig(),
+            runStore: store,
+            cacheGate: new RerunCacheGate(store, NullLogger<RerunCacheGate>.Instance));
+
+        // Run 1: 2 executor calls (steps A and B both run fresh).
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        Assert.Equal(2, callIndex);
+
+        // Run 2: no input changes → both steps cache-hit, no executor calls.
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        Assert.Equal(2, callIndex);  // unchanged — neither step re-ran.
+
+        // Both step's run-2 rows are cache_hit.
+        var run2Rows = store.SavedStepResults
+            .Where(r => r.RunId == store.RunIds[1] && r.CandidateGroupId is null)
+            .ToList();
+        Assert.All(run2Rows, r => Assert.Equal("cache_hit", r.ExecutionKind));
+        Assert.Equal(2, run2Rows.Count);
+        Assert.Contains(run2Rows, r => r.StepName == "step_a");
+        Assert.Contains(run2Rows, r => r.StepName == "step_b");
+    }
+
+    [Fact]
+    public async Task MultiStepState_StepASectionDrift_StepARerunsIdenticalOutput_StepBStillCacheHits()
+    {
+        // Run 1: both steps execute fresh, step A produces section content X.
+        // Between runs, the operator edits step A's managed section (drift) —
+        // BUT then re-edits it back to byte-identical content (or, more
+        // realistically, the agent re-runs and produces the same content).
+        //
+        // To simulate this with a substitute executor, run 2 makes step A's
+        // executor invocation produce IDENTICAL section content to run 1 —
+        // proving section_output_hash is stable across A's re-run, and
+        // therefore step B's input bundle is unchanged → step B cache hits.
+        //
+        // Pins the documented transitive-invalidation semantic
+        // (RerunRedesign.md §5.7 "downstream re-runs only when upstream
+        // section_output_hash actually changes").
+
+        const string SharedStepASectionContent = "Stable step A output (byte-identical across runs).";
+        var body = "Operator requirements.";
+        SetupMutableBoard(DesignListId, () => body, nextBody => body = nextBody);
+
+        var executor = Substitute.For<IAgentExecutor>();
+        var callIndex = 0;
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callIndex++;
+                return callIndex switch
+                {
+                    1 => new AgentResult(AgentOutcome.COMPLETE, "Step A first run",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, SharedStepASectionContent)),
+                    2 => new AgentResult(AgentOutcome.COMPLETE, "Step B first run",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "Step B output content.")),
+                    3 => new AgentResult(AgentOutcome.COMPLETE, "Step A re-run after drift",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, SharedStepASectionContent)),
+                    _ => new AgentResult(AgentOutcome.ERROR, "should not reach — step B should cache-hit"),
+                };
+            });
+
+        var store = new ReplayingRunStore();
+        var runner = CreateRunner(executor, BuildTwoStepNoGateConfig(),
+            runStore: store,
+            cacheGate: new RerunCacheGate(store, NullLogger<RerunCacheGate>.Instance));
+
+        // Run 1.
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        Assert.Equal(2, callIndex);
+
+        // Capture step A's section_output_hash from run 1 — that's the
+        // upstream signal step B's input bundle depends on.
+        var run1StepA = store.SavedStepResults
+            .Single(r => r.StepName == "step_a" && r.RunId == store.RunIds[0]);
+        var stableSectionHash = run1StepA.SectionOutputHash;
+        Assert.NotNull(stableSectionHash);
+
+        // Force section drift on step A: edit the body's step-section content
+        // so the section_output_hash differs from what's recorded.
+        body = body.Replace(SharedStepASectionContent, "DRIFTED — operator edited step A's section");
+
+        // Run 2: step A misses (drift), re-runs, produces byte-identical
+        // content. Step B's prior_section_hash is unchanged → cache hit.
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        Assert.Equal(3, callIndex);  // only step A re-ran; step B did not.
+
+        // Step A's run-2 row is full_run (drift forced it); Step B's run-2
+        // row is cache_hit.
+        var run2StepA = store.SavedStepResults
+            .Single(r => r.StepName == "step_a" && r.CandidateGroupId is null && r.RunId == store.RunIds[1]);
+        Assert.Equal("full_run", run2StepA.ExecutionKind);
+        Assert.Equal(stableSectionHash, run2StepA.SectionOutputHash);
+
+        var run2StepB = store.SavedStepResults
+            .Single(r => r.StepName == "step_b" && r.CandidateGroupId is null && r.RunId == store.RunIds[1]);
+        Assert.Equal("cache_hit", run2StepB.ExecutionKind);
+    }
+
+    /// <summary>
+    /// Two sequential steps in one state with NO gate check. Used by the
+    /// transitive cache propagation tests — without a gate, the test can
+    /// observe pure step-to-step propagation without gate behaviour
+    /// confounding the executor call count.
+    /// </summary>
+    private static WorkflowConfig BuildTwoStepNoGateConfig() =>
+        new(
+            States: new Dictionary<string, WorkflowState>
+            {
+                [DesignListId] = new(
+                    "Design", "senior_engineer", "agent_run",
+                    "Work on {TaskName}",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
+                    },
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new("step_a", "senior_engineer", TaskPrompt: "Step A {TaskName}"),
+                        new("step_b", "senior_engineer", TaskPrompt: "Step B {TaskName}"),
+                    ]),
+                ["list-designed"] = new("Designed", null, "manual_gate", null,
+                    new Dictionary<string, TransitionTarget>()),
+                ["list-questions"] = new("Questions", null, "holding", null,
+                    new Dictionary<string, TransitionTarget>()),
+                ["list-error"] = new("Error", null, "holding", null,
+                    new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
+                    new List<string> { "Step A", "Step B" }),
+            });
+
     // ── Helpers ──────────────────────────────────────────────────────
 
     private AgentRunner CreateRunner(

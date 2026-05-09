@@ -256,6 +256,104 @@ public class RerunCacheGateTests
     }
 
     [Fact]
+    public async Task OperatorCommentDeleted_BetweenRuns_CacheMiss()
+    {
+        // Documented in RerunRedesign.md §5.7: deleting an operator comment is
+        // treated as an input change and re-runs dependent steps. The agent's
+        // prior reasoning may have been informed by that comment; safer to
+        // re-run than to keep the stale cache. This pins the deletion path
+        // (the addition path is already covered by OperatorComments_IncludedInHash).
+        var body = "operator content";
+
+        // Compute what the prior would have been with TWO comments — that's
+        // the recorded input_hash from the prior run.
+        var priorInputs = new InputHashInputs(
+            OperatorAuthoredDescription: body,
+            OperatorComments: ["first operator comment", "second operator comment"],
+            PriorSectionOutputHashes: [],
+            StepConfigJson: "{}",
+            SystemPromptContents: "sys",
+            TaskPromptContents: "task");
+        var priorHash = RerunHashBuilder.ComputeInputHash(priorInputs);
+
+        var store = new RecordingRunStore
+        {
+            Prior = new CacheCandidateRecord(
+                Id: Guid.NewGuid(),
+                RunId: "prior-run-1",
+                CompletedAtUtc: DateTimeOffset.UtcNow.AddHours(-1),
+                InputHash: priorHash,
+                SectionOutputHash: null,
+                OutputSummary: null,
+                Detail: null),
+        };
+        var gate = new RerunCacheGate(store, _log);
+
+        // Current call has only ONE comment — operator deleted the second one.
+        var result = await gate.EvaluateAsync(
+            cardId: "42", cardBody: body,
+            state: State(), step: Step(), role: Role(),
+            stepConfigJson: "{}",
+            systemPromptContents: "sys", taskPromptContents: "task",
+            existingComments: [
+                new CardComment("op", "first operator comment", DateTimeOffset.UtcNow.AddMinutes(-3)),
+            ],
+            priorSectionOutputHashes: [],
+            ct: CancellationToken.None);
+
+        Assert.False(result.IsHit);
+        // The current input hash differs from the prior — proves deletion
+        // changed the bundle. (It would also differ if the comment were
+        // edited; this test just covers the deletion case.)
+        Assert.NotEqual(priorHash, result.CurrentInputHash);
+    }
+
+    [Fact]
+    public async Task MalformedAiboardLogMarker_StillClassifiedAsAgent_FilteredFromHash()
+    {
+        // The aiboard-log classifier (AiboardLogMarker.IsAgentGenerated) is a
+        // permissive prefix match: any body containing "<!-- aiboard-log "
+        // (with trailing space) is classified as agent. Specifically, a
+        // marker missing its closing "-->" still classifies as agent — the
+        // hash filter doesn't require well-formedness, just the prefix.
+        // This test pins that boundary so a future "stricter parsing"
+        // refactor doesn't accidentally start including malformed agent
+        // comments in the operator-comment hash.
+        var body = "operator content";
+        var store = new RecordingRunStore { Prior = null };
+        var gate = new RerunCacheGate(store, _log);
+
+        // Comment with a malformed marker — opening prefix present, closing
+        // "-->" missing.
+        var withMalformed = await gate.EvaluateAsync(
+            cardId: "42", cardBody: body,
+            state: State(), step: Step(), role: Role(),
+            stepConfigJson: "{}",
+            systemPromptContents: "sys", taskPromptContents: "task",
+            existingComments: [
+                new CardComment("op", "operator note", DateTimeOffset.UtcNow.AddMinutes(-2)),
+                new CardComment("bot", "<!-- aiboard-log kind:step run:r1 attempt:1\nstep output (marker missing closing -->)", DateTimeOffset.UtcNow.AddMinutes(-1)),
+            ],
+            priorSectionOutputHashes: [],
+            ct: CancellationToken.None);
+
+        var withoutMalformed = await gate.EvaluateAsync(
+            cardId: "42", cardBody: body,
+            state: State(), step: Step(), role: Role(),
+            stepConfigJson: "{}",
+            systemPromptContents: "sys", taskPromptContents: "task",
+            existingComments: [
+                new CardComment("op", "operator note", DateTimeOffset.UtcNow.AddMinutes(-2)),
+            ],
+            priorSectionOutputHashes: [],
+            ct: CancellationToken.None);
+
+        // Same input hash — the malformed marker comment was filtered out
+        // because the permissive prefix match still recognises it as agent.
+        Assert.Equal(withMalformed.CurrentInputHash, withoutMalformed.CurrentInputHash);
+    }
+
+    [Fact]
     public void SerializeStepConfig_IncludesProviderModelAndParams()
     {
         // The serialized config drives cache invalidation when operators
