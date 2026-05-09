@@ -1379,6 +1379,101 @@ public class AgentRunnerTests : IDisposable
         Assert.Contains("Reference analysis content", capturedContextContent);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_PriorStepContext_IncludesCanonicalWinnerOnly_NotDismissedCandidates()
+    {
+        SetupBoardCards(ImplListId);
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+        var mockRunStore = Substitute.For<IRunStore>();
+        var groupId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+
+        mockRunStore.GetStepResultsForCardAsync(TargetCardId, null, Arg.Any<CancellationToken>())
+            .Returns(new List<StepResultRecord>
+            {
+                new("design-run", TargetCardId, "Design", "create_design", 0,
+                    "designer", "model", AgentOutcome.COMPLETE,
+                    "Winning design summary", "WINNING DESIGN DETAIL", null, null, null, null,
+                    now.AddMinutes(-20), now.AddMinutes(-19)),
+                new("design-run", TargetCardId, "Design", "create_design:cand-0:claude", 0,
+                    "designer", "model", AgentOutcome.COMPLETE,
+                    "LOSER CANDIDATE SUMMARY", "LOSER CANDIDATE DETAIL", null, null, null, null,
+                    now.AddMinutes(-18), now.AddMinutes(-17),
+                    CandidateGroupId: groupId, CandidateIndex: 0, Selected: false),
+                new("design-run", TargetCardId, "Design", "create_design:cand-1:codex", 0,
+                    "designer", "model", AgentOutcome.COMPLETE,
+                    "WINNER CANDIDATE RAW SUMMARY", "WINNER CANDIDATE RAW DETAIL", null, null, null, null,
+                    now.AddMinutes(-18), now.AddMinutes(-17),
+                    CandidateGroupId: groupId, CandidateIndex: 1, Selected: true),
+                new("design-run", TargetCardId, "Design", "create_design:evaluator", 0,
+                    "evaluator", "model", AgentOutcome.COMPLETE,
+                    "EVALUATOR COMPARED LOSER", "EVALUATOR DETAIL WITH LOSER", null, null, null, null,
+                    now.AddMinutes(-16), now.AddMinutes(-15)),
+            });
+
+        string? capturedContextContent = null;
+        _agentExecutor.OnExecute = (ctx, _) =>
+        {
+            var contextFile = Path.Combine(ctx.WorkspacePath, ".aiboard", "context", "step-history.md");
+            if (File.Exists(contextFile))
+                capturedContextContent = File.ReadAllText(contextFile);
+        };
+
+        var runner = CreateRunnerWithConfig(BuildImplWorkflowConfig(), mockRunStore);
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.NotNull(capturedContextContent);
+        Assert.Contains("WINNING DESIGN DETAIL", capturedContextContent);
+        Assert.DoesNotContain("LOSER CANDIDATE", capturedContextContent);
+        Assert.DoesNotContain("WINNER CANDIDATE RAW", capturedContextContent);
+        Assert.DoesNotContain("EVALUATOR", capturedContextContent);
+        Assert.DoesNotContain(":cand-", capturedContextContent);
+        Assert.DoesNotContain(":evaluator", capturedContextContent);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PriorStepContext_IgnoresPartialCandidateRowsFromInterruptedRun()
+    {
+        SetupBoardCards(ImplListId);
+        _agentExecutor.NextOutcome = AgentOutcome.COMPLETE;
+        var mockRunStore = Substitute.For<IRunStore>();
+        var groupId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+
+        mockRunStore.GetStepResultsForCardAsync(TargetCardId, null, Arg.Any<CancellationToken>())
+            .Returns(new List<StepResultRecord>
+            {
+                new("interrupted-run", TargetCardId, "Implementation", "implement:cand-0:claude", 0,
+                    "implementer", "model", AgentOutcome.COMPLETE,
+                    "PARTIAL CANDIDATE 0", "PARTIAL WORKTREE 0", null, null, null, null,
+                    now.AddMinutes(-10), now.AddMinutes(-9),
+                    CandidateGroupId: groupId, CandidateIndex: 0, Selected: null),
+                new("interrupted-run", TargetCardId, "Implementation", "implement:cand-1:codex", 0,
+                    "implementer", "model", AgentOutcome.COMPLETE,
+                    "PARTIAL CANDIDATE 1", "PARTIAL WORKTREE 1", null, null, null, null,
+                    now.AddMinutes(-8), now.AddMinutes(-7),
+                    CandidateGroupId: groupId, CandidateIndex: 1, Selected: null),
+                new("interrupted-run", TargetCardId, "Implementation", "implement:cand-2:opencode", 0,
+                    "implementer", "model", AgentOutcome.ERROR,
+                    "PARTIAL CANDIDATE 2", "PARTIAL WORKTREE 2", null, null, null, null,
+                    now.AddMinutes(-6), now.AddMinutes(-5),
+                    CandidateGroupId: groupId, CandidateIndex: 2, Selected: null),
+            });
+
+        string? capturedContextContent = null;
+        _agentExecutor.OnExecute = (ctx, _) =>
+        {
+            var contextFile = Path.Combine(ctx.WorkspacePath, ".aiboard", "context", "step-history.md");
+            if (File.Exists(contextFile))
+                capturedContextContent = File.ReadAllText(contextFile);
+        };
+
+        var runner = CreateRunnerWithConfig(BuildImplWorkflowConfig(), mockRunStore);
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Null(capturedContextContent);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

@@ -1700,35 +1700,47 @@ public sealed partial class AgentRunner(
         // resolves to a friendly "(none)" so prompt templates that reference
         // it don't break for fresh cards.
         var stepHistoryBlock = await BuildStepHistoryBlockAsync(cardId, runId, cancellationToken);
+        var cacheStepHistoryBlock = await BuildStepHistoryBlockAsync(
+            cardId, runId, cancellationToken, includeExecutionKind: false);
         // Use currentBody for {TaskBody}, not targetCard.Body. The latter is the
         // body as of the initial card fetch — stale by the time the gate runs
         // because section_update writes through the run advance currentBody but
         // do NOT mutate targetCard. Without this, the gate sees the
         // pre-step description and can't reason about the managed sections that
         // the just-completed steps wrote (rerun redesign Problem 2 / Problem 3).
-        var gatePrompt = ResolvePromptPlaceholders(gatePromptTemplate, targetCard);
-        gatePrompt = gatePrompt
-            .Replace("{TaskBody}", currentBody ?? "")
-            .Replace("{Diff}", changes)
-            .Replace("{AgentReport}", agentReport)
-            .Replace("{CreatedTickets}", createdTicketsBlock)
-            .Replace("{UnrecognizedFiles}", unrecognizedFilesBlock)
-            .Replace("{StepHistory}", stepHistoryBlock);
-
-        // Append the step history at the end of the prompt when the template
-        // didn't reference {StepHistory} explicitly — keeps backward-compat
-        // with existing gate templates while still surfacing the records.
-        if (!gatePromptTemplate.Contains("{StepHistory}", StringComparison.Ordinal)
-            && !string.IsNullOrEmpty(stepHistoryBlock)
-            && stepHistoryBlock != "(no prior step records)")
+        string BuildGatePrompt(string historyBlock)
         {
-            gatePrompt += "\n\n## Step History (this run)\n\n" + stepHistoryBlock;
+            var prompt = ResolvePromptPlaceholders(gatePromptTemplate, targetCard);
+            prompt = prompt
+                .Replace("{TaskBody}", currentBody ?? "")
+                .Replace("{Diff}", changes)
+                .Replace("{AgentReport}", agentReport)
+                .Replace("{CreatedTickets}", createdTicketsBlock)
+                .Replace("{UnrecognizedFiles}", unrecognizedFilesBlock)
+                .Replace("{StepHistory}", historyBlock);
+
+            // Append the step history at the end of the prompt when the template
+            // didn't reference {StepHistory} explicitly — keeps backward-compat
+            // with existing gate templates while still surfacing the records.
+            if (!gatePromptTemplate.Contains("{StepHistory}", StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(historyBlock)
+                && historyBlock != "(no prior step records)")
+            {
+                prompt += "\n\n## Step History (this run)\n\n" + historyBlock;
+            }
+
+            return prompt;
         }
 
-        // Append optional step catalog if configured
-        if (state.OptionalSteps is { Count: > 0 })
+        var gatePrompt = BuildGatePrompt(stepHistoryBlock);
+        var gatePromptForCache = BuildGatePrompt(cacheStepHistoryBlock);
+
+        string AppendOptionalStepCatalog(string prompt)
         {
-            var sb = new StringBuilder(gatePrompt);
+            if (state.OptionalSteps is not { Count: > 0 })
+                return prompt;
+
+            var sb = new StringBuilder(prompt);
             sb.AppendLine("\n\n## Available Optional Review Steps\n");
             sb.AppendLine("The following specialist review steps are available. Request any that are clearly "
                 + "warranted by the changes above. Only request steps whose trigger criteria match.\n");
@@ -1742,8 +1754,11 @@ public sealed partial class AgentRunner(
 
             sb.AppendLine("\nTo request optional steps, include a `requestedSteps` array in your output "
                 + "with the step names. You may request steps alongside a COMPLETE verdict.");
-            gatePrompt = sb.ToString();
+            return sb.ToString();
         }
+
+        gatePrompt = AppendOptionalStepCatalog(gatePrompt);
+        gatePromptForCache = AppendOptionalStepCatalog(gatePromptForCache);
 
         // Resolve system prompt
         string gateSystemPromptPath;
@@ -1765,9 +1780,11 @@ public sealed partial class AgentRunner(
         //
         // The hashed bundle is the operator-authored prefix + non-aiboard-log
         // comments + every prior step's section_output_hash + gate config JSON
-        // + gate system prompt + the FULLY RESOLVED gate prompt (which
-        // already folds in {Diff}, {AgentReport}, {CreatedTickets},
-        // {UnrecognizedFiles}, {StepHistory}). On hit we skip execution and
+        // + gate system prompt + the fully resolved gate prompt with
+        // {StepHistory} normalized to omit execution_kind (full_run vs
+        // cache_hit is audit metadata, not semantic input). The prompt still
+        // folds in {Diff}, {AgentReport}, {CreatedTickets}, and
+        // {UnrecognizedFiles}. On hit we skip execution and
         // do NOT replay any prior optional-step requests — those already ran
         // on the cached source run; this re-run inherits a clean PASS verdict.
         //
@@ -1834,7 +1851,7 @@ public sealed partial class AgentRunner(
             {
                 gateCacheResult = await cacheGate.EvaluateGateAsync(
                     cardId, bodyForHash, state,
-                    gateConfigJson, gateSystemPromptContents, gatePrompt,
+                    gateConfigJson, gateSystemPromptContents, gatePromptForCache,
                     commentsForGateCache, upstreamSectionHashes,
                     cancellationToken);
                 gateInputHash = gateCacheResult.CurrentInputHash;
@@ -2939,7 +2956,7 @@ public sealed partial class AgentRunner(
     /// / Finding 3).
     /// </summary>
     private async Task<string> BuildStepHistoryBlockAsync(
-        string cardId, string runId, CancellationToken ct)
+        string cardId, string runId, CancellationToken ct, bool includeExecutionKind = true)
     {
         if (runStore is NullRunStore)
             return "(no prior step records)";
@@ -2960,22 +2977,41 @@ public sealed partial class AgentRunner(
         // Filter to this run only — the gate is judging THIS run's work, not
         // the entire card's history. (Cross-run context for the agent is
         // already piped via WritePriorStepContextAsync.)
-        var thisRun = rows.Where(r => r.RunId == runId).ToList();
+        var thisRun = rows
+            .Where(r => r.RunId == runId)
+            .Where(ShouldIncludeStepResultInAgentContext)
+            .ToList();
         if (thisRun.Count == 0)
             return "(no prior step records)";
 
         var sb = new StringBuilder();
-        sb.AppendLine("| Step | Role | Provider | Outcome | Kind | Summary |");
-        sb.AppendLine("|------|------|----------|---------|------|---------|");
+        if (includeExecutionKind)
+        {
+            sb.AppendLine("| Step | Role | Provider | Outcome | Kind | Summary |");
+            sb.AppendLine("|------|------|----------|---------|------|---------|");
+        }
+        else
+        {
+            sb.AppendLine("| Step | Role | Provider | Outcome | Summary |");
+            sb.AppendLine("|------|------|----------|---------|---------|");
+        }
         foreach (var r in thisRun)
         {
             var summary = r.OutputSummary ?? r.Summary ?? "";
             // Single-line summary: clamp newlines and length to keep the table tidy.
             summary = summary.Replace('\n', ' ').Replace('\r', ' ').Replace('|', '∣');
             if (summary.Length > 160) summary = summary[..160] + "…";
-            sb.AppendLine(
-                $"| `{r.StepName}` | {r.Role} | {r.Provider ?? "(?)"} | {r.Outcome} | "
-                + $"{r.ExecutionKind ?? "full_run"} | {summary} |");
+            if (includeExecutionKind)
+            {
+                sb.AppendLine(
+                    $"| `{r.StepName}` | {r.Role} | {r.Provider ?? "(?)"} | {r.Outcome} | "
+                    + $"{r.ExecutionKind ?? "full_run"} | {summary} |");
+            }
+            else
+            {
+                sb.AppendLine(
+                    $"| `{r.StepName}` | {r.Role} | {r.Provider ?? "(?)"} | {r.Outcome} | {summary} |");
+            }
         }
         return sb.ToString().TrimEnd();
     }
@@ -3175,7 +3211,11 @@ public sealed partial class AgentRunner(
             return;
         }
 
-        if (priorResults.Count == 0)
+        var contextResults = priorResults
+            .Where(ShouldIncludeStepResultInAgentContext)
+            .ToList();
+
+        if (contextResults.Count == 0)
             return;
 
         var contextDir = Path.Combine(worktreePath, ".aiboard", "context");
@@ -3187,7 +3227,7 @@ public sealed partial class AgentRunner(
         sb.AppendLine("These are results from prior agent runs on this card. Use them for context.");
         sb.AppendLine();
 
-        foreach (var result in priorResults)
+        foreach (var result in contextResults)
         {
             sb.AppendLine($"## {result.StateName} / {result.StepName} ({result.Outcome})");
             sb.AppendLine($"*Run: {result.RunId} | Role: {result.Role} | {result.CompletedAtUtc:u}*");
@@ -3218,7 +3258,21 @@ public sealed partial class AgentRunner(
         await File.WriteAllTextAsync(
             Path.Combine(contextDir, "step-history.md"), sb.ToString(), cancellationToken);
 
-        logger.LogInformation("Wrote prior step context for card {CardId} ({Count} results)", cardId, priorResults.Count);
+        logger.LogInformation("Wrote prior step context for card {CardId} ({Count} results)", cardId, contextResults.Count);
+    }
+
+    private static bool ShouldIncludeStepResultInAgentContext(StepResultRecord result)
+    {
+        if (result.CandidateGroupId is not null || result.CandidateIndex is not null)
+            return false;
+
+        if (result.StepName.Contains(":cand-", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (result.StepName.EndsWith(":evaluator", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return true;
     }
 
     internal static async Task<string> ResolveStepTaskPromptAsync(

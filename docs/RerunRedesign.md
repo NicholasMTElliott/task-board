@@ -194,7 +194,7 @@ Evaluator posts a separate comment marked `evaluator`:
 <evaluator's reasoning + per-candidate scores>
 ```
 
-The evaluator commits the winner's `section_update` to the description on the group's behalf. Losing candidates' thinking lives only in the comment log (preserves chain-of-thought for downstream agents).
+The evaluator commits the winner's `section_update` to the description on the group's behalf. Losing candidates' output stays visible in the human audit log, but downstream agent context uses only canonical step rows, not per-candidate or evaluator rows.
 
 ### Gate-Check Comments
 

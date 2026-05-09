@@ -649,13 +649,182 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         Assert.Contains("## Create Design", body);
     }
 
+    [Fact]
+    public async Task LongWorkflow_AiboardCommentChurnCacheHits_ButOperatorCommentForcesRework()
+    {
+        var body = "Operator requirements.";
+        var comments = SetupMutableBoard(DesignListId, () => body, nextBody => body = nextBody);
+
+        var callIndex = 0;
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callIndex++;
+                return callIndex switch
+                {
+                    1 => new AgentResult(AgentOutcome.COMPLETE, "Related tickets reviewed",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "No blockers found.")),
+                    2 => new AgentResult(AgentOutcome.COMPLETE, "Design created",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "Use append-only audit comments.")),
+                    3 => new AgentResult(AgentOutcome.COMPLETE, "Gate passes."),
+                    4 => new AgentResult(AgentOutcome.COMPLETE, "Related tickets reviewed after operator edit",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "Operator added acceptance criteria.")),
+                    5 => new AgentResult(AgentOutcome.COMPLETE, "Design updated after operator edit",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "Include the acceptance criteria.")),
+                    6 => new AgentResult(AgentOutcome.COMPLETE, "Gate passes after operator edit."),
+                    _ => new AgentResult(AgentOutcome.ERROR, "unexpected extra executor call"),
+                };
+            });
+
+        var store = new ReplayingRunStore();
+        var runner = CreateRunner(executor, BuildTwoStepGateConfig(),
+            runStore: store,
+            cacheGate: new RerunCacheGate(store, NullLogger<RerunCacheGate>.Instance));
+
+        var first = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        Assert.Equal(AgentOutcome.COMPLETE, first.Outcome);
+        Assert.Equal(3, callIndex);
+
+        var second = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        Assert.Equal(AgentOutcome.COMPLETE, second.Outcome);
+        Assert.Equal(3, callIndex);
+        Assert.Equal(3, store.SavedStepResults.Count(r =>
+            r.RunId == store.RunIds[1] && r.ExecutionKind == "cache_hit"));
+
+        comments.Add(new CardComment("human", "Operator adds acceptance criteria.", DateTimeOffset.UtcNow));
+
+        var third = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        Assert.Equal(AgentOutcome.COMPLETE, third.Outcome);
+        Assert.Equal(6, callIndex);
+        Assert.Equal(3, store.SavedStepResults.Count(r =>
+            r.RunId == store.RunIds[2] && r.ExecutionKind == "full_run"));
+
+        Assert.Equal(3, store.RunRecords.Count(r => r.CardId == TargetCardId && r.StateName == "Design"));
+        Assert.Contains(comments, c => c.Body.Contains("kind:cache_hit", StringComparison.Ordinal));
+        Assert.DoesNotContain(comments, c => c.Body.Contains("agent-run", StringComparison.Ordinal)
+            || c.Body.Contains("agent-step", StringComparison.Ordinal));
+        Assert.Contains("Operator added acceptance criteria.", body);
+        Assert.Contains("Include the acceptance criteria.", body);
+    }
+
+    [Fact]
+    public async Task LongWorkflow_ShutdownThenRerun_CacheHitsCompletedStepAndFinishesGate()
+    {
+        var body = "Operator requirements.";
+        var comments = SetupMutableBoard(DesignListId, () => body, nextBody => body = nextBody);
+
+        var callIndex = 0;
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callIndex++;
+                return callIndex switch
+                {
+                    1 => new AgentResult(AgentOutcome.COMPLETE, "Related tickets reviewed before shutdown",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "Partial review survived shutdown.")),
+                    2 => new AgentResult(AgentOutcome.COMPLETE, "Design completed after restart",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "Design completed after restart.")),
+                    3 => new AgentResult(AgentOutcome.COMPLETE, "Gate passes after restart."),
+                    _ => new AgentResult(AgentOutcome.ERROR, "unexpected extra executor call"),
+                };
+            });
+
+        var store = new ReplayingRunStore();
+        using var shutdown = new ShutdownCoordinator();
+        shutdown.RequestShutdown();
+
+        var firstRunner = CreateRunner(executor, BuildTwoStepGateConfig(),
+            runStore: store,
+            cacheGate: new RerunCacheGate(store, NullLogger<RerunCacheGate>.Instance),
+            shutdownCoordinator: shutdown);
+        var first = await firstRunner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, first.Outcome);
+        Assert.Equal(1, callIndex);
+        Assert.DoesNotContain(store.SavedStepResults, r => r.StepName == "gate_check");
+        Assert.Contains(comments, c => c.Body.Contains("kind:shutdown_notice", StringComparison.Ordinal));
+
+        var secondRunner = CreateRunner(executor, BuildTwoStepGateConfig(),
+            runStore: store,
+            cacheGate: new RerunCacheGate(store, NullLogger<RerunCacheGate>.Instance));
+        var second = await secondRunner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, second.Outcome);
+        Assert.Equal(3, callIndex);
+        Assert.Contains(store.SavedStepResults, r =>
+            r.RunId == store.RunIds[1]
+            && r.StepName == "review_related_tickets"
+            && r.ExecutionKind == "cache_hit");
+        Assert.Contains(store.SavedStepResults, r =>
+            r.RunId == store.RunIds[1]
+            && r.StepName == "create_design"
+            && r.ExecutionKind == "full_run");
+        Assert.Contains(store.SavedStepResults, r =>
+            r.RunId == store.RunIds[1]
+            && r.StepName == "gate_check"
+            && r.ExecutionKind == "full_run"
+            && r.Outcome == AgentOutcome.COMPLETE);
+        Assert.Contains("Partial review survived shutdown.", body);
+        Assert.Contains("Design completed after restart.", body);
+    }
+
+    [Fact]
+    public async Task LongWorkflow_GateStepHistory_UsesCanonicalRowsOnly_NotCandidateRows()
+    {
+        var body = "Operator requirements.";
+        SetupMutableBoard(DesignListId, () => body, nextBody => body = nextBody);
+
+        AgentExecutionContext? capturedGateContext = null;
+        var callIndex = 0;
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                callIndex++;
+                if (callIndex == 1)
+                {
+                    return new AgentResult(AgentOutcome.COMPLETE, "Related tickets reviewed",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "No blockers found."));
+                }
+
+                if (callIndex == 2)
+                {
+                    return new AgentResult(AgentOutcome.COMPLETE, "Design created",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "Winning design only."));
+                }
+
+                capturedGateContext = ci.Arg<AgentExecutionContext>();
+                return new AgentResult(AgentOutcome.COMPLETE, "Gate passes.");
+            });
+
+        var store = new ReplayingRunStore
+        {
+            InjectSyntheticCandidateRowsForLatestRun = true,
+        };
+        var runner = CreateRunner(executor, BuildTwoStepGateConfig(), runStore: store);
+
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+        Assert.NotNull(capturedGateContext);
+        Assert.Contains("Related tickets reviewed", capturedGateContext!.TaskPrompt);
+        Assert.Contains("Design created", capturedGateContext.TaskPrompt);
+        Assert.DoesNotContain("DISMISSED CANDIDATE DESIGN", capturedGateContext.TaskPrompt);
+        Assert.DoesNotContain("EVALUATOR MENTIONED DISMISSED", capturedGateContext.TaskPrompt);
+        Assert.DoesNotContain(":cand-", capturedGateContext.TaskPrompt);
+        Assert.DoesNotContain(":evaluator", capturedGateContext.TaskPrompt);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
 
     private AgentRunner CreateRunner(
         IAgentExecutor executor,
         WorkflowConfig config,
         IRunStore? runStore = null,
-        RerunCacheGate? cacheGate = null)
+        RerunCacheGate? cacheGate = null,
+        ShutdownCoordinator? shutdownCoordinator = null)
     {
         var normalisedConfig = config.Normalised();
         return new AgentRunner(
@@ -671,6 +840,7 @@ public class AgentRunnerRerunRedesignTests : IDisposable
             new ImageDownloader(Substitute.For<IHttpClientFactory>(), NullLogger<ImageDownloader>.Instance),
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             NullLogger<AgentRunner>.Instance,
+            shutdownCoordinator: shutdownCoordinator,
             cacheGate: cacheGate);
     }
 
@@ -975,13 +1145,16 @@ public class AgentRunnerRerunRedesignTests : IDisposable
     private sealed class ReplayingRunStore : IRunStore
     {
         public List<StepResultRecord> SavedStepResults { get; } = [];
+        public List<RunRecord> RunRecords { get; } = [];
         public List<string> RunIds { get; } = [];
+        public bool InjectSyntheticCandidateRowsForLatestRun { get; init; }
         private readonly Dictionary<string, double> _runEstimates = [];
         public double? LastPersistedEstimate { get; set; }
         public double? PersistedEstimateBeforeRun2 { get; set; }
 
         public Task CreateRunAsync(RunRecord run, CancellationToken ct)
         {
+            RunRecords.Add(run);
             RunIds.Add(run.RunId);
             return Task.CompletedTask;
         }
@@ -1030,7 +1203,32 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         public Task UpdateRunProgressAsync(string runId, int completedSteps, CancellationToken ct) => Task.CompletedTask;
         public Task CompleteRunAsync(string runId, AgentOutcome outcome, string? errorDetail, FailureReason? failureReason, CancellationToken ct) => Task.CompletedTask;
         public Task<IReadOnlyList<StepResultRecord>> GetStepResultsForCardAsync(string cardId, string? stateName, CancellationToken ct)
-            => Task.FromResult<IReadOnlyList<StepResultRecord>>([]);
+        {
+            var rows = SavedStepResults
+                .Where(r => r.CardId == cardId
+                    && (stateName is null || r.StateName == stateName))
+                .ToList();
+
+            if (InjectSyntheticCandidateRowsForLatestRun && RunIds.Count > 0)
+            {
+                var runId = RunIds[^1];
+                var groupId = Guid.NewGuid();
+                var now = DateTimeOffset.UtcNow;
+                rows.Add(new StepResultRecord(
+                    runId, cardId, "Design", "create_design:cand-0:claude", 1,
+                    "senior_engineer", "opus-4.6", AgentOutcome.COMPLETE,
+                    "DISMISSED CANDIDATE DESIGN", null, null, null, null, null,
+                    now.AddSeconds(-3), now.AddSeconds(-2),
+                    CandidateGroupId: groupId, CandidateIndex: 0, Selected: false));
+                rows.Add(new StepResultRecord(
+                    runId, cardId, "Design", "create_design:evaluator", 1,
+                    "gate_checker", "claude-haiku-4-5-20251001", AgentOutcome.COMPLETE,
+                    "EVALUATOR MENTIONED DISMISSED", null, null, null, null, null,
+                    now.AddSeconds(-2), now.AddSeconds(-1)));
+            }
+
+            return Task.FromResult<IReadOnlyList<StepResultRecord>>(rows);
+        }
         public Task<IReadOnlyList<StepResultRecord>> GetLatestRunStepResultsAsync(string cardId, string stateName, CancellationToken ct)
             => Task.FromResult<IReadOnlyList<StepResultRecord>>([]);
         public Task UpdateRunSessionStartupMsAsync(string runId, int startupMs, CancellationToken ct) => Task.CompletedTask;

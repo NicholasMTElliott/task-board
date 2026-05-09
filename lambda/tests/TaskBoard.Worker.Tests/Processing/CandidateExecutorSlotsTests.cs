@@ -510,7 +510,59 @@ public class CandidateExecutorSlotsTests : IDisposable
         Assert.Contains(slotRows, r => r.SlotIndex == 1 && r.Provider == "fallback");
     }
 
+    [Fact]
+    public async Task CandidateFanout_CancellationAfterThreeOfFive_PersistsOnlyCompletedCandidates_NoEvaluator()
+    {
+        var executor = BuildExecutor(new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["fast-0"] = new ScriptedExecutor(AgentOutcome.COMPLETE, "fast 0 complete"),
+            ["fast-1"] = new ScriptedExecutor(AgentOutcome.COMPLETE, "fast 1 complete"),
+            ["fast-2"] = new ScriptedExecutor(AgentOutcome.COMPLETE, "fast 2 complete"),
+            ["slow-3"] = new CancellableExecutor(),
+            ["slow-4"] = new CancellableExecutor(),
+            ["evaluator"] = new SentinelExecutor("evaluator must not run after cancellation"),
+        });
+        var slot = new SlotConfig(
+            Candidates:
+            [
+                new CandidateOverride("fast-0"),
+                new CandidateOverride("fast-1"),
+                new CandidateOverride("fast-2"),
+                new CandidateOverride("slow-3"),
+                new CandidateOverride("slow-4"),
+            ],
+            Evaluator: new EvaluatorConfig("evaluator", "pick a winner"));
+        var request = NewRequestWithSlots([slot], gitBehavior: "discard");
+        using var cts = new CancellationTokenSource();
+
+        var runTask = executor.ExecuteSlotAsync(slot, slotIndex: 0, totalSlots: 1, request, cts.Token);
+        await WaitUntilAsync(
+            () => _runStore.SavedSteps.Count(r => r.CandidateIndex.HasValue) == 3,
+            TimeSpan.FromSeconds(10));
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
+
+        var candidateRows = _runStore.SavedSteps
+            .Where(r => r.CandidateIndex.HasValue)
+            .ToList();
+        Assert.Equal(3, candidateRows.Count);
+        Assert.All(candidateRows, r => Assert.StartsWith("fast-", r.Provider, StringComparison.Ordinal));
+        Assert.DoesNotContain(_runStore.SavedSteps, r => r.StepName.EndsWith(":evaluator", StringComparison.Ordinal));
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────
+
+    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (!predicate())
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+                throw new TimeoutException("Timed out waiting for test condition.");
+            await Task.Delay(20);
+        }
+    }
 
     private CandidateExecutor BuildExecutor(IReadOnlyDictionary<string, IAgentExecutor> byProvider)
         => new(_git,
@@ -579,6 +631,15 @@ public class CandidateExecutorSlotsTests : IDisposable
     {
         public Task<AgentResult> ExecuteAsync(AgentExecutionContext context, CancellationToken cancellationToken)
             => throw new InvalidOperationException(message);
+    }
+
+    private sealed class CancellableExecutor : IAgentExecutor
+    {
+        public async Task<AgentResult> ExecuteAsync(AgentExecutionContext context, CancellationToken cancellationToken)
+        {
+            await Task.Delay(TimeSpan.FromMinutes(5), cancellationToken);
+            return new AgentResult(AgentOutcome.COMPLETE, "should not complete");
+        }
     }
 
     private sealed class AlwaysFailing(Exception ex) : IAgentExecutor

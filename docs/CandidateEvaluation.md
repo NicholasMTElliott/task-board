@@ -128,7 +128,9 @@ For multi-stage failover (e.g. "race subscription providers; if both fail, fall 
 
 **Backward compatibility:** legacy step-level `candidates+evaluator` workflows continue to work unchanged — the runtime adapts them to a single-slot config under the hood. No JSON edits required.
 
-**Persistence:** every candidate row from every attempted slot is saved to `step_result`. The new `slot_index` column (NULL for single-slot steps) disambiguates which slot a row belonged to. The `v_slot_outcomes` view aggregates "how often does slot N actually carry the day vs needing further fallback?" — useful for tuning slot ordering. Per-`(role, provider)` metrics in `v_provider_role_metrics` are slot-agnostic.
+**Persistence:** every completed candidate row from every attempted slot is saved to `step_result`. If a run is cancelled while candidates are still in flight, candidates that already finished remain recorded; unfinished candidates and the evaluator do not. The new `slot_index` column (NULL for single-slot steps) disambiguates which slot a row belonged to. The `v_slot_outcomes` view aggregates "how often does slot N actually carry the day vs needing further fallback?" — useful for tuning slot ordering. Per-`(role, provider)` metrics in `v_provider_role_metrics` are slot-agnostic.
+
+**Downstream context:** later steps receive canonical step results only. Per-candidate rows (`candidate_group_id` / `candidate_index` set, or `:cand-` step names) and evaluator rows (`:evaluator`) are excluded from `.aiboard/context/step-history.md` and gate `{StepHistory}`. This keeps losing candidates and partial interrupted fan-outs from becoming implicit instructions.
 
 ### Validator constraints
 
