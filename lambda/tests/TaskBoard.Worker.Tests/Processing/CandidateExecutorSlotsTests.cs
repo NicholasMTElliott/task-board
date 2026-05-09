@@ -256,7 +256,7 @@ public class CandidateExecutorSlotsTests : IDisposable
 
         Assert.Equal(SlotOutcome.Won, result.Outcome);
         Assert.Equal(3, rateLimitedThenOk.InvocationCount); // 2 fails + 1 success
-        Assert.Single(_runStore.SavedSteps.Where(r => r.CandidateGroupId is not null)); // single final row
+        Assert.Single(_runStore.SavedSteps, r => r.CandidateGroupId is not null); // single final row
     }
 
     [Fact]
@@ -517,7 +517,8 @@ public class CandidateExecutorSlotsTests : IDisposable
                new MapResolver(byProvider),
                _runStore,
                _boardClient,
-               NullLogger<CandidateExecutor>.Instance);
+               NullLogger<CandidateExecutor>.Instance,
+               retryDelay: (_, _) => Task.CompletedTask);
 
     private CandidateGroupRequest NewRequestWithSlots(
         IReadOnlyList<SlotConfig> slots,

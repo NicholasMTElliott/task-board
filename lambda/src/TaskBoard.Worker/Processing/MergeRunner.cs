@@ -12,7 +12,8 @@ public sealed class MergeRunner(
     ICrossReferenceResolver crossReferenceResolver,
     IAgentExecutorResolver executorResolver,
     ILogger<MergeRunner> logger,
-    DependencyGuard? dependencyGuard = null)
+    DependencyGuard? dependencyGuard = null,
+    ICommentRouter? commentRouter = null)
 {
     private const int DefaultMaxRetries = 3;
 
@@ -20,7 +21,6 @@ public sealed class MergeRunner(
         string cardId, string boardId, string workspacePath, CancellationToken cancellationToken)
     {
         var runId = $"merge-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Random.Shared.Next(0x10000):x4}";
-        var runMarker = $"<!-- merge-run:{runId} -->";
 
         using (logger.BeginScope(new Dictionary<string, object>
         {
@@ -85,7 +85,7 @@ public sealed class MergeRunner(
         {
             var detail = $"No branch found for card {cardId}. The work branch may have been deleted or the card may not have gone through implementation.";
             logger.LogError("No branch found for card {CardId}", cardId);
-            await PostCommentBestEffort(cardId, detail, runMarker, cancellationToken);
+            await PostCommentBestEffort(cardId, state, runId, detail, cancellationToken);
             await TransitionBestEffort(cardId, state, TransitionKeys.Error, cancellationToken);
             return new AgentRunResult(AgentOutcome.ERROR, detail);
         }
@@ -106,7 +106,7 @@ public sealed class MergeRunner(
                 logger.LogInformation("Branch {WorkBranch} already merged into {DefaultBranch}", workBranch, defaultBranch);
                 await CleanupBranchesAsync(workspacePath, workBranch, cancellationToken);
                 var detail = $"Branch `{workBranch}` is already merged into `{defaultBranch}`. Cleaned up branches.";
-                await PostComment(cardId, detail, card, runMarker, cancellationToken);
+                await PostComment(cardId, detail, card, state, runId, cancellationToken);
                 await TransitionBestEffort(cardId, state, TransitionKeys.Complete, cancellationToken);
                 return new AgentRunResult(AgentOutcome.COMPLETE, detail);
             }
@@ -153,7 +153,7 @@ public sealed class MergeRunner(
                                 : TransitionKeys.Error;
 
                             var detail = $"Merge conflicts between `{workBranch}` and `{defaultBranch}` could not be resolved automatically.";
-                            await PostComment(cardId, detail, card, runMarker, cancellationToken);
+                            await PostComment(cardId, detail, card, state, runId, cancellationToken);
                             await TransitionBestEffort(cardId, state, transitionKey, cancellationToken);
                             return new AgentRunResult(AgentOutcome.ERROR, detail);
                         }
@@ -173,7 +173,7 @@ public sealed class MergeRunner(
                         await CleanupBranchesAsync(workspacePath, workBranch, cancellationToken);
 
                         var detail = $"Merged `{workBranch}` into `{defaultBranch}` and pushed to origin.\nRemote branch `{workBranch}` deleted.";
-                        await PostComment(cardId, detail, card, runMarker, cancellationToken);
+                        await PostComment(cardId, detail, card, state, runId, cancellationToken);
                         await TransitionBestEffort(cardId, state, TransitionKeys.Complete, cancellationToken);
                         return new AgentRunResult(AgentOutcome.COMPLETE, detail);
                     }
@@ -190,7 +190,7 @@ public sealed class MergeRunner(
                         logger.LogInformation("Branch {WorkBranch} was merged by another process", workBranch);
                         await CleanupBranchesAsync(workspacePath, workBranch, cancellationToken);
                         var detail = $"Branch `{workBranch}` was merged into `{defaultBranch}` by another process.";
-                        await PostComment(cardId, detail, card, runMarker, cancellationToken);
+                        await PostComment(cardId, detail, card, state, runId, cancellationToken);
                         await TransitionBestEffort(cardId, state, TransitionKeys.Complete, cancellationToken);
                         return new AgentRunResult(AgentOutcome.COMPLETE, detail);
                     }
@@ -208,7 +208,7 @@ public sealed class MergeRunner(
             // Exhausted retries
             var exhaustedDetail = $"Failed to merge after {maxRetries} attempts (main keeps advancing).";
             logger.LogError("Exhausted {MaxRetries} merge retries for card {CardId}", maxRetries, cardId);
-            await PostCommentBestEffort(cardId, exhaustedDetail, runMarker, cancellationToken);
+            await PostCommentBestEffort(cardId, state, runId, exhaustedDetail, cancellationToken);
             await TransitionBestEffort(cardId, state, TransitionKeys.Error, cancellationToken);
             return new AgentRunResult(AgentOutcome.ERROR, exhaustedDetail);
         }
@@ -216,7 +216,7 @@ public sealed class MergeRunner(
         catch (Exception ex)
         {
             logger.LogError(ex, "Merge failed for card {CardId}: {Message}", cardId, ex.Message);
-            await PostCommentBestEffort(cardId, $"Merge error: {ex.Message}", runMarker, cancellationToken);
+            await PostCommentBestEffort(cardId, state, runId, $"Merge error: {ex.Message}", cancellationToken);
             await TransitionBestEffort(cardId, state, TransitionKeys.Error, cancellationToken);
             return new AgentRunResult(AgentOutcome.ERROR, ex.Message);
         }
@@ -386,25 +386,52 @@ public sealed class MergeRunner(
     }
 
     private async Task PostComment(
-        string cardId, string detail, BoardCard card, string runMarker,
+        string cardId, string detail, BoardCard card, WorkflowState state, string runId,
         CancellationToken cancellationToken)
     {
-        var comment = $"{runMarker}\n\n**system in Merging ({agentIdentity.DisplayName}):**\n\n## Merge Complete\n\n{detail}";
-        await boardClient.UpsertAgentCommentAsync(cardId, comment, runMarker, cancellationToken);
+        var comment = $"**system in Merging ({agentIdentity.DisplayName}):**\n\n## Merge Complete\n\n{detail}";
+        await PostMergeRunCommentAsync(cardId, state, runId, "complete", comment, cancellationToken);
     }
 
     private async Task PostCommentBestEffort(
-        string cardId, string detail, string runMarker,
+        string cardId, WorkflowState state, string runId, string detail,
         CancellationToken cancellationToken)
     {
         try
         {
-            var comment = $"{runMarker}\n\n**system in Merging ({agentIdentity.DisplayName}):**\n\n## Merge Result\n\n{detail}";
-            await boardClient.UpsertAgentCommentAsync(cardId, comment, runMarker, cancellationToken);
+            var comment = $"**system in Merging ({agentIdentity.DisplayName}):**\n\n## Merge Result\n\n{detail}";
+            await PostMergeRunCommentAsync(cardId, state, runId, "result", comment, cancellationToken);
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to post merge comment for card {CardId}", cardId);
+        }
+    }
+
+    private async Task PostMergeRunCommentAsync(
+        string cardId,
+        WorkflowState state,
+        string runId,
+        string outcome,
+        string body,
+        CancellationToken cancellationToken)
+    {
+        var marker = AiboardLogMarker.Build(
+            AiboardLogMarker.KindRun,
+            new[]
+            {
+                KeyValuePair.Create("state", state.Name),
+                KeyValuePair.Create("run", runId),
+                KeyValuePair.Create("outcome", outcome),
+            });
+
+        if (commentRouter is not null)
+        {
+            await commentRouter.PostAsync(cardId, AiboardLogMarker.KindRun, body, marker, cancellationToken);
+        }
+        else
+        {
+            await boardClient.AppendAgentCommentAsync(cardId, $"{marker}\n{body}", cancellationToken);
         }
     }
 

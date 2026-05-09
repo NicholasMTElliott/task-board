@@ -1179,6 +1179,7 @@ public sealed class GitWorkspaceManager(
         try
         {
             await process.WaitForExitAsync(timeoutCts.Token);
+            process.WaitForExit();
         }
         catch (OperationCanceledException)
         {

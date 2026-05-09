@@ -37,7 +37,7 @@ For a step that declares `candidates`, the runtime:
 5. Parses the evaluator's verdict — `winner_index` (0-indexed) plus optional 0–10 score + reasoning per candidate. Updates the candidate rows: `selected = (index == winner_index)`, `quality_score`, `evaluator_reasoning`.
 6. **Promotes the winner**: `git reset --hard {winner-branch}` on the canonical worktree so subsequent steps see the winner's commits.
 7. Cleans up: deletes loser worktrees + branches, removes the winner's worktree (the canonical one now points at its commits).
-8. Posts per-candidate audit comments to the card (markers `<!-- agent-step:{step}:cand-{i}:{provider} -->`) so the human reviewer can see what each candidate produced.
+8. Posts per-candidate audit comments to the card (`<!-- aiboard-log kind:candidate ... -->`) so the human reviewer can see what each candidate produced.
 
 The evaluator's `AgentResult` becomes the step's outcome — AgentRunner uses it to drive the state's transitions exactly as it would for a non-candidate step.
 

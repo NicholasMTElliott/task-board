@@ -128,7 +128,14 @@ public class AgentRunnerTests : IDisposable
 
         // Assert: branch was pushed to bare remote
         var pushedBranches = RunGitSyncWithOutput(bareRemotePath, "branch");
-        Assert.Contains(TargetCardId, pushedBranches);
+        var postedComments = string.Join(
+            "\n---\n",
+            _trelloClient.ReceivedCalls()
+                .Where(c => c.GetMethodInfo().Name is "AppendAgentCommentAsync" or "UpsertAgentCommentAsync")
+                .Select(c => string.Join("\n", c.GetArguments().OfType<string>())));
+        Assert.True(
+            pushedBranches.Contains(TargetCardId, StringComparison.Ordinal),
+            $"Expected pushed branch containing '{TargetCardId}'. Branches:\n{pushedBranches}\nComments:\n{postedComments}");
 
         // Assert: commit message was used
         var branch = await _gitWorkspaceManager.FindBranchByPrefixAsync(_tempDir, TargetCardId, CancellationToken.None);
@@ -1010,8 +1017,9 @@ public class AgentRunnerTests : IDisposable
         // Notification comment posted on source card — marker only in commentMarker param, not body
         await _trelloClient.Received(1).UpsertAgentCommentAsync(
             TargetCardId,
-            Arg.Is<string>(s => s.Contains("#99") && !s.Contains("agent-created-ticket:auth-bug")),
-            Arg.Is<string>(s => s.Contains("agent-created-ticket:auth-bug")),
+            Arg.Is<string>(s => s.Contains("#99") && !s.Contains("kind:created_ticket_dedupe")),
+            Arg.Is<string>(s => s.Contains("kind:created_ticket_dedupe")
+                && s.Contains("slug:auth-bug")),
             Arg.Any<CancellationToken>());
     }
 

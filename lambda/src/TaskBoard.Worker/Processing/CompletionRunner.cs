@@ -22,14 +22,13 @@ public sealed class CompletionRunner(
     ILogger<CompletionRunner> logger,
     // Rerun redesign Problem 2: optional router. When wired, posts the
     // children-completion progress comment as kind:completion_progress →
-    // delete_and_repost. Null falls back to legacy upsert keyed on runMarker.
+    // delete_and_repost. Null fallback still uses the aiboard-log marker.
     ICommentRouter? commentRouter = null)
 {
     public async Task<AgentRunResult> ExecuteAsync(
         string cardId, string boardId, string workspacePath, CancellationToken ct)
     {
         var runId = $"completion-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Random.Shared.Next(0x10000):x4}";
-        var runMarker = $"<!-- completion-check:{runId} -->";
 
         using (logger.BeginScope(new Dictionary<string, object>
         {
@@ -81,7 +80,7 @@ public sealed class CompletionRunner(
             logger.LogWarning("Card {CardId} has no tracked children in children_complete state", cardId);
 
             var noChildrenComment = BuildComment([], [], state);
-            await PostProgressCommentAsync(cardId, noChildrenComment, runMarker, ct);
+            await PostProgressCommentAsync(cardId, noChildrenComment, ct);
 
             if (state.Transitions.TryGetValue(TransitionKeys.Error, out var errorTarget))
             {
@@ -120,7 +119,7 @@ public sealed class CompletionRunner(
 
         // 5. Post status comment
         var statusComment = BuildComment(completed, pending, state);
-        await PostProgressCommentAsync(cardId, statusComment, runMarker, ct);
+        await PostProgressCommentAsync(cardId, statusComment, ct);
 
         // 6. Evaluate and transition
         if (pending.Count == 0)
@@ -152,24 +151,24 @@ public sealed class CompletionRunner(
 
     /// <summary>
     /// Routes the children-progress comment through the comment router (kind:
-    /// completion_progress → delete_and_repost) when wired, or via legacy
-    /// upsert with the original <c>completion-check:{runId}</c> marker when not.
+    /// completion_progress → delete_and_repost) when wired. The direct fallback
+    /// uses the same aiboard-log marker with upsert semantics.
     /// </summary>
     private async Task PostProgressCommentAsync(
-        string cardId, string body, string legacyRunMarker, CancellationToken ct)
+        string cardId, string body, CancellationToken ct)
     {
+        var marker = AiboardLogMarker.Build(
+            AiboardLogMarker.KindCompletionProgress,
+            new[] { KeyValuePair.Create("card", cardId) });
         if (commentRouter is not null)
         {
-            var marker = AiboardLogMarker.Build(
-                AiboardLogMarker.KindCompletionProgress,
-                new[] { KeyValuePair.Create("card", cardId) });
             await commentRouter.PostAsync(
                 cardId, AiboardLogMarker.KindCompletionProgress,
                 body, marker, ct);
         }
         else
         {
-            await boardClient.UpsertAgentCommentAsync(cardId, body, legacyRunMarker, ct);
+            await boardClient.UpsertAgentCommentAsync(cardId, body, marker, ct);
         }
     }
 

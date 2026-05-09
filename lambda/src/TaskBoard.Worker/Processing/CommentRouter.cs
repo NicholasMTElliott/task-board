@@ -11,7 +11,7 @@ namespace TaskBoard.Worker.Processing;
 ///
 /// <para>Retention defaults (overridable per-kind via workflow config):</para>
 /// <list type="bullet">
-///   <item>Append: step / candidate / evaluator / gate / optional / cache_hit</item>
+///   <item>Append: run / step / candidate / evaluator / gate / optional / cache_hit</item>
 ///   <item>Delete-and-repost: dependency_blocked / completion_progress / rate_limit_notice / shutdown_notice / cross_card_notification</item>
 ///   <item>Upsert: created_ticket_dedupe (true dedupe key, not status)</item>
 /// </list>
@@ -141,6 +141,7 @@ public sealed class CommentRouter(
     /// </summary>
     internal static CommentRetention DefaultFor(string kind) => kind switch
     {
+        AiboardLogMarker.KindRun => CommentRetention.Append,
         AiboardLogMarker.KindStep => CommentRetention.Append,
         AiboardLogMarker.KindCandidate => CommentRetention.Append,
         AiboardLogMarker.KindEvaluator => CommentRetention.Append,

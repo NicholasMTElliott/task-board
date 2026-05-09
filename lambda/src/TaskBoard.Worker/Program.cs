@@ -610,11 +610,10 @@ builder.Services.AddSingleton(sp =>
 
 builder.Services.AddSingleton<UpdateFileProcessor>();
 // Rerun redesign Problem 2: per-kind comment routing (append / delete_and_repost / upsert).
-// Optional dep on every emit site — when not registered, sites fall back to legacy
-// upsert with the legacy marker (e.g. <!-- agent-step:create_design -->). When
-// registered, sites emit aiboard-log markers and route by kind via the workflow
-// config's rerun.comments.retentionPolicy block. The Bind(workflowConfig) call
-// runs immediately after the host is built (see below).
+// Optional dep on emit sites; direct fallback paths still emit aiboard-log
+// markers, while the registered router applies per-kind retention from the
+// workflow config's rerun.comments.retentionPolicy block. The Bind(workflowConfig)
+// call runs immediately after the host is built (see below).
 builder.Services.AddSingleton<ICommentRouter, CommentRouter>();
 // Rerun redesign Problem 1: deterministic-skip cache gate. Optional dep on
 // AgentRunner — registering it here turns on the cache check for every

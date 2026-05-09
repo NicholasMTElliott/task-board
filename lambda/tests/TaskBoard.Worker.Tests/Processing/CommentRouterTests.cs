@@ -157,6 +157,7 @@ public class CommentRouterTests
     public void DefaultFor_AllAppendKinds_AreAppend()
     {
         Assert.Equal(CommentRetention.Append, CommentRouter.DefaultFor(AiboardLogMarker.KindStep));
+        Assert.Equal(CommentRetention.Append, CommentRouter.DefaultFor(AiboardLogMarker.KindRun));
         Assert.Equal(CommentRetention.Append, CommentRouter.DefaultFor(AiboardLogMarker.KindCandidate));
         Assert.Equal(CommentRetention.Append, CommentRouter.DefaultFor(AiboardLogMarker.KindEvaluator));
         Assert.Equal(CommentRetention.Append, CommentRouter.DefaultFor(AiboardLogMarker.KindGate));

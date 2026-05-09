@@ -231,6 +231,23 @@ public class PromptContentTests
         Assert.Contains("not caused by the current ticket", content, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void StepPromptFiles_DoNotInstructAgentsToUseLegacyMarkers()
+    {
+        var stepPromptDir = Path.Combine(RepoRoot, "prompts", "states", "steps");
+        var offending = Directory.EnumerateFiles(stepPromptDir, "*.md", SearchOption.AllDirectories)
+            .Select(path => new { path, content = File.ReadAllText(path) })
+            .Where(x =>
+                x.content.Contains("agent-step", StringComparison.Ordinal)
+                || x.content.Contains("agent-created-ticket", StringComparison.Ordinal))
+            .Select(x => Path.GetRelativePath(RepoRoot, x.path))
+            .ToList();
+
+        Assert.True(offending.Count == 0,
+            "Step prompts must use aiboard-log markers, not legacy marker instructions:\n"
+            + string.Join("\n", offending));
+    }
+
     private static string FindRepoRoot()
     {
         var dir = AppContext.BaseDirectory;

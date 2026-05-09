@@ -8,8 +8,8 @@ A prior step (`decompose_story_required` or equivalent) has already produced the
 
 The required-tasks step posted a verdict comment on this card listing every ticket it created. Look for:
 
-1. **The verdict comment** marked `<!-- agent-step:decompose_story_required -->` (or similar). The bottom of that comment has an "Update file actions:" section listing each created ticket as `Created #N — Title`.
-2. **Per-slug dedup markers** in the comment stream (`<!-- agent-created-ticket:{slug} -->`).
+1. **The verdict comment** marked with `<!-- aiboard-log kind:step ... step:decompose_story_required ... -->` (or similar). The bottom of that comment has an "Update file actions:" section listing each created ticket as `Created #N — Title`.
+2. **Per-slug dedup markers** in the comment stream (`<!-- aiboard-log kind:created_ticket_dedupe slug:{slug} -->`).
 3. **The card body's "Generated Children" section** auto-maintained by the orchestrator.
 
 If you cannot find any sign that the required step ran, **STOP** and return `outcome=NEEDS_INFO` with a question asking the operator to confirm — do not silently re-decompose the story. The two steps are designed to run as a pair; missing the required output means something went wrong.
@@ -83,7 +83,7 @@ Same scale as the required step: **[1, 2, 4, 8]**. Optional tasks are usually 1 
 
 ## Deduplication
 
-Check the conversation history for `<!-- agent-created-ticket:{slug} -->` markers. If a slug already exists, do not create the file again.
+Check the conversation history for `<!-- aiboard-log kind:created_ticket_dedupe slug:{slug} -->` markers. If a slug already exists, do not create the file again.
 
 ## Output
 

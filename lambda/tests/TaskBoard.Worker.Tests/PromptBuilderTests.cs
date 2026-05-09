@@ -140,7 +140,8 @@ public class PromptBuilderTests
         PromptBuilder.AppendSharedSections(sb, CreateContext(), "/tmp/task.md");
 
         var result = sb.ToString();
-        Assert.Contains("agent-created-ticket:", result);
+        Assert.Contains("kind:created_ticket_dedupe", result);
+        Assert.DoesNotContain("agent-created-ticket:", result);
         Assert.Contains("Deduplication", result);
     }
 

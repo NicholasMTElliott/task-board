@@ -106,8 +106,9 @@ public class UpdateFileProcessorTests : IDisposable
         // Notification comment on source card — marker only in commentMarker param, not body
         await _boardClient.Received(1).UpsertAgentCommentAsync(
             SourceCardId,
-            Arg.Is<string>(s => s.Contains("#99") && !s.Contains("agent-created-ticket:fix-auth-race")),
-            Arg.Is<string>(s => s.Contains("agent-created-ticket:fix-auth-race")),
+            Arg.Is<string>(s => s.Contains("#99") && !s.Contains("kind:created_ticket_dedupe")),
+            Arg.Is<string>(s => s.Contains("kind:created_ticket_dedupe")
+                && s.Contains("slug:fix-auth-race")),
             Arg.Any<CancellationToken>());
 
         // File should be deleted
@@ -278,8 +279,10 @@ public class UpdateFileProcessorTests : IDisposable
         // Comment posted on target card — marker only in commentMarker param, not body
         await _boardClient.Received(1).UpsertAgentCommentAsync(
             "5",
-            Arg.Is<string>(s => s.Contains(commentBody) && !s.Contains($"agent-cross-comment:{SourceCardId}:{StepName}")),
-            Arg.Is<string>(s => s.Contains($"agent-cross-comment:{SourceCardId}:{StepName}")),
+            Arg.Is<string>(s => s.Contains(commentBody) && !s.Contains("kind:cross_card_notification")),
+            Arg.Is<string>(s => s.Contains("kind:cross_card_notification")
+                && s.Contains($"source_card:{SourceCardId}")
+                && s.Contains($"source_step:{StepName}")),
             Arg.Any<CancellationToken>());
 
         // File deleted
@@ -1131,7 +1134,8 @@ public class UpdateFileProcessorTests : IDisposable
         // Notification comment IS posted for ad-hoc creation
         await _boardClient.Received(1).UpsertAgentCommentAsync(
             "10", Arg.Any<string>(),
-            Arg.Is<string>(s => s.Contains("agent-created-ticket:adhoc-task")),
+            Arg.Is<string>(s => s.Contains("kind:created_ticket_dedupe")
+                && s.Contains("slug:adhoc-task")),
             Arg.Any<CancellationToken>());
     }
 

@@ -200,10 +200,14 @@ public class AgentRunnerMergeStepTests : IDisposable
             CardId, ReadyForImplCol, Arg.Any<CancellationToken>());
 
         // A kick-back comment should be posted
-        await _boardClient.Received().UpsertAgentCommentAsync(
+        await _boardClient.Received().AppendAgentCommentAsync(
             CardId,
-            Arg.Is<string>(s => s.Contains("Merge Conflict") && s.Contains("could not be resolved")),
-            Arg.Any<string>(),
+            Arg.Is<string>(s =>
+                s.Contains("kind:run", StringComparison.Ordinal)
+                && s.Contains("outcome:merge_kickback", StringComparison.Ordinal)
+                && s.Contains("Merge Conflict", StringComparison.Ordinal)
+                && s.Contains("could not be resolved", StringComparison.Ordinal)
+                && !s.Contains("agent-run", StringComparison.Ordinal)),
             Arg.Any<CancellationToken>());
     }
 

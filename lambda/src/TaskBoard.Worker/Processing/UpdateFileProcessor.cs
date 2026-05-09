@@ -26,9 +26,8 @@ public sealed class UpdateFileProcessor(
     // Rerun redesign Problem 2: optional router. When wired, the
     // created-ticket-dedupe and cross-card notification comments use the
     // new aiboard-log marker shape (kind:created_ticket_dedupe → upsert,
-    // kind:cross_card_notification → delete_and_repost). When null, falls
-    // back to legacy upsert with `agent-created-ticket:` / `agent-cross-comment:`
-    // markers so existing tests pass without DI changes.
+    // kind:cross_card_notification → delete_and_repost). When null, direct
+    // fallback calls still use the aiboard-log marker grammar.
     ICommentRouter? commentRouter = null)
 {
     private readonly ICardDependencyClient _dependencyClient =
@@ -248,8 +247,10 @@ public sealed class UpdateFileProcessor(
                     }
                     else
                     {
-                        var dedupMarker = $"<!-- agent-created-ticket:{p.Slug} -->";
-                        await boardClient.UpsertAgentCommentAsync(sourceCardId, commentBody, dedupMarker, ct);
+                        var marker = AiboardLogMarker.Build(
+                            AiboardLogMarker.KindCreatedTicketDedupe,
+                            new[] { KeyValuePair.Create("slug", p.Slug) });
+                        await boardClient.UpsertAgentCommentAsync(sourceCardId, commentBody, marker, ct);
                     }
                 }
 
@@ -415,7 +416,13 @@ public sealed class UpdateFileProcessor(
         }
         else
         {
-            var marker = $"<!-- agent-cross-comment:{sourceCardId}:{stepName} -->";
+            var marker = AiboardLogMarker.Build(
+                AiboardLogMarker.KindCrossCardNotification,
+                new[]
+                {
+                    KeyValuePair.Create("source_card", sourceCardId),
+                    KeyValuePair.Create("source_step", stepName),
+                });
             await boardClient.UpsertAgentCommentAsync(targetCardId, commentBody, marker, ct);
         }
 

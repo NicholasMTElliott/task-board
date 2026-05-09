@@ -46,10 +46,10 @@ public sealed class CandidateExecutor(
     IResourcePool? resourcePool = null,
     AgentIdentity? agentIdentity = null,
     // Rerun redesign Problem 2: route per-candidate audit comments through the
-    // comment router (kind:candidate → append) when wired. When null, falls back
-    // to legacy upsert with the per-candidate `agent-step:{step}:cand-N:{provider}`
-    // marker so existing tests continue to pass without DI changes.
-    ICommentRouter? commentRouter = null)
+    // comment router (kind:candidate → append) when wired. When null, direct
+    // fallback calls still append the same aiboard-log marker shape.
+    ICommentRouter? commentRouter = null,
+    Func<int, CancellationToken, Task>? retryDelay = null)
 {
     /// <summary>
     /// Backward-compatible single-slot entry. Treats the request's step as a
@@ -615,7 +615,7 @@ public sealed class CandidateExecutor(
                 logger.LogWarning(ex,
                     "Slot {Slot} candidate {Index} ({Provider}) hit RATE_LIMIT; retry {Attempt}/{Max}",
                     slotIndex, candidateIndex, candidate.Provider, attempt, maxRetries);
-                await DelayWithBackoffAsync(attempt, cancellationToken);
+                await DelayBeforeRetryAsync(attempt, cancellationToken);
             }
             catch (TimeoutException ex) when (
                 attempt < maxRetries && retryOn.Contains(FailureReason.TIMEOUT))
@@ -624,7 +624,7 @@ public sealed class CandidateExecutor(
                 logger.LogWarning(ex,
                     "Slot {Slot} candidate {Index} ({Provider}) hit TIMEOUT; retry {Attempt}/{Max}",
                     slotIndex, candidateIndex, candidate.Provider, attempt, maxRetries);
-                await DelayWithBackoffAsync(attempt, cancellationToken);
+                await DelayBeforeRetryAsync(attempt, cancellationToken);
             }
             catch (RateLimitException ex)
             {
@@ -691,6 +691,9 @@ public sealed class CandidateExecutor(
         var delay = TimeSpan.FromSeconds(raw * jitterFactor);
         await Task.Delay(delay, cancellationToken);
     }
+
+    private Task DelayBeforeRetryAsync(int attempt, CancellationToken cancellationToken)
+        => (retryDelay ?? DelayWithBackoffAsync)(attempt, cancellationToken);
 
     // ── Phase 1 helpers ──────────────────────────────────────────────────────
 
@@ -1903,10 +1906,9 @@ public sealed class CandidateExecutor(
         }
 
         // Consolidated step comment — the evaluator's detail plus a scores
-        // table. AgentRunner posts its own step comment AFTER this method
-        // returns (using the marker `agent-step:{stepName}`); we leave that
-        // path alone but pre-augment evaluatorResult.Detail so the comment
-        // shows the scoreboard.
+        // table. AgentRunner posts its own kind:step comment AFTER this method
+        // returns; pre-augment evaluatorResult.Detail so that comment shows
+        // the scoreboard.
     }
 
     private static string Truncate(string s, int max)

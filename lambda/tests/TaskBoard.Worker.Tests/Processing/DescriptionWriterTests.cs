@@ -55,6 +55,46 @@ public class DescriptionWriterTests
     }
 
     [Fact]
+    public void Replace_BodyOnlyContent_PrependsPrettifiedStepHeading()
+    {
+        var body = "# Story";
+        var update = new SectionUpdate(
+            SectionUpdateStrategy.Replace,
+            Content: "Use Postgres.");
+
+        var result = DescriptionWriter.ApplySectionUpdate(body, "create_design", update);
+
+        Assert.Contains("## Create Design\n\nUse Postgres.", result);
+    }
+
+    [Fact]
+    public void Replace_ExistingHeading_DoesNotDuplicateHeading()
+    {
+        var body = "# Story";
+        var update = new SectionUpdate(
+            SectionUpdateStrategy.Replace,
+            Content: "## Technical Design\n\nUse Postgres.");
+
+        var result = DescriptionWriter.ApplySectionUpdate(body, "create_design", update);
+
+        Assert.Equal(1, CountOccurrences(result, "## Technical Design"));
+        Assert.DoesNotContain("## Create Design\n\n## Technical Design", result);
+    }
+
+    [Fact]
+    public void Replace_OptionalBodyOnlyContent_StripsOptionalPrefixForHeading()
+    {
+        var body = "# Story";
+        var update = new SectionUpdate(
+            SectionUpdateStrategy.Replace,
+            Content: "Check auth boundaries.");
+
+        var result = DescriptionWriter.ApplySectionUpdate(body, "optional:security_review", update);
+
+        Assert.Contains("## Security Review\n\nCheck auth boundaries.", result);
+    }
+
+    [Fact]
     public void Replace_ExistingSection_ReplacesInPlace()
     {
         // Agent is updating an already-present section. The new content must

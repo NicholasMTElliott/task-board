@@ -26,9 +26,10 @@ internal static class AiboardLogMarker
 
     // ── Comment kinds ────────────────────────────────────────────────
 
-    // Append (chronological log entries): step / candidate / evaluator / gate /
+    // Append (chronological log entries): run / step / candidate / evaluator / gate /
     // optional / cache_hit. The retention policy table in workflow.json routes
     // these through ITaskBoardClient.AppendAgentCommentAsync by default.
+    internal const string KindRun = "run";
     internal const string KindStep = "step";
     internal const string KindCandidate = "candidate";
     internal const string KindEvaluator = "evaluator";

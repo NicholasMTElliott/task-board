@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using TaskBoard.Worker.Clients;
 
 namespace TaskBoard.Worker.Processing;
@@ -31,7 +32,7 @@ namespace TaskBoard.Worker.Processing;
 /// are appended at the end of the managed block (visitation order).
 /// </para>
 /// </summary>
-internal static class DescriptionWriter
+internal static partial class DescriptionWriter
 {
     internal const string ManagedStart = "<!-- aiboard:managed-section-start -->";
     internal const string ManagedEnd = "<!-- aiboard:managed-section-end -->";
@@ -219,8 +220,12 @@ internal static class DescriptionWriter
         sb.Append("<!-- step-section:").Append(stepName).Append(" -->\n");
 
         // Normalize any incoming CRLFs in agent content to LF too — the
-        // agent might copy lines from a Windows host's task file.
-        var trimmedContent = (content ?? "").Replace("\r\n", "\n").TrimEnd('\n', ' ', '\t');
+        // agent might copy lines from a Windows host's task file. If the agent
+        // sent body-only content, add a deterministic H2 for the section; if
+        // it already supplied a heading, keep it as-is to avoid duplication.
+        var trimmedContent = EnsureSectionHeading(
+            stepName,
+            (content ?? "").Replace("\r\n", "\n").TrimEnd('\n', ' ', '\t'));
         sb.Append(trimmedContent).Append('\n');
 
         if (openQuestions is { Count: > 0 })
@@ -252,6 +257,44 @@ internal static class DescriptionWriter
         sb.Append("<!-- /step-section:").Append(stepName).Append(" -->");
         return sb.ToString();
     }
+
+    private static string EnsureSectionHeading(string stepName, string content)
+    {
+        var trimmedStart = content.TrimStart('\n', ' ', '\t');
+        if (MarkdownHeadingRegex().IsMatch(trimmedStart))
+            return content;
+
+        var title = PrettifyStepName(stepName);
+        if (string.IsNullOrWhiteSpace(content))
+            return $"## {title}";
+
+        return $"## {title}\n\n{content.TrimStart('\n')}";
+    }
+
+    private static string PrettifyStepName(string stepName)
+    {
+        var name = stepName ?? "";
+        const string optionalPrefix = "optional:";
+        if (name.StartsWith(optionalPrefix, StringComparison.OrdinalIgnoreCase))
+            name = name[optionalPrefix.Length..];
+
+        name = Regex.Replace(name, @"[_\-:]+", " ").Trim();
+        if (name.Length == 0)
+            return "Step";
+
+        var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < words.Length; i++)
+        {
+            var word = words[i];
+            words[i] = word.Length == 1
+                ? word.ToUpperInvariant()
+                : char.ToUpperInvariant(word[0]) + word[1..].ToLowerInvariant();
+        }
+        return string.Join(' ', words);
+    }
+
+    [GeneratedRegex(@"^\s{0,3}#{1,6}\s+\S", RegexOptions.Multiline)]
+    private static partial Regex MarkdownHeadingRegex();
 
     /// <summary>
     /// Recomposes the body. Initialises the managed-section markers when the

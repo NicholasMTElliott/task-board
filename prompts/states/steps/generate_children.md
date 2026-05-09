@@ -99,4 +99,4 @@ This is a rough estimate based on the task description. Each task will get a ref
 
 ## Deduplication
 
-Before creating a `new-{slug}.md` file, check the conversation history for `agent-created-ticket:{slug}` markers. If a ticket with that slug has already been created, do not create the file again.
+Before creating a `new-{slug}.md` file, check the conversation history for `<!-- aiboard-log kind:created_ticket_dedupe slug:{slug} -->` markers. If a ticket with that slug has already been created, do not create the file again.

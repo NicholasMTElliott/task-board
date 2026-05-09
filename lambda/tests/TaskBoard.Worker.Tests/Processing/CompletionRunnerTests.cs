@@ -209,7 +209,8 @@ public class CompletionRunnerTests
         await _boardClient.Received(1).UpsertAgentCommentAsync(
             ParentCardId,
             Arg.Is<string>(s => s.Contains("Children status")),
-            Arg.Is<string>(s => s.StartsWith("<!-- completion-check:")),
+            Arg.Is<string>(s => s.StartsWith("<!-- aiboard-log kind:completion_progress")
+                && s.Contains($"card:{ParentCardId}")),
             Arg.Any<CancellationToken>());
     }
 

@@ -70,8 +70,12 @@ public class MergeRunnerTests : IDisposable
         Assert.Contains(DoneCol, moveCalls);
 
         // Comment should be posted
-        await _boardClient.Received().UpsertAgentCommentAsync(
-            CardId, Arg.Is<string>(s => s.Contains("Merge Complete")), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _boardClient.Received().AppendAgentCommentAsync(
+            CardId,
+            Arg.Is<string>(s => s.Contains("Merge Complete")
+                && s.Contains("kind:run")
+                && !s.Contains("merge-run")),
+            Arg.Any<CancellationToken>());
 
         // Merge commit should exist on origin/main
         var logOutput = RunGitSyncWithOutput(_bareRepoDir, "log", "--oneline", "main");

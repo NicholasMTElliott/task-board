@@ -66,6 +66,15 @@ public class AgentRunnerGateCheckTests : IDisposable
         // Card should move to COMPLETE column (list-designed)
         await _boardClient.Received().MoveCardToColumnAsync(
             TargetCardId, "list-designed", Arg.Any<CancellationToken>());
+
+        await _boardClient.Received().AppendAgentCommentAsync(
+            TargetCardId,
+            Arg.Is<string>(s =>
+                s.Contains("kind:gate", StringComparison.Ordinal)
+                && s.Contains("outcome:COMPLETE", StringComparison.Ordinal)
+                && s.Contains("attempt:1", StringComparison.Ordinal)
+                && s.Contains("Gate Check: Passed", StringComparison.Ordinal)),
+            Arg.Any<CancellationToken>());
     }
 
     // ── Gate CONCERNS: card moves to NEEDS_INFO column ──────────────

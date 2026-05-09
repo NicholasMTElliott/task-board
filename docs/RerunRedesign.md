@@ -144,6 +144,7 @@ No upsert for chronological log entries. Every step posts a fresh comment per ru
 Every comment carries an `<!-- aiboard-log kind:... ... -->` marker. The marker classifies the comment as agent-generated for hashing, correlates it with step / run / attempt records, and routes it through one of three retention policies.
 
 **Append (chronological log entries):**
+- `kind:run` — run lifecycle feedback such as merge kickback, git post-processing, or unexpected run error
 - `kind:step` — main step output
 - `kind:candidate` — per-candidate output within a slot
 - `kind:evaluator` — evaluator verdict + scores

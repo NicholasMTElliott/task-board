@@ -526,6 +526,129 @@ public class AgentRunnerRerunRedesignTests : IDisposable
             Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task RunLifecycleErrorComment_UsesAiboardLogRunKind_AndIsAgentGeneratedForHashing()
+    {
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<AgentResult>(new InvalidOperationException("boom")));
+
+        var runner = CreateRunner(executor, BuildBasicConfig());
+        SetupBoardCards(DesignListId);
+
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.ERROR, result.Outcome);
+        Assert.True(TaskFileManager.ContainsAgentMarker(
+            "<!-- aiboard-log kind:run state:Design run:run-1 outcome:error -->\nbody"));
+
+        await _boardClient.Received().AppendAgentCommentAsync(
+            TargetCardId,
+            Arg.Is<string>(body =>
+                body.Contains("kind:run", StringComparison.Ordinal)
+                && body.Contains("outcome:error", StringComparison.Ordinal)
+                && !body.Contains("agent-run", StringComparison.Ordinal)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task LongWorkflow_GateFailThenRerun_CacheHitsSteps_ThenGatePasses()
+    {
+        var body = "Operator requirements.";
+        var comments = SetupMutableBoard(DesignListId, () => body, nextBody => body = nextBody);
+
+        var callIndex = 0;
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callIndex++;
+                return callIndex switch
+                {
+                    1 => new AgentResult(AgentOutcome.COMPLETE, "Related tickets reviewed",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "No blockers found.")),
+                    2 => new AgentResult(AgentOutcome.COMPLETE, "Design created",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "Use append-only audit comments.")),
+                    3 => new AgentResult(AgentOutcome.ERROR, "Gate found a missing success audit comment."),
+                    4 => new AgentResult(AgentOutcome.COMPLETE, "Gate passes after rerun."),
+                    _ => new AgentResult(AgentOutcome.ERROR, "unexpected extra executor call"),
+                };
+            });
+
+        var store = new ReplayingRunStore();
+        var runner = CreateRunner(executor, BuildTwoStepGateConfig(),
+            runStore: store,
+            cacheGate: new RerunCacheGate(store, NullLogger<RerunCacheGate>.Instance));
+
+        var first = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        var second = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.ERROR, first.Outcome);
+        Assert.Equal(AgentOutcome.COMPLETE, second.Outcome);
+        await executor.Received(4).ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>());
+
+        Assert.Contains(store.SavedStepResults, r =>
+            r.StepName == "review_related_tickets" && r.ExecutionKind == "cache_hit");
+        Assert.Contains(store.SavedStepResults, r =>
+            r.StepName == "create_design" && r.ExecutionKind == "cache_hit");
+        Assert.Equal(2, store.SavedStepResults.Count(r => r.StepName == "gate_check"));
+        Assert.Contains(comments, c => c.Body.Contains("kind:gate", StringComparison.Ordinal)
+            && c.Body.Contains("outcome:ERROR", StringComparison.Ordinal));
+        Assert.Contains(comments, c => c.Body.Contains("kind:gate", StringComparison.Ordinal)
+            && c.Body.Contains("outcome:COMPLETE", StringComparison.Ordinal));
+        Assert.DoesNotContain(comments, c => c.Body.Contains("agent-run", StringComparison.Ordinal)
+            || c.Body.Contains("agent-step", StringComparison.Ordinal));
+        Assert.Contains("## Review Related Tickets", body);
+        Assert.Contains("## Create Design", body);
+    }
+
+    [Fact]
+    public async Task LongWorkflow_QuestionsStopDownstream_ThenRerunCompletesGate()
+    {
+        var body = "Operator requirements.";
+        var comments = SetupMutableBoard(DesignListId, () => body, nextBody => body = nextBody);
+
+        var callIndex = 0;
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callIndex++;
+                return callIndex switch
+                {
+                    1 => new AgentResult(AgentOutcome.COMPLETE, "Related tickets reviewed",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "No blockers found.")),
+                    2 => new AgentResult(AgentOutcome.NEEDS_INFO, "Need API choice",
+                        [new AgentQuestion("Which API version should the design target?")],
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "Waiting on API version.")),
+                    3 => new AgentResult(AgentOutcome.COMPLETE, "Related tickets reviewed again",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "No blockers found.")),
+                    4 => new AgentResult(AgentOutcome.COMPLETE, "Design completed",
+                        Section: new SectionUpdate(SectionUpdateStrategy.Replace, "Target the stable API.")),
+                    5 => new AgentResult(AgentOutcome.COMPLETE, "Gate passes."),
+                    _ => new AgentResult(AgentOutcome.ERROR, "unexpected extra executor call"),
+                };
+            });
+
+        var runner = CreateRunner(executor, BuildTwoStepGateConfig(), runStore: new ReplayingRunStore());
+
+        var first = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        Assert.Equal(AgentOutcome.NEEDS_INFO, first.Outcome);
+        Assert.Equal(2, callIndex);
+        Assert.DoesNotContain(comments, c => c.Body.Contains("kind:gate", StringComparison.Ordinal));
+
+        comments.Add(new CardComment("human", "Use API v2.", DateTimeOffset.UtcNow));
+
+        var second = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, second.Outcome);
+        Assert.Equal(5, callIndex);
+        Assert.Contains(comments, c => c.Body.Contains("kind:gate", StringComparison.Ordinal)
+            && c.Body.Contains("outcome:COMPLETE", StringComparison.Ordinal));
+        Assert.Contains("## Review Related Tickets", body);
+        Assert.Contains("## Create Design", body);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
 
     private AgentRunner CreateRunner(
@@ -563,6 +686,33 @@ public class AgentRunnerRerunRedesignTests : IDisposable
 
         _boardClient.GetCardCommentsAsync(TargetCardId, Arg.Any<CancellationToken>())
             .Returns(new List<CardComment>());
+    }
+
+    private List<CardComment> SetupMutableBoard(
+        string listId,
+        Func<string> getBody,
+        Action<string> setBody)
+    {
+        var comments = new List<CardComment>();
+        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Returns(_ => new List<BoardCard>
+            {
+                new(TargetCardId, TargetCardTitle, getBody(), listId),
+            });
+
+        _boardClient.GetCardCommentsAsync(TargetCardId, Arg.Any<CancellationToken>())
+            .Returns(_ => comments.ToList());
+
+        _boardClient.UpdateCardBodyAsync(TargetCardId, Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask)
+            .AndDoes(ci => setBody(ci.ArgAt<string>(1)));
+
+        _boardClient.AppendAgentCommentAsync(TargetCardId, Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask)
+            .AndDoes(ci => comments.Add(new CardComment(
+                "bot", ci.ArgAt<string>(1), DateTimeOffset.UtcNow.AddSeconds(comments.Count))));
+
+        return comments;
     }
 
     private static WorkflowConfig BuildBasicConfig() =>
@@ -652,6 +802,46 @@ public class AgentRunnerRerunRedesignTests : IDisposable
                     GateCheck: new GateCheckConfig(
                         Role: "gate_checker",
                         TaskPrompt: "Gate.\n\n## Body\n{TaskBody}\n\n## Diff\n{Diff}\n\n## Report\n{AgentReport}")),
+                ["list-designed"] = new("Designed", null, "manual_gate", null,
+                    new Dictionary<string, TransitionTarget>()),
+                ["list-questions"] = new("Questions", null, "holding", null,
+                    new Dictionary<string, TransitionTarget>()),
+                ["list-error"] = new("Error", null, "holding", null,
+                    new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
+                    new List<string> { "Technical Design" }),
+                ["gate_checker"] = new("claude-haiku-4-5-20251001", "You are a gate checker.",
+                    new List<string>()),
+            });
+
+    private static WorkflowConfig BuildTwoStepGateConfig() =>
+        new(
+            States: new Dictionary<string, WorkflowState>
+            {
+                [DesignListId] = new(
+                    "Design", "senior_engineer", "agent_run",
+                    "Work on {TaskName} ({TaskId})",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
+                        ["GATE_FAIL"] = TransitionTarget.ForColumn(DesignListId),
+                    },
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new("review_related_tickets", "senior_engineer",
+                            TaskPrompt: "Review related tickets for {TaskName}"),
+                        new("create_design", "senior_engineer",
+                            TaskPrompt: "Create the design for {TaskName}"),
+                    ],
+                    GateCheck: new GateCheckConfig(
+                        Role: "gate_checker",
+                        TaskPrompt: "Gate.\n\n## Body\n{TaskBody}\n\n## Report\n{AgentReport}\n\n## History\n{StepHistory}")),
                 ["list-designed"] = new("Designed", null, "manual_gate", null,
                     new Dictionary<string, TransitionTarget>()),
                 ["list-questions"] = new("Questions", null, "holding", null,

@@ -29,12 +29,9 @@ public sealed partial class AgentRunner(
     // don't inject these continue to work — non-cached single-agent steps
     // run identically to the pre-rerun-redesign flow.
     RerunCacheGate? cacheGate = null,
-    // Rerun redesign Problem 2: per-kind comment routing. Optional — when
-    // null, the legacy emit sites continue to upsert with their legacy markers
-    // (`<!-- agent-step:... -->`, `<!-- gate-check:... -->`, etc.) for full
-    // backward compatibility with existing tests. Production wires this
-    // via DI so the new aiboard-log marker shape and per-kind retention
-    // (append/delete_and_repost/upsert) take effect.
+    // Rerun redesign Problem 2: per-kind comment routing. Optional so older
+    // tests can construct AgentRunner directly; fallback still emits the same
+    // aiboard-log marker shape with append semantics.
     ICommentRouter? commentRouter = null)
 {
     private static readonly Regex PlaceholderRegex = PlaceholderPattern();
@@ -55,7 +52,6 @@ public sealed partial class AgentRunner(
         string cardId, string boardId, string workspacePath, CancellationToken cancellationToken)
     {
         var runId = $"run-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Random.Shared.Next(0x10000):x4}";
-        var runMarker = $"<!-- agent-run:{runId} -->";
 
         using (logger.BeginScope(new Dictionary<string, object>
         {
@@ -149,8 +145,9 @@ public sealed partial class AgentRunner(
                 switch (mergeOutcome.Action)
                 {
                     case MergeStepAction.KickBack:
-                        await boardClient.UpsertAgentCommentAsync(
-                            cardId, mergeOutcome.KickBackComment!, runMarker, cancellationToken);
+                        await PostRunCommentAsync(
+                            cardId, state, runId, "merge_kickback",
+                            mergeOutcome.KickBackComment!, cancellationToken);
                         if (mergeOutcome.KickBackTarget is not null)
                         {
                             await TransitionExecutor.ExecuteAsync(
@@ -1042,9 +1039,7 @@ public sealed partial class AgentRunner(
                 // Cache hits post a kind:cache_hit aiboard-log comment via
                 // append (chronological log entry), so the operator can see
                 // every cache decision in the timeline. Full-run steps post
-                // the legacy agent-step upsert (preserved during the rerun
-                // redesign migration; legacy markers continue to classify as
-                // agent-generated for the hash builder).
+                // kind:step comments with the same marker grammar.
                 var stepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role, stepRole.Provider, stepRole.Model);
 
                 if (cacheHit)
@@ -1209,7 +1204,7 @@ public sealed partial class AgentRunner(
             if (!string.IsNullOrEmpty(gitNote))
             {
                 var runComment = $"{commentPrefix}\n\n---\n{gitNote}";
-                await boardClient.UpsertAgentCommentAsync(cardId, runComment, runMarker, cancellationToken);
+                await PostRunCommentAsync(cardId, state, runId, "git_note", runComment, cancellationToken);
             }
 
             await SafeDbCallAsync(() => runStore.CompleteRunAsync(runId, lastResult!.Outcome, null, null, cancellationToken));
@@ -1347,7 +1342,7 @@ public sealed partial class AgentRunner(
                 var errorResult = new AgentResult(AgentOutcome.ERROR, ex.Message);
                 var errorPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity);
                 var comment = $"{errorPrefix}\n\n{FormatComment(errorResult)}";
-                await boardClient.UpsertAgentCommentAsync(cardId, comment, runMarker, cancellationToken);
+                await PostRunCommentAsync(cardId, state, runId, "error", comment, cancellationToken);
 
                 if (state.Transitions.TryGetValue(TransitionKeys.Error, out var errorTarget))
                 {
@@ -1925,6 +1920,11 @@ public sealed partial class AgentRunner(
             }
         }
 
+        // Resolve attempt before the full-run gate row is persisted so the
+        // marker and persisted attempt line up with the same current attempt.
+        var fullRunGateAttempt = await ResolveStepAttemptAsync(
+            cardId, state.Name, "gate_check", cancellationToken);
+
         // Execute gate check
         AgentResult gateResult;
         try
@@ -1996,7 +1996,7 @@ public sealed partial class AgentRunner(
             var gateIdentity = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
             var warningBody =
                 $"## Gate Check Warning {gateIdentity}\n\nGate check failed to execute: {ex.Message}\nProceeding without verification.";
-            await PostGateCommentAsync(cardId, state, runId, "warning", warningBody, cancellationToken);
+            await PostGateCommentAsync(cardId, state, runId, "warning", warningBody, cancellationToken, fullRunGateAttempt);
             return new GateCheckResult(null, null);
         }
 
@@ -2006,6 +2006,11 @@ public sealed partial class AgentRunner(
             case AgentOutcome.COMPLETE:
                 // PASS — proceed with normal flow (possibly with optional step requests)
                 logger.LogInformation("Gate check PASSED for card {CardId}", cardId);
+                var gateIdentityPass = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
+                var passBody =
+                    $"## Gate Check: Passed {gateIdentityPass}\n\n{gateResult.Detail ?? "The gate check passed."}";
+                await PostGateCommentAsync(cardId, state, runId, "COMPLETE",
+                    passBody, cancellationToken, fullRunGateAttempt);
                 return new GateCheckResult(null, gateResult.RequestedSteps);
 
             case AgentOutcome.NEEDS_INFO:
@@ -2014,7 +2019,8 @@ public sealed partial class AgentRunner(
                 var gateIdentityConcerns = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
                 var concernsBody =
                     $"## Gate Check: Concerns {gateIdentityConcerns}\n\n{gateResult.Detail ?? "The gate check raised concerns."}";
-                await PostGateCommentAsync(cardId, state, runId, "NEEDS_INFO", concernsBody, cancellationToken);
+                await PostGateCommentAsync(cardId, state, runId, "NEEDS_INFO",
+                    concernsBody, cancellationToken, fullRunGateAttempt);
 
                 if (state.Transitions.TryGetValue(TransitionKeys.NeedsInfo, out var questionsTarget))
                     await TransitionExecutor.ExecuteAsync(
@@ -2058,8 +2064,7 @@ public sealed partial class AgentRunner(
                         $"The gate check has failed {previousFailures + 1} consecutive times. Escalating for human review.\n\n" +
                         $"**Latest failure reason:**\n{gateResult.Detail ?? "No detail provided."}";
                     await PostGateCommentAsync(cardId, state, runId, "escalated",
-                        escalateBody, cancellationToken,
-                        attemptForKindFields: previousFailures + 1);
+                        escalateBody, cancellationToken, fullRunGateAttempt);
 
                     if (state.Transitions.TryGetValue(TransitionKeys.NeedsInfo, out var questionsCol))
                         await TransitionExecutor.ExecuteAsync(
@@ -2075,8 +2080,7 @@ public sealed partial class AgentRunner(
                 var failBody =
                     $"## Gate Check: Failed {gateIdentityFail}\n\n{gateResult.Detail ?? "The gate check detected issues with the agent's output."}";
                 await PostGateCommentAsync(cardId, state, runId, "ERROR",
-                    failBody, cancellationToken,
-                    attemptForKindFields: previousFailures + 1);
+                    failBody, cancellationToken, fullRunGateAttempt);
 
                 var transitionKey = state.Transitions.ContainsKey(TransitionKeys.GateFail) ? TransitionKeys.GateFail : TransitionKeys.Error;
                 if (state.Transitions.TryGetValue(transitionKey, out var gateFailTarget))
@@ -2093,9 +2097,6 @@ public sealed partial class AgentRunner(
     /// the gate's four emit sites (warning / NEEDS_INFO / escalate / ERROR) so
     /// they all use the same marker shape.
     /// </summary>
-    /// <param name="attemptForKindFields">
-    /// When &gt; 0, included as the marker's <c>attempt</c> key.
-    /// </param>
     private async Task PostGateCommentAsync(
         string cardId,
         WorkflowState state,
@@ -2103,7 +2104,7 @@ public sealed partial class AgentRunner(
         string outcomeLabel,
         string body,
         CancellationToken cancellationToken,
-        int attemptForKindFields = 0)
+        int attempt)
     {
         var fields = new List<KeyValuePair<string, string>>
         {
@@ -2111,10 +2112,8 @@ public sealed partial class AgentRunner(
             KeyValuePair.Create("step", "gate_check"),
             KeyValuePair.Create("run", runId),
             KeyValuePair.Create("outcome", outcomeLabel),
+            KeyValuePair.Create("attempt", attempt.ToString(CultureInfo.InvariantCulture)),
         };
-        if (attemptForKindFields > 0)
-            fields.Add(KeyValuePair.Create("attempt",
-                attemptForKindFields.ToString(CultureInfo.InvariantCulture)));
 
         var marker = AiboardLogMarker.Build(AiboardLogMarker.KindGate, fields);
         await PostKindCommentAsync(cardId, AiboardLogMarker.KindGate, body, marker, cancellationToken);
@@ -2797,7 +2796,7 @@ public sealed partial class AgentRunner(
         string branchName,
         string? gitNote,
         string commentPrefix,
-        string runMarker,
+        string runId,
         CancellationToken cancellationToken)
     {
         // 9a. Read back the task file to detect agent changes to card content
@@ -2817,7 +2816,7 @@ public sealed partial class AgentRunner(
 
         // 9b. Format and post comment (with optional git note and role/state prefix)
         var comment = $"{commentPrefix}\n\n{FormatComment(agentResult, gitNote, includeConversationLog: runStore is NullRunStore)}";
-        await boardClient.UpsertAgentCommentAsync(originalCard.Id, comment, runMarker, cancellationToken);
+        await PostRunCommentAsync(originalCard.Id, state, runId, "postprocess", comment, cancellationToken);
         logger.LogInformation("Posted agent comment for {CardId}", originalCard.Id);
 
         // 9c. Execute transition actions for outcome
@@ -3049,6 +3048,25 @@ public sealed partial class AgentRunner(
         // Test-only fallback: route shape always matches "Append" semantics.
         // Production wires the router via DI, so this branch is unreachable.
         await boardClient.AppendAgentCommentAsync(cardId, $"{marker}\n{body}", ct);
+    }
+
+    private async Task PostRunCommentAsync(
+        string cardId,
+        WorkflowState state,
+        string runId,
+        string outcome,
+        string body,
+        CancellationToken ct)
+    {
+        var marker = AiboardLogMarker.Build(
+            AiboardLogMarker.KindRun,
+            new[]
+            {
+                KeyValuePair.Create("state", state.Name),
+                KeyValuePair.Create("run", runId),
+                KeyValuePair.Create("outcome", outcome),
+            });
+        await PostKindCommentAsync(cardId, AiboardLogMarker.KindRun, body, marker, ct);
     }
 
     /// <summary>
