@@ -74,6 +74,18 @@ internal static class AgentSchemas
     ///   - "additionalProperties": false on every object
     ///   - All properties listed in "required"
     ///   - Optional fields use ["type", "null"] instead of being omitted from required
+    /// <para>
+    /// Note for code reviewers: <c>section_update.required</c> below lists
+    /// <c>"content"</c>, <c>"open_questions"</c>, and <c>"resolved_decisions"</c>
+    /// alongside <c>"strategy"</c> by design. These fields are required-and-nullable
+    /// per the rule above — the agent must include each key, but values may be
+    /// null to express absence (e.g. <c>strategy=leave</c> with <c>content=null</c>).
+    /// Removing fields from <c>required</c> would violate OpenAI's all-properties-
+    /// required rule. Parser at
+    /// <see cref="AgentOutputParser.ParseSectionUpdate(System.Text.Json.JsonElement, out string?)"/>
+    /// accepts null <c>content</c> for <c>leave</c> and null arrays for
+    /// <c>open_questions</c> / <c>resolved_decisions</c>.
+    /// </para>
     /// </summary>
     internal const string OutcomeSchemaOpenAI = """
         {
@@ -223,6 +235,11 @@ internal static class AgentSchemas
     /// <c>["integer", "null"]</c>; parser-side enforcement (in
     /// <see cref="TaskBoard.Worker.Processing.CandidateExecutor"/>) rejects a
     /// COMPLETE outcome with a null <c>winner_index</c>.
+    /// <para>
+    /// Same required-and-nullable rule applies to <c>section_update</c> as in
+    /// <see cref="OutcomeSchemaOpenAI"/> — see that field's doc-comment for
+    /// the full rationale.
+    /// </para>
     /// </summary>
     internal const string EvaluatorOutcomeSchemaOpenAI = """
         {

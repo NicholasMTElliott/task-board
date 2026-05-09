@@ -755,17 +755,27 @@ public sealed class GitWorkspaceManager(
             return new DiffPacket(DiffMode.Empty, "", 0, 0, 0);
         }
 
+        // The threshold is expressed in BYTES (rerun.diff.summaryThresholdBytes).
+        // string.Length counts UTF-16 code units, which under-counts byte size
+        // for any non-ASCII content (CJK, accented Latin, emoji surrogate pairs)
+        // — so a char-count comparison would silently keep diffs in Full mode
+        // past the operator's configured byte cap. Compute the UTF-8 byte
+        // count once and use it for both the threshold check and the persisted
+        // RawByteSize, so the field on the returned packet matches whatever
+        // signal triggered (or didn't trigger) summary mode.
+        var rawBytes = Encoding.UTF8.GetByteCount(fullText);
+
         // Collect per-file metadata for both Full and Summary modes (so callers
         // can see the changed file count even on Full).
         var fileEntries = await CollectFileEntriesAsync(
             repoPath, effectiveBase, untrackedFiles, cancellationToken);
 
-        if (fullText.Length <= thresholdBytes)
+        if (rawBytes <= thresholdBytes)
         {
             return new DiffPacket(
                 DiffMode.Full,
                 fullText,
-                RawByteSize: fullText.Length,
+                RawByteSize: rawBytes,
                 FilesChanged: fileEntries.Count,
                 FilesIncludedInline: fileEntries.Count);
         }
@@ -773,7 +783,7 @@ public sealed class GitWorkspaceManager(
         // Summary mode: structured packet with top-K inline files.
         return await BuildSummaryPacketAsync(
             repoPath, effectiveBase, fileEntries,
-            rawByteSize: fullText.Length,
+            rawByteSize: rawBytes,
             thresholdBytes: thresholdBytes,
             topInlineFiles: topInlineFiles,
             perFileInlineCharLimit: perFileInlineCharLimit,

@@ -317,4 +317,54 @@ public class GitWorkspaceManagerDiffTests : IDisposable
         Assert.Equal(DiffMode.Full, packet.Mode);
         Assert.True(packet.RawByteSize <= 50_000);
     }
+
+    [Fact]
+    public async Task GetDiffPacket_NonAsciiContent_RawByteSizeReportsBytes_NotChars()
+    {
+        // Multi-byte UTF-8 content (emoji + accented Latin + CJK) — char count
+        // diverges sharply from byte count. Pre-fix behaviour used .Length
+        // (UTF-16 code units / chars) which under-counted bytes and let the
+        // summary-mode threshold be silently exceeded for non-ASCII content.
+        // The packet's RawByteSize must reflect the byte count, since the
+        // operator's threshold (rerun.diff.summaryThresholdBytes) is in bytes.
+        var emoji = "🚀";              // 4 bytes UTF-8, 2 chars (surrogate pair)
+        var accented = "café";          // 5 bytes UTF-8, 4 chars
+        var cjk = "日本語";              // 9 bytes UTF-8, 3 chars
+        var body = string.Concat(Enumerable.Repeat($"{emoji} {accented} {cjk}\n", 100));
+        File.WriteAllText(Path.Combine(_repoRoot, "i18n.txt"), body);
+
+        var packet = await _git.GetDiffPacketAsync(
+            _repoRoot, thresholdBytes: 50_000, CancellationToken.None);
+
+        // The diff itself includes the file body plus headers/context, so
+        // its byte count is at least as large as the file body's byte count.
+        var bodyBytes = System.Text.Encoding.UTF8.GetByteCount(body);
+        Assert.True(packet.RawByteSize >= bodyBytes,
+            $"RawByteSize must reflect bytes, not chars. Expected ≥ {bodyBytes} (UTF-8 byte count of body); got {packet.RawByteSize}.");
+        // Make the regression shape explicit — RawByteSize must be larger
+        // than the char count for multi-byte content (would have been equal
+        // pre-fix because .Length counted chars).
+        Assert.True(packet.RawByteSize > body.Length,
+            $"RawByteSize ({packet.RawByteSize}) must exceed char count ({body.Length}) for multi-byte UTF-8 content.");
+    }
+
+    [Fact]
+    public async Task GetDiffPacket_NonAsciiBetweenCharAndByteThreshold_TriggersSummaryMode()
+    {
+        // Body whose UTF-8 byte count > threshold but UTF-16 char count ≤ threshold.
+        // Pre-fix: char-count comparison kept this in Full mode, exceeding the
+        // operator's configured byte cap. Post-fix: byte-count triggers summary.
+        // 1500 CJK chars = ~4500 UTF-8 bytes. Threshold of 2000 bytes should
+        // trigger summary mode under the byte interpretation but stay Full
+        // under the char interpretation.
+        var body = string.Concat(Enumerable.Repeat("日", 1500));
+        File.WriteAllText(Path.Combine(_repoRoot, "cjk.txt"), body);
+
+        var packet = await _git.GetDiffPacketAsync(
+            _repoRoot, thresholdBytes: 2_000, CancellationToken.None);
+
+        Assert.Equal(DiffMode.Summary, packet.Mode);
+        Assert.True(packet.RawByteSize > 2_000,
+            $"RawByteSize ({packet.RawByteSize}) should exceed the 2000-byte threshold once bytes are counted, not chars.");
+    }
 }
