@@ -64,6 +64,9 @@ internal static class AiboardLogMarker
     internal static bool IsAgentGenerated(string body)
         => body.Contains(MarkerPrefix, StringComparison.Ordinal);
 
+    internal static bool ContainsKind(string body, string kind)
+        => body.Contains($"{MarkerPrefix}kind:{kind}", StringComparison.Ordinal);
+
     // ── Builder ──────────────────────────────────────────────────────
 
     /// <summary>

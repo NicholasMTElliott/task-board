@@ -442,6 +442,34 @@ public class TaskFileManagerTests : IDisposable
         Assert.DoesNotContain("<details>", content);
     }
 
+    [Fact]
+    public async Task WriteCommentsFileAsync_FiltersCandidateAndEvaluatorAuditComments()
+    {
+        var comments = new List<CardComment>
+        {
+            new("operator", "OPERATOR-MARKER use the new endpoint",
+                DateTimeOffset.Parse("2026-01-01T08:00:00Z")),
+            new("agent", "<!-- aiboard-log kind:step step:design -->CANONICAL-STEP-MARKER winner result",
+                DateTimeOffset.Parse("2026-01-01T09:00:00Z")),
+            new("agent", "<!-- aiboard-log kind:candidate step:design candidate:0 -->LOSER-CANDIDATE-MARKER",
+                DateTimeOffset.Parse("2026-01-01T10:00:00Z")),
+            new("agent", "<!-- aiboard-log kind:evaluator step:design -->EVALUATOR-LOSER-REASONING-MARKER",
+                DateTimeOffset.Parse("2026-01-01T11:00:00Z")),
+        };
+
+        await _manager.WriteCommentsFileAsync(_tempDir, "card1", "Test", comments, CancellationToken.None);
+
+        var content = await File.ReadAllTextAsync(
+            TaskFileManager.GetCommentsFilePath(_tempDir, "card1", "Test"));
+
+        Assert.Contains("OPERATOR-MARKER", content);
+        Assert.Contains("CANONICAL-STEP-MARKER", content);
+        Assert.DoesNotContain("LOSER-CANDIDATE-MARKER", content);
+        Assert.DoesNotContain("EVALUATOR-LOSER-REASONING-MARKER", content);
+        Assert.DoesNotContain("kind:candidate", content);
+        Assert.DoesNotContain("kind:evaluator", content);
+    }
+
     // ── AnnotateBodyWithImagePaths ───────────────────────────────────────────
 
     [Fact]

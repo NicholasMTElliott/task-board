@@ -122,7 +122,7 @@ The agent decides strategy based on prompt instructions; the orchestrator is mec
 **Writer responsibilities by role:**
 - Main steps and optional reviewers: write their own section.
 - Gates: do not write the description. Verdicts go in comments.
-- Candidate group: only the winning candidate's `section_update` is applied; the **evaluator** commits it on the group's behalf. Losing candidates' sections are discarded (their reasoning still lives in the comment log).
+- Candidate group: only the winning candidate's `section_update` is applied; the **evaluator** commits it on the group's behalf. Losing candidates' sections are discarded. Their reasoning stays visible in the human audit log, but is not written into downstream agent context.
 - Evaluator: does not write its own meta-section. Its only description-write responsibility is committing the winner's update.
 
 ### Comment Structure
@@ -194,7 +194,7 @@ Evaluator posts a separate comment marked `evaluator`:
 <evaluator's reasoning + per-candidate scores>
 ```
 
-The evaluator commits the winner's `section_update` to the description on the group's behalf. Losing candidates' output stays visible in the human audit log, but downstream agent context uses only canonical step rows, not per-candidate or evaluator rows.
+The evaluator commits the winner's `section_update` to the description on the group's behalf. Losing candidates' output stays visible in the human audit log, but downstream agent context uses only the winning section and canonical step rows. Per-candidate rows, evaluator rows, and candidate/evaluator audit comments are excluded from agent-visible context.
 
 ### Gate-Check Comments
 

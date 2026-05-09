@@ -322,6 +322,10 @@ public class RerunCacheGateTests
         var body = "operator content";
         var store = new RecordingRunStore { Prior = null };
         var gate = new RerunCacheGate(store, _log);
+        const string malformedBody =
+            "<!-- aiboard-log kind:step run:r1 attempt:1\nstep output marker missing closing marker";
+
+        Assert.True(TaskFileManager.ContainsAgentMarker(malformedBody));
 
         // Comment with a malformed marker — opening prefix present, closing
         // "-->" missing.
@@ -332,7 +336,7 @@ public class RerunCacheGateTests
             systemPromptContents: "sys", taskPromptContents: "task",
             existingComments: [
                 new CardComment("op", "operator note", DateTimeOffset.UtcNow.AddMinutes(-2)),
-                new CardComment("bot", "<!-- aiboard-log kind:step run:r1 attempt:1\nstep output (marker missing closing -->)", DateTimeOffset.UtcNow.AddMinutes(-1)),
+                new CardComment("bot", malformedBody, DateTimeOffset.UtcNow.AddMinutes(-1)),
             ],
             priorSectionOutputHashes: [],
             ct: CancellationToken.None);

@@ -232,18 +232,22 @@ public class CandidateLoserNonLeakageTests : IDisposable
         // Two-state pipeline: Design (with a 2-candidate group) → Implementation.
         // Run state Design first; capture which candidate won. Move card to
         // Implementation column. Run state Implementation. Inspect the
-        // implementation agent's task prompt — it must contain the winning
-        // candidate's section content and NOT the loser's.
+        // implementation agent's visible workspace: it must contain the
+        // winning candidate's section content and NOT the loser's.
         //
         // The plumbing under test:
         //   1. CandidateExecutor promotes the winner's section into the card body
         //   2. AgentRunner writes the post-section card body via UpdateCardBodyAsync
-        //   3. The Implementation step reads the post-Design card body for {TaskBody}
+        //   3. The Implementation step reads the post-Design card body from
+        //      the task file and agent-visible .aiboard context
         //   4. The Implementation step's step-history.md context surfaces only
         //      the canonical create_design row, not per-candidate rows.
 
         const string WinnerSection = "WINNER-DESIGN-CONTENT (microservices, candidate 1)";
         const string LoserSection = "LOSER-DESIGN-CONTENT (monolith, candidate 0)";
+        const string WinnerDetail = "WINNER-DETAIL-MARKER design output";
+        const string LoserDetail = "LOSER-DETAIL-MARKER design output";
+        const string EvaluatorLoserReasoning = "EVALUATOR-LOSER-REASONING-MARKER";
 
         // Card body — mutates as steps run.
         var cardBody = "Operator requirements for X.";
@@ -289,10 +293,10 @@ public class CandidateLoserNonLeakageTests : IDisposable
         var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
         {
             ["docker-claude-cli"] = new ScriptedExecutor(
-                AgentOutcome.COMPLETE, "Loser design output",
+                AgentOutcome.COMPLETE, LoserDetail,
                 section: new SectionUpdate(SectionUpdateStrategy.Replace, LoserSection)),
             ["docker-opencode"] = new ScriptedExecutor(
-                AgentOutcome.COMPLETE, "Winner design output",
+                AgentOutcome.COMPLETE, WinnerDetail,
                 section: new SectionUpdate(SectionUpdateStrategy.Replace, WinnerSection)),
             // claude-cli serves both the evaluator (during Design) and the
             // implementation agent (during Implementation). We disambiguate
@@ -304,7 +308,7 @@ public class CandidateLoserNonLeakageTests : IDisposable
                     Winner is candidate 1.
                     ```json
                     {"outcome":"COMPLETE","winner_index":1,"scores":[
-                      {"index":0,"score":6,"reasoning":"loser"},
+                      {"index":0,"score":6,"reasoning":"EVALUATOR-LOSER-REASONING-MARKER"},
                       {"index":1,"score":9,"reasoning":"winner"}
                     ]}
                     ```
@@ -386,9 +390,9 @@ public class CandidateLoserNonLeakageTests : IDisposable
         // card to the Implementation column.
         currentColumn = "list-impl";
 
-        // Run state Implementation. The implementation agent's TaskPrompt
-        // should be populated with the post-design card body via {TaskBody}
-        // substitution.
+        // Run state Implementation. The implementation agent should see the
+        // post-design card body through its task file and agent-visible
+        // .aiboard context.
         await runner.ExecuteAsync(TestCardId, BoardId, _repoRoot, CancellationToken.None);
 
         Assert.True(capturedImplContext is not null,
@@ -404,21 +408,23 @@ public class CandidateLoserNonLeakageTests : IDisposable
             "the executor's onCall didn't fire as expected.");
         Assert.Contains(WinnerSection, capturedImplTaskFile!);
         Assert.DoesNotContain(LoserSection, capturedImplTaskFile);
+        Assert.DoesNotContain(LoserDetail, capturedImplTaskFile);
+        Assert.DoesNotContain(EvaluatorLoserReasoning, capturedImplTaskFile);
+        Assert.DoesNotContain("kind:candidate", capturedImplTaskFile);
+        Assert.DoesNotContain("kind:evaluator", capturedImplTaskFile);
 
         // Implementation step's step-history.md (cross-run context) carries
         // ONLY the canonical create_design row — not the per-candidate
         // (kind:cand-) rows, not the :evaluator row. Per-candidate rows
         // exist in step_result for telemetry but are filtered out by
         // ShouldIncludeStepResultInAgentContext (AgentRunner.cs:3264).
-        // Note: step-history.md may be absent if there are no rows that
-        // pass the filter — the canonical create_design row was written
-        // by AgentRunner during phase 1 so it should be present.
-        if (capturedImplStepHistory is not null)
-        {
-            Assert.DoesNotContain(LoserSection, capturedImplStepHistory);
-            Assert.DoesNotContain(":cand-", capturedImplStepHistory);
-            Assert.DoesNotContain(":evaluator", capturedImplStepHistory);
-        }
+        Assert.NotNull(capturedImplStepHistory);
+        Assert.Contains("Design / create_design (COMPLETE)", capturedImplStepHistory!);
+        Assert.DoesNotContain(LoserSection, capturedImplStepHistory);
+        Assert.DoesNotContain(LoserDetail, capturedImplStepHistory);
+        Assert.DoesNotContain(EvaluatorLoserReasoning, capturedImplStepHistory);
+        Assert.DoesNotContain(":cand-", capturedImplStepHistory);
+        Assert.DoesNotContain(":evaluator", capturedImplStepHistory);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

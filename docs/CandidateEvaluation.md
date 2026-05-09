@@ -37,7 +37,7 @@ For a step that declares `candidates`, the runtime:
 5. Parses the evaluator's verdict — `winner_index` (0-indexed) plus optional 0–10 score + reasoning per candidate. Updates the candidate rows: `selected = (index == winner_index)`, `quality_score`, `evaluator_reasoning`.
 6. **Promotes the winner**: `git reset --hard {winner-branch}` on the canonical worktree so subsequent steps see the winner's commits.
 7. Cleans up: deletes loser worktrees + branches, removes the winner's worktree (the canonical one now points at its commits).
-8. Posts per-candidate audit comments to the card (`<!-- aiboard-log kind:candidate ... -->`) so the human reviewer can see what each candidate produced.
+8. Posts per-candidate audit comments to the card (`<!-- aiboard-log kind:candidate ... -->`) so the human reviewer can see what each candidate produced. These are human audit records only; later agents do not receive candidate or evaluator audit comments in their `.aiboard` comments file.
 
 The evaluator's `AgentResult` becomes the step's outcome — AgentRunner uses it to drive the state's transitions exactly as it would for a non-candidate step.
 
@@ -130,7 +130,7 @@ For multi-stage failover (e.g. "race subscription providers; if both fail, fall 
 
 **Persistence:** every completed candidate row from every attempted slot is saved to `step_result`. If a run is cancelled while candidates are still in flight, candidates that already finished remain recorded; unfinished candidates and the evaluator do not. The new `slot_index` column (NULL for single-slot steps) disambiguates which slot a row belonged to. The `v_slot_outcomes` view aggregates "how often does slot N actually carry the day vs needing further fallback?" — useful for tuning slot ordering. Per-`(role, provider)` metrics in `v_provider_role_metrics` are slot-agnostic.
 
-**Downstream context:** later steps receive canonical step results only. Per-candidate rows (`candidate_group_id` / `candidate_index` set, or `:cand-` step names) and evaluator rows (`:evaluator`) are excluded from `.aiboard/context/step-history.md` and gate `{StepHistory}`. This keeps losing candidates and partial interrupted fan-outs from becoming implicit instructions.
+**Downstream context:** later steps receive canonical step results only. Per-candidate rows (`candidate_group_id` / `candidate_index` set, or `:cand-` step names) and evaluator rows (`:evaluator`) are excluded from `.aiboard/context/step-history.md` and gate `{StepHistory}`. Candidate/evaluator audit comments are also excluded from the agent-visible comments file. The winning candidate's promoted section and canonical step row are the only durable agent context from a candidate group; losers must not be visible downstream.
 
 ### Validator constraints
 

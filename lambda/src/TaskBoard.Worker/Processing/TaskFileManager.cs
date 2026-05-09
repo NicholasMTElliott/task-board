@@ -270,6 +270,9 @@ public sealed partial class TaskFileManager(ILogger<TaskFileManager> logger)
 
             if (isAgent)
             {
+                if (IsCandidateOrEvaluatorAudit(comment.Body))
+                    continue;
+
                 var withoutLog = StripConversationLog(stripped);
                 if (!string.IsNullOrWhiteSpace(withoutLog))
                     agentComments.Add(comment with { Body = withoutLog });
@@ -329,6 +332,10 @@ public sealed partial class TaskFileManager(ILogger<TaskFileManager> logger)
             sb.AppendLine("---");
         }
     }
+
+    private static bool IsCandidateOrEvaluatorAudit(string body)
+        => AiboardLogMarker.ContainsKind(body, AiboardLogMarker.KindCandidate)
+            || AiboardLogMarker.ContainsKind(body, AiboardLogMarker.KindEvaluator);
 
     private static string StripHtmlMarkers(string body)
         => Regex.Replace(body, @"<!--.*?-->", "", RegexOptions.Singleline).Trim();

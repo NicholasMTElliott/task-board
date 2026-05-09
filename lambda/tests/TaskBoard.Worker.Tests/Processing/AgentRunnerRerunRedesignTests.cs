@@ -838,23 +838,20 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         // and never match. This test pins that invariant through the
         // AgentRunner pipeline.
 
-        var executor = Substitute.For<IAgentExecutor>();
-        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns(new AgentResult(AgentOutcome.COMPLETE, "Fresh run"));
-
         var store = new ReplayingRunStore();
         SeedPartialCandidateRows(store, candidateCount: 3);
+        var harness = CreateFiveCandidateHarness(store);
 
-        var runner = CreateRunner(executor, BuildBasicConfig(),
+        var runner = CreateRunner(harness.Resolver, BuildFiveCandidateConfig(),
             runStore: store,
-            cacheGate: new RerunCacheGate(store, NullLogger<RerunCacheGate>.Instance));
+            cacheGate: new RerunCacheGate(store, NullLogger<RerunCacheGate>.Instance),
+            candidateExecutor: harness.CandidateExecutor);
         SetupBoardCards(DesignListId, initialBody: "Operator content (unchanged from killed run)");
 
         var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
 
-        // The agent ran (cache miss). Pre-seeded partial rows didn't short-circuit it.
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
-        await executor.Received(1).ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>());
+        harness.AssertFreshCandidateFanout();
 
         // A new canonical row was written with execution_kind=full_run and a
         // computed input_hash (so a future run can cache against it).
@@ -865,6 +862,8 @@ public class AgentRunnerRerunRedesignTests : IDisposable
             .Single();
         Assert.Equal("full_run", canonicalRow.ExecutionKind);
         Assert.NotNull(canonicalRow.InputHash);
+        Assert.DoesNotContain(store.SavedStepResults, r =>
+            r.RunId == store.RunIds[0] && r.ExecutionKind == "cache_hit");
 
         // The 3 partial rows from the killed run remain — they're telemetry,
         // not destructive cleanup. Verify by stepname suffix / candidate-group
@@ -886,35 +885,34 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         // when partial-run telemetry is present (which would otherwise be a
         // distractor signal).
 
-        var executor = Substitute.For<IAgentExecutor>();
-        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns(new AgentResult(AgentOutcome.COMPLETE, "ran"));
+        var body = "ORIG operator content";
+        SetupMutableBoard(DesignListId, () => body, nextBody => body = nextBody);
 
-        // Baseline: body "ORIG", partial rows present.
-        var baselineStore = new ReplayingRunStore();
-        SeedPartialCandidateRows(baselineStore, candidateCount: 3);
-        var baselineRunner = CreateRunner(executor, BuildBasicConfig(),
-            runStore: baselineStore,
-            cacheGate: new RerunCacheGate(baselineStore, NullLogger<RerunCacheGate>.Instance));
-        SetupBoardCards(DesignListId, initialBody: "ORIG operator content");
-        await baselineRunner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
-        var baselineHash = baselineStore.SavedStepResults
-            .Single(r => r.StepName == "create_design" && r.CandidateGroupId is null)
+        var store = new ReplayingRunStore();
+        SeedPartialCandidateRows(store, candidateCount: 3);
+        var harness = CreateFiveCandidateHarness(store);
+        var runner = CreateRunner(harness.Resolver, BuildFiveCandidateConfig(),
+            runStore: store,
+            cacheGate: new RerunCacheGate(store, NullLogger<RerunCacheGate>.Instance),
+            candidateExecutor: harness.CandidateExecutor);
+
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        harness.AssertCandidateFanoutCount(1);
+        var baselineHash = store.SavedStepResults
+            .Single(r => r.StepName == "create_design"
+                && r.CandidateGroupId is null
+                && r.RunId == store.RunIds[0])
             .InputHash;
         Assert.NotNull(baselineHash);
 
-        // Edited: body "EDITED", partial rows present (fresh store + fresh
-        // board client substitute under a new dispose; reuse the existing
-        // board client by re-seeding the new body).
-        var editedStore = new ReplayingRunStore();
-        SeedPartialCandidateRows(editedStore, candidateCount: 3);
-        var editedRunner = CreateRunner(executor, BuildBasicConfig(),
-            runStore: editedStore,
-            cacheGate: new RerunCacheGate(editedStore, NullLogger<RerunCacheGate>.Instance));
-        SetupBoardCards(DesignListId, initialBody: "EDITED operator content (different from ORIG)");
-        await editedRunner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
-        var editedHash = editedStore.SavedStepResults
-            .Single(r => r.StepName == "create_design" && r.CandidateGroupId is null)
+        body = "EDITED operator content (different from ORIG)";
+
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        harness.AssertCandidateFanoutCount(2);
+        var editedHash = store.SavedStepResults
+            .Single(r => r.StepName == "create_design"
+                && r.CandidateGroupId is null
+                && r.RunId == store.RunIds[1])
             .InputHash;
 
         Assert.NotEqual(baselineHash, editedHash);
@@ -927,41 +925,36 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         // run 2. The canonical input_hash on the modified run must differ —
         // operator comments are part of the input bundle.
 
-        var executor = Substitute.For<IAgentExecutor>();
-        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns(new AgentResult(AgentOutcome.COMPLETE, "ran"));
+        var body = "Operator content";
+        var comments = SetupMutableBoard(DesignListId, () => body, nextBody => body = nextBody);
 
-        var baselineStore = new ReplayingRunStore();
-        SeedPartialCandidateRows(baselineStore, candidateCount: 3);
-        var baselineRunner = CreateRunner(executor, BuildBasicConfig(),
-            runStore: baselineStore,
-            cacheGate: new RerunCacheGate(baselineStore, NullLogger<RerunCacheGate>.Instance));
-        // No board comments.
-        SetupBoardCards(DesignListId, initialBody: "Operator content");
-        await baselineRunner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
-        var baselineHash = baselineStore.SavedStepResults
-            .Single(r => r.StepName == "create_design" && r.CandidateGroupId is null)
+        var store = new ReplayingRunStore();
+        SeedPartialCandidateRows(store, candidateCount: 3);
+        var harness = CreateFiveCandidateHarness(store);
+        var runner = CreateRunner(harness.Resolver, BuildFiveCandidateConfig(),
+            runStore: store,
+            cacheGate: new RerunCacheGate(store, NullLogger<RerunCacheGate>.Instance),
+            candidateExecutor: harness.CandidateExecutor);
+
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        harness.AssertCandidateFanoutCount(1);
+        var baselineHash = store.SavedStepResults
+            .Single(r => r.StepName == "create_design"
+                && r.CandidateGroupId is null
+                && r.RunId == store.RunIds[0])
             .InputHash;
 
-        var modifiedStore = new ReplayingRunStore();
-        SeedPartialCandidateRows(modifiedStore, candidateCount: 3);
-        var modifiedRunner = CreateRunner(executor, BuildBasicConfig(),
-            runStore: modifiedStore,
-            cacheGate: new RerunCacheGate(modifiedStore, NullLogger<RerunCacheGate>.Instance));
-        // One operator comment (no aiboard-log marker → operator-classified).
-        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
-            .Returns(new List<BoardCard>
-            {
-                new(TargetCardId, TargetCardTitle, "Operator content", DesignListId),
-            });
-        _boardClient.GetCardCommentsAsync(TargetCardId, Arg.Any<CancellationToken>())
-            .Returns(new List<CardComment>
-            {
-                new("op", "Operator question added between killed run and rerun", DateTimeOffset.UtcNow.AddMinutes(-1)),
-            });
-        await modifiedRunner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
-        var modifiedHash = modifiedStore.SavedStepResults
-            .Single(r => r.StepName == "create_design" && r.CandidateGroupId is null)
+        comments.Add(new CardComment(
+            "op",
+            "Operator question added between killed run and rerun",
+            DateTimeOffset.UtcNow.AddMinutes(-1)));
+
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        harness.AssertCandidateFanoutCount(2);
+        var modifiedHash = store.SavedStepResults
+            .Single(r => r.StepName == "create_design"
+                && r.CandidateGroupId is null
+                && r.RunId == store.RunIds[1])
             .InputHash;
 
         Assert.NotEqual(baselineHash, modifiedHash);
@@ -983,45 +976,37 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         // because of orphan candidate comments — defeats the whole
         // "irrelevant change doesn't bust the cache" guarantee.
 
-        var executor = Substitute.For<IAgentExecutor>();
-        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns(new AgentResult(AgentOutcome.COMPLETE, "ran"));
+        var body = "Operator content";
+        var comments = SetupMutableBoard(DesignListId, () => body, nextBody => body = nextBody);
 
-        // Baseline: no comments.
-        var baselineStore = new ReplayingRunStore();
-        SeedPartialCandidateRows(baselineStore, candidateCount: 3);
-        var baselineRunner = CreateRunner(executor, BuildBasicConfig(),
-            runStore: baselineStore,
-            cacheGate: new RerunCacheGate(baselineStore, NullLogger<RerunCacheGate>.Instance));
-        SetupBoardCards(DesignListId, initialBody: "Operator content");
-        await baselineRunner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
-        var baselineHash = baselineStore.SavedStepResults
-            .Single(r => r.StepName == "create_design" && r.CandidateGroupId is null)
+        var store = new ReplayingRunStore();
+        SeedPartialCandidateRows(store, candidateCount: 3);
+        var harness = CreateFiveCandidateHarness(store);
+        var runner = CreateRunner(harness.Resolver, BuildFiveCandidateConfig(),
+            runStore: store,
+            cacheGate: new RerunCacheGate(store, NullLogger<RerunCacheGate>.Instance),
+            candidateExecutor: harness.CandidateExecutor);
+
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        harness.AssertCandidateFanoutCount(1);
+        var baselineHash = store.SavedStepResults
+            .Single(r => r.StepName == "create_design"
+                && r.CandidateGroupId is null
+                && r.RunId == store.RunIds[0])
             .InputHash;
 
-        // Modified: one aiboard-log marked candidate comment (orphan from
-        // killed run 1). Same body, no operator comments.
-        var modifiedStore = new ReplayingRunStore();
-        SeedPartialCandidateRows(modifiedStore, candidateCount: 3);
-        var modifiedRunner = CreateRunner(executor, BuildBasicConfig(),
-            runStore: modifiedStore,
-            cacheGate: new RerunCacheGate(modifiedStore, NullLogger<RerunCacheGate>.Instance));
-        _boardClient.GetBoardCardsAsync(BoardId, Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
-            .Returns(new List<BoardCard>
-            {
-                new(TargetCardId, TargetCardTitle, "Operator content", DesignListId),
-            });
-        _boardClient.GetCardCommentsAsync(TargetCardId, Arg.Any<CancellationToken>())
-            .Returns(new List<CardComment>
-            {
-                new("bot",
-                    "<!-- aiboard-log kind:candidate state:Design step:create_design candidate:0 -->\n" +
-                    "Orphan candidate comment from a killed run.",
-                    DateTimeOffset.UtcNow.AddMinutes(-1)),
-            });
-        await modifiedRunner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
-        var modifiedHash = modifiedStore.SavedStepResults
-            .Single(r => r.StepName == "create_design" && r.CandidateGroupId is null)
+        comments.Add(new CardComment(
+            "bot",
+            "<!-- aiboard-log kind:candidate state:Design step:create_design candidate:0 -->\n" +
+            "Orphan candidate comment from a killed run.",
+            DateTimeOffset.UtcNow.AddMinutes(-1)));
+
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        harness.AssertCandidateFanoutCount(1);
+        var modifiedHash = store.SavedStepResults
+            .Single(r => r.StepName == "create_design"
+                && r.CandidateGroupId is null
+                && r.RunId == store.RunIds[1])
             .InputHash;
 
         // Identical hashes — the aiboard-log comment didn't influence the
@@ -1242,11 +1227,25 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         IRunStore? runStore = null,
         RerunCacheGate? cacheGate = null,
         ShutdownCoordinator? shutdownCoordinator = null)
+        => CreateRunner(
+            AgentExecutorResolver.ForSingleExecutor(executor),
+            config,
+            runStore,
+            cacheGate,
+            shutdownCoordinator);
+
+    private AgentRunner CreateRunner(
+        IAgentExecutorResolver resolver,
+        WorkflowConfig config,
+        IRunStore? runStore = null,
+        RerunCacheGate? cacheGate = null,
+        ShutdownCoordinator? shutdownCoordinator = null,
+        CandidateExecutor? candidateExecutor = null)
     {
         var normalisedConfig = config.Normalised();
         return new AgentRunner(
             _boardClient,
-            AgentExecutorResolver.ForSingleExecutor(executor),
+            resolver,
             _taskFileManager,
             _gitWorkspaceManager,
             normalisedConfig,
@@ -1258,7 +1257,8 @@ public class AgentRunnerRerunRedesignTests : IDisposable
             TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             NullLogger<AgentRunner>.Instance,
             shutdownCoordinator: shutdownCoordinator,
-            cacheGate: cacheGate);
+            cacheGate: cacheGate,
+            candidateExecutor: candidateExecutor);
     }
 
     private void SetupBoardCards(string listId, string? initialBody = null)
@@ -1332,6 +1332,102 @@ public class AgentRunnerRerunRedesignTests : IDisposable
                 ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
                     new List<string> { "Technical Design" }),
             });
+
+    private static WorkflowConfig BuildFiveCandidateConfig() =>
+        new(
+            States: new Dictionary<string, WorkflowState>
+            {
+                [DesignListId] = new(
+                    "Design", "senior_engineer", "agent_run",
+                    "Work on {TaskName} ({TaskId})",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
+                    },
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new("create_design", "senior_engineer",
+                            TaskPrompt: "Design {TaskName}",
+                            Slots:
+                            [
+                                new SlotConfig(
+                                    Candidates:
+                                    [
+                                        new("cand-0"),
+                                        new("cand-1"),
+                                        new("cand-2"),
+                                        new("cand-3"),
+                                        new("cand-4"),
+                                    ],
+                                    Evaluator: new EvaluatorConfig(
+                                        Role: "evaluator",
+                                        TaskPrompt: "Pick the best design.")),
+                            ]),
+                    ]),
+                ["list-designed"] = new("Designed", null, "manual_gate", null,
+                    new Dictionary<string, TransitionTarget>()),
+                ["list-questions"] = new("Questions", null, "holding", null,
+                    new Dictionary<string, TransitionTarget>()),
+                ["list-error"] = new("Error", null, "holding", null,
+                    new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
+                    new List<string> { "Technical Design" }),
+                ["evaluator"] = new("eval-model", "You are an evaluator.",
+                    new List<string>(), Provider: "eval"),
+            });
+
+    private FiveCandidateHarness CreateFiveCandidateHarness(IRunStore runStore)
+    {
+        var executors = Enumerable.Range(0, 5)
+            .ToDictionary(
+                i => $"cand-{i}",
+                i => (TrackingExecutor)new TrackingExecutor(
+                    new AgentResult(
+                        AgentOutcome.COMPLETE,
+                        $"Candidate {i} detail",
+                        Section: new SectionUpdate(
+                            SectionUpdateStrategy.Replace,
+                            $"Candidate {i} section"))),
+                StringComparer.OrdinalIgnoreCase);
+
+        var evaluator = new TrackingExecutor(new AgentResult(
+            AgentOutcome.COMPLETE,
+            """
+            Candidate 0 wins.
+            ```json
+            {"outcome":"COMPLETE","winner_index":0,"scores":[
+              {"index":0,"score":9,"reasoning":"best"},
+              {"index":1,"score":5,"reasoning":"ok"},
+              {"index":2,"score":5,"reasoning":"ok"},
+              {"index":3,"score":5,"reasoning":"ok"},
+              {"index":4,"score":5,"reasoning":"ok"}
+            ]}
+            ```
+            """,
+            Section: new SectionUpdate(SectionUpdateStrategy.Leave)));
+
+        var all = executors.ToDictionary(
+            kvp => kvp.Key,
+            kvp => (IAgentExecutor)kvp.Value,
+            StringComparer.OrdinalIgnoreCase);
+        all["eval"] = evaluator;
+
+        var resolver = new AgentExecutorResolver(all);
+        var candidateExecutor = new CandidateExecutor(
+            _gitWorkspaceManager,
+            resolver,
+            runStore,
+            _boardClient,
+            NullLogger<CandidateExecutor>.Instance);
+
+        return new FiveCandidateHarness(resolver, candidateExecutor, executors, evaluator);
+    }
 
     private static WorkflowConfig BuildGateCheckConfigCommitMode(int? rerunDiffThresholdBytes) =>
         new(
@@ -1468,6 +1564,42 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         }
 
         Directory.Delete(path, recursive: true);
+    }
+
+    private sealed class FiveCandidateHarness(
+        IAgentExecutorResolver resolver,
+        CandidateExecutor candidateExecutor,
+        IReadOnlyDictionary<string, TrackingExecutor> candidates,
+        TrackingExecutor evaluator)
+    {
+        public IAgentExecutorResolver Resolver { get; } = resolver;
+        public CandidateExecutor CandidateExecutor { get; } = candidateExecutor;
+
+        public void AssertFreshCandidateFanout()
+            => AssertCandidateFanoutCount(1);
+
+        public void AssertCandidateFanoutCount(int expectedCalls)
+        {
+            Assert.Equal(5, candidates.Count);
+            foreach (var candidate in candidates.Values)
+                Assert.Equal(expectedCalls, candidate.Calls);
+
+            Assert.Equal(expectedCalls, evaluator.Calls);
+        }
+    }
+
+    private sealed class TrackingExecutor(AgentResult result) : IAgentExecutor
+    {
+        private int _calls;
+        public int Calls => _calls;
+
+        public Task<AgentResult> ExecuteAsync(
+            AgentExecutionContext context,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _calls);
+            return Task.FromResult(result);
+        }
     }
 
     /// <summary>

@@ -498,23 +498,11 @@ public sealed class CandidateExecutor(
         await PostCandidateCommentsAsync(
             request, step.Name, slotIndex, totalSlots, executions, evaluatorResultForReturn, verdict, cancellationToken);
 
-        // Evaluator-commits-winner-section: the doc says "the evaluator commits
-        // the winner's section_update on the group's behalf" — meaning the
-        // winning candidate's Section should be the one applied to the card,
-        // not the evaluator's own (we instruct the evaluator to set
-        // strategy=leave). Substitute the winner's Section into the result that
-        // propagates up to AgentRunner.DescriptionWriter so the winner's
-        // section_update lands in the managed description on Won.
-        //
-        // For the single-candidate-no-evaluator path, evaluatorResultForReturn
-        // already IS the candidate's own AgentResult, so its Section is already
-        // the winner's — the rewrite is a no-op-by-equality. For the
-        // multi-candidate path, evaluatorResultForReturn is the evaluator's
-        // result; this is where the substitution actually matters.
-        var resultWithWinnerSection = evaluatorResultForReturn with
-        {
-            Section = winner.AgentResult.Section,
-        };
+        // Downstream agents must see the winning candidate's work, never the
+        // evaluator's per-candidate reasoning. Evaluator output remains in the
+        // human audit log and persisted candidate metrics; the canonical step
+        // result that AgentRunner writes/prompts from is the winner's result.
+        var resultWithWinnerSection = winner.AgentResult;
 
         // Slot outcome derives from the WINNER's outcome, not the evaluator's.
         // Evaluator says COMPLETE = "I picked a winner"; the winner itself can
