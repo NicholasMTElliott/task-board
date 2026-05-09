@@ -931,7 +931,10 @@ public class WorkflowConfigValidatorTests
             new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
         var gc = config!.States["s1"].GateCheck!;
-        Assert.Equal(50_000, gc.MaxDiffChars); // default
+        // Default raised to 51_200 (50 KiB) in Round-8 to match the rerun
+        // redesign's rerun.diff.summaryThresholdBytes default. Workflow JSON
+        // can still override per-gate via "maxDiffChars".
+        Assert.Equal(51_200, gc.MaxDiffChars); // default
         Assert.Equal(2, gc.MaxRetries); // default
         Assert.Null(gc.TaskPromptFile);
         Assert.Equal("Check it.", gc.TaskPrompt);

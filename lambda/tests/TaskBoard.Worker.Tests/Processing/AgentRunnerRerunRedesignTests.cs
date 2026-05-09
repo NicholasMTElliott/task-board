@@ -340,6 +340,192 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         Assert.Null(stepRecord!.SectionUpdateJson);
     }
 
+    // ── Round-8 fix 1: WritesDescriptionSection suppression ──────────
+
+    [Fact]
+    public async Task SectionUpdate_Suppressed_WhenWritesDescriptionSectionIsFalse()
+    {
+        // The agent returns a structured section_update directive on a step
+        // explicitly configured with writesDescriptionSection=false. The
+        // orchestrator must NOT call UpdateCardBodyAsync (the section is
+        // suppressed) AND must not fall back to the legacy task-file body
+        // sync. The directive is still captured raw on step_result.section_update_json.
+        const string Body = "Operator-only body for suppression test";
+        const string ExpectedRawJson =
+            """{"strategy":"replace","content":"Should be suppressed"}""";
+
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(new AgentResult(
+                AgentOutcome.COMPLETE,
+                "Done",
+                Section: new SectionUpdate(SectionUpdateStrategy.Replace, "Should be suppressed"),
+                SectionUpdateJson: ExpectedRawJson));
+
+        var capturingStore = new CapturingRunStore();
+        // Build a config whose single step opts out of section writes.
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                [DesignListId] = new(
+                    "Design", "senior_engineer", "agent_run",
+                    "Work on {TaskName}",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
+                    },
+                    GitBehavior: "discard",
+                    Steps: [
+                        new("review_only", "senior_engineer",
+                            TaskPrompt: "Review {TaskName}",
+                            WritesDescriptionSection: false),
+                    ]),
+                ["list-designed"] = new("Designed", null, "manual_gate", null,
+                    new Dictionary<string, TransitionTarget>()),
+                ["list-questions"] = new("Questions", null, "holding", null,
+                    new Dictionary<string, TransitionTarget>()),
+                ["list-error"] = new("Error", null, "holding", null,
+                    new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
+                    new List<string>()),
+            });
+
+        var runner = CreateRunner(executor, config, runStore: capturingStore);
+        SetupBoardCards(DesignListId, initialBody: Body);
+
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Body must NOT have been updated. UpdateCardBodyAsync is the canonical
+        // signal — pre-fix the section_update path would have rewritten the body
+        // even with WritesDescriptionSection=false.
+        await _boardClient.DidNotReceive().UpdateCardBodyAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+
+        // Directive itself is still captured for replay/debugging.
+        var stepRecord = capturingStore.SavedStepResults
+            .FirstOrDefault(r => r.StepName == "review_only");
+        Assert.NotNull(stepRecord);
+        Assert.Equal(ExpectedRawJson, stepRecord!.SectionUpdateJson);
+
+        // section_output_hash stays null when the step is suppressed — there's
+        // no managed section to hash.
+        Assert.Null(stepRecord.SectionOutputHash);
+    }
+
+    // ── Round-8 fix 3: cached estimator step preserves estimate ──────
+
+    [Fact]
+    public async Task CacheHit_ForwardsEstimateFromSourceRun()
+    {
+        // Two-run replay: run 1 produces an estimate; run 2 cache-hits and
+        // must forward the estimate from the source row so the
+        // {{estimation}} template variable resolves on the cached run too.
+        const double SourceEstimate = 8.0;
+
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(new AgentResult(AgentOutcome.COMPLETE, "Done", Estimate: SourceEstimate));
+
+        var replayStore = new ReplayingRunStore();
+        var runner = CreateRunner(executor, BuildBasicConfig(),
+            runStore: replayStore,
+            cacheGate: new RerunCacheGate(replayStore, NullLogger<RerunCacheGate>.Instance));
+        SetupBoardCards(DesignListId, initialBody: "Operator content for cached estimator test");
+
+        // Run 1: cache miss, executor runs, estimate persisted.
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        Assert.Equal(SourceEstimate, replayStore.LastPersistedEstimate);
+        Assert.Single(replayStore.RunIds);
+        var run1Id = replayStore.RunIds[0];
+
+        // Run 2: same inputs → cache hit. Executor returns a different value
+        // if it runs (proves the cache hit short-circuits it).
+        executor.ClearReceivedCalls();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(new AgentResult(AgentOutcome.COMPLETE, "FRESH-RUN-NOT-CACHED", Estimate: 99.0));
+        replayStore.PersistedEstimateBeforeRun2 = replayStore.LastPersistedEstimate;
+        replayStore.LastPersistedEstimate = null;
+
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        // Verify cache hit: the second run's saved step record has
+        // ExecutionKind = "cache_hit" and source_run_id pointing at run 1.
+        var run2GateOrStep = replayStore.SavedStepResults
+            .Where(r => r.StepName == "create_design")
+            .ToList();
+        Assert.Equal(2, run2GateOrStep.Count);
+        var run2Step = run2GateOrStep[1];
+        Assert.Equal("cache_hit", run2Step.ExecutionKind);
+        Assert.Equal(run1Id, run2Step.SourceRunId);
+
+        // The cached estimate must have been forwarded to UpdateRunEstimateAsync
+        // on run 2 — the headline behaviour fix. Pre-fix this stays null.
+        Assert.Equal(SourceEstimate, replayStore.LastPersistedEstimate);
+    }
+
+    // ── Round-8 fix 2: gate-check caching ────────────────────────────
+
+    [Fact]
+    public async Task GateCheck_CacheHit_SkipsExecutorAndPostsCacheHitComment()
+    {
+        // Two-run replay: run 1 paints a full-run gate row carrying an
+        // input_hash; run 2 cache-hits the gate, skips the executor, persists
+        // a cache_hit gate row, and posts a kind:cache_hit comment.
+
+        var executor = Substitute.For<IAgentExecutor>();
+        executor.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(new AgentResult(AgentOutcome.COMPLETE, "Step/Gate done"));
+
+        var replayStore = new ReplayingRunStore();
+        var runner = CreateRunner(executor, BuildGateCheckConfig(),
+            runStore: replayStore,
+            cacheGate: new RerunCacheGate(replayStore, NullLogger<RerunCacheGate>.Instance));
+        SetupBoardCards(DesignListId);
+
+        // Run 1: cache miss (no priors). Both step and gate run, both record
+        // input_hash on their full_run rows.
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+        var run1GateRow = replayStore.SavedStepResults.FirstOrDefault(r => r.StepName == "gate_check");
+        Assert.NotNull(run1GateRow);
+        Assert.Equal("full_run", run1GateRow!.ExecutionKind);
+        Assert.NotNull(run1GateRow.InputHash);
+
+        // Run 2: identical inputs → both step and gate cache-hit.
+        // We track gate executor calls by counting calls whose Model matches
+        // the gate role (haiku) — the senior_engineer step uses opus.
+        executor.ClearReceivedCalls();
+        await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        var gateExecutorCallsOnRun2 = executor.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(IAgentExecutor.ExecuteAsync))
+            .Select(c => (AgentExecutionContext)c.GetArguments()[0]!)
+            .Count(ctx => ctx.Model == "claude-haiku-4-5-20251001");
+        Assert.Equal(0, gateExecutorCallsOnRun2);
+
+        // A gate cache_hit step_result must have been persisted on run 2.
+        var gateRowsPerRun = replayStore.SavedStepResults
+            .Where(r => r.StepName == "gate_check")
+            .ToList();
+        Assert.Equal(2, gateRowsPerRun.Count);
+        var run2GateRow = gateRowsPerRun[1];
+        Assert.Equal("cache_hit", run2GateRow.ExecutionKind);
+        Assert.Equal(AgentOutcome.COMPLETE, run2GateRow.Outcome);
+        Assert.Equal(run1GateRow.RunId, run2GateRow.SourceRunId);
+
+        // A kind:cache_hit comment must have been posted with step:gate_check.
+        await _boardClient.Received().AppendAgentCommentAsync(
+            TargetCardId,
+            Arg.Is<string>(body =>
+                body.Contains("kind:cache_hit", StringComparison.Ordinal)
+                && body.Contains("step:gate_check", StringComparison.Ordinal)),
+            Arg.Any<CancellationToken>());
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
 
     private AgentRunner CreateRunner(
@@ -578,6 +764,85 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         public Task<IReadOnlyList<StepResultRecord>> GetLatestRunStepResultsAsync(string cardId, string stateName, CancellationToken ct)
             => Task.FromResult<IReadOnlyList<StepResultRecord>>([]);
         public Task UpdateRunEstimateAsync(string runId, double estimate, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateRunSessionStartupMsAsync(string runId, int startupMs, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateCandidateEvaluationAsync(string runId, Guid candidateGroupId, int candidateIndex, bool selected, decimal? qualityScore, string? evaluatorReasoning, CancellationToken ct) => Task.CompletedTask;
+        public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;
+        public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct) => Task.CompletedTask;
+        public Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct) => Task.FromResult(0);
+        public Task<string?> GetEarliestStateEntryShaAsync(string cardId, string stateName, CancellationToken ct) => Task.FromResult<string?>(null);
+        public Task SetStateEntryShaAsync(string runId, string sha, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Replays cache-relevant fields across runs: when a step or gate row was
+    /// persisted in run N with a non-null InputHash and outcome COMPLETE, the
+    /// next run's <see cref="GetMostRecentCompleteForStepAsync"/> lookup returns
+    /// it as the prior. This mirrors what a real Postgres-backed store would do
+    /// without exercising the SQL layer in a unit test. Tracks the estimate
+    /// passed to <see cref="UpdateRunEstimateAsync"/> so tests can assert that
+    /// a cache hit propagated the source run's estimate forward.
+    /// </summary>
+    private sealed class ReplayingRunStore : IRunStore
+    {
+        public List<StepResultRecord> SavedStepResults { get; } = [];
+        public List<string> RunIds { get; } = [];
+        private readonly Dictionary<string, double> _runEstimates = [];
+        public double? LastPersistedEstimate { get; set; }
+        public double? PersistedEstimateBeforeRun2 { get; set; }
+
+        public Task CreateRunAsync(RunRecord run, CancellationToken ct)
+        {
+            RunIds.Add(run.RunId);
+            return Task.CompletedTask;
+        }
+
+        public Task SaveStepResultAsync(StepResultRecord result, CancellationToken ct)
+        {
+            SavedStepResults.Add(result);
+            return Task.CompletedTask;
+        }
+
+        public Task<CacheCandidateRecord?> GetMostRecentCompleteForStepAsync(
+            string cardId, string stateName, string stepName, CancellationToken ct)
+        {
+            // Walk SavedStepResults in reverse so the most recent COMPLETE wins.
+            for (var i = SavedStepResults.Count - 1; i >= 0; i--)
+            {
+                var r = SavedStepResults[i];
+                if (r.StepName != stepName) continue;
+                if (r.StateName != stateName) continue;
+                if (r.CardId != cardId) continue;
+                if (r.Outcome != AgentOutcome.COMPLETE) continue;
+                if (r.CandidateIndex is not null && r.CandidateIndex != 0) continue;
+                if (r.InputHash is null) continue;
+
+                _runEstimates.TryGetValue(r.RunId, out var est);
+                return Task.FromResult<CacheCandidateRecord?>(new CacheCandidateRecord(
+                    Id: Guid.NewGuid(),
+                    RunId: r.RunId,
+                    CompletedAtUtc: r.CompletedAtUtc,
+                    InputHash: r.InputHash,
+                    SectionOutputHash: r.SectionOutputHash,
+                    OutputSummary: r.OutputSummary,
+                    Detail: r.Detail,
+                    Estimate: est == 0 ? null : est));
+            }
+            return Task.FromResult<CacheCandidateRecord?>(null);
+        }
+
+        public Task UpdateRunEstimateAsync(string runId, double estimate, CancellationToken ct)
+        {
+            _runEstimates[runId] = estimate;
+            LastPersistedEstimate = estimate;
+            return Task.CompletedTask;
+        }
+
+        public Task UpdateRunProgressAsync(string runId, int completedSteps, CancellationToken ct) => Task.CompletedTask;
+        public Task CompleteRunAsync(string runId, AgentOutcome outcome, string? errorDetail, FailureReason? failureReason, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<StepResultRecord>> GetStepResultsForCardAsync(string cardId, string? stateName, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<StepResultRecord>>([]);
+        public Task<IReadOnlyList<StepResultRecord>> GetLatestRunStepResultsAsync(string cardId, string stateName, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<StepResultRecord>>([]);
         public Task UpdateRunSessionStartupMsAsync(string runId, int startupMs, CancellationToken ct) => Task.CompletedTask;
         public Task UpdateCandidateEvaluationAsync(string runId, Guid candidateGroupId, int candidateIndex, bool selected, decimal? qualityScore, string? evaluatorReasoning, CancellationToken ct) => Task.CompletedTask;
         public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;

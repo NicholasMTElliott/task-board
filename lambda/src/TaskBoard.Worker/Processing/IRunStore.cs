@@ -109,6 +109,15 @@ public interface IRunStore
 /// hashes for matching, run_id + completed_at for the cache_hit comment's
 /// "since run X" callback). Avoids materialising the full StepResultRecord
 /// when only these fields are read.
+/// <para>
+/// <see cref="Estimate"/> is the estimate captured on the source run's
+/// <c>agent_run</c> row (joined in by the cache lookup query). Carried
+/// forward so a cache hit on the estimator step seeds the current run's
+/// estimate from the prior run instead of leaving it null — without this,
+/// the <c>{{estimation}}</c> template variable would be unresolved on every
+/// re-run that hits the cache, and downstream <c>setField</c> /
+/// <c>updateParentSum</c> transition actions would silently skip.
+/// </para>
 /// </summary>
 public sealed record CacheCandidateRecord(
     Guid Id,
@@ -117,4 +126,5 @@ public sealed record CacheCandidateRecord(
     string? InputHash,
     string? SectionOutputHash,
     string? OutputSummary,
-    string? Detail);
+    string? Detail,
+    double? Estimate = null);

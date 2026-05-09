@@ -509,16 +509,27 @@ public sealed class PgRunStore(
     {
         await using var conn = await dataSource.OpenConnectionAsync(ct);
         await using var cmd = conn.CreateCommand();
+        // LEFT JOIN agent_run so a cache hit can carry forward the source
+        // run's estimate (rerun redesign Round-8). Without this, a cached
+        // estimator step would leave capturedEstimate null and the
+        // {{estimation}} template variable would be unresolved on every
+        // subsequent re-run that hit the cache.
         cmd.CommandText = """
-            SELECT id, run_id, completed_at_utc, input_hash, section_output_hash, output_summary, detail
-            FROM step_result
-            WHERE tenant_id = $1
-              AND card_id = $2
-              AND state_name = $3
-              AND step_name = $4
-              AND outcome = 'COMPLETE'
-              AND (candidate_index IS NULL OR candidate_index = 0)
-            ORDER BY completed_at_utc DESC
+            SELECT sr.id, sr.run_id, sr.completed_at_utc,
+                   sr.input_hash, sr.section_output_hash,
+                   sr.output_summary, sr.detail,
+                   ar.estimate
+            FROM step_result sr
+            LEFT JOIN agent_run ar
+                ON ar.tenant_id = sr.tenant_id
+               AND ar.run_id = sr.run_id
+            WHERE sr.tenant_id = $1
+              AND sr.card_id = $2
+              AND sr.state_name = $3
+              AND sr.step_name = $4
+              AND sr.outcome = 'COMPLETE'
+              AND (sr.candidate_index IS NULL OR sr.candidate_index = 0)
+            ORDER BY sr.completed_at_utc DESC
             LIMIT 1
             """;
         cmd.Parameters.AddWithValue(tenant.Value);
@@ -537,7 +548,8 @@ public sealed class PgRunStore(
             InputHash: reader.IsDBNull(3) ? null : reader.GetString(3),
             SectionOutputHash: reader.IsDBNull(4) ? null : reader.GetString(4),
             OutputSummary: reader.IsDBNull(5) ? null : reader.GetString(5),
-            Detail: reader.IsDBNull(6) ? null : reader.GetString(6));
+            Detail: reader.IsDBNull(6) ? null : reader.GetString(6),
+            Estimate: reader.IsDBNull(7) ? null : reader.GetDouble(7));
     }
 
     public async Task<string?> GetEarliestStateEntryShaAsync(

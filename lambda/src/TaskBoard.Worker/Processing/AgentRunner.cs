@@ -676,14 +676,18 @@ public sealed partial class AgentRunner(
                     // executor entirely. The detail / output_summary on the
                     // synthetic result mirrors what the prior run produced so
                     // downstream consumers (gate prompt, comment poster) see
-                    // the cached narrative without re-invoking the LLM.
+                    // the cached narrative without re-invoking the LLM. The
+                    // source run's estimate (when present) is carried forward
+                    // so a cached estimator step still resolves the
+                    // {{estimation}} template variable on this re-run.
                     var src = cacheResult!.Source!;
                     var cachedDetail = src.OutputSummary
                         ?? src.Detail
                         ?? $"Skipped: inputs unchanged since run {src.RunId} (completed {src.CompletedAtUtc:yyyy-MM-dd HH:mm 'UTC'}).";
                     stepResult = new AgentResult(
                         AgentOutcome.COMPLETE,
-                        Detail: cachedDetail);
+                        Detail: cachedDetail,
+                        Estimate: src.Estimate);
                     stepSessionExecMs = null;
                 }
                 else if (effectiveSlots.Count > 0)
@@ -836,6 +840,14 @@ public sealed partial class AgentRunner(
                 //      task file; sync that content to the board body (the
                 //      pre-rerun-redesign behaviour).
                 string? sectionOutputHash = null;
+                // WritesDescriptionSection: default true (null treated as true).
+                // Explicit false suppresses application of section_update at
+                // this site so role-misconfigured runs (e.g. a gate-style step
+                // wired into the main pipeline) can't leak into the managed
+                // description. Hashing of the same field in
+                // RerunCacheGate.SerializeStepConfig means changing this flag
+                // also invalidates the cache for the step.
+                var stepWritesSection = step.WritesDescriptionSection != false;
                 if (cacheHit)
                 {
                     // Cache hit: section_output_hash carries forward from the
@@ -843,7 +855,7 @@ public sealed partial class AgentRunner(
                     // body in the cache decision).
                     sectionOutputHash = cacheResult!.Source!.SectionOutputHash;
                 }
-                else if (lastResult.Section is not null)
+                else if (lastResult.Section is not null && stepWritesSection)
                 {
                     var newBody = DescriptionWriter.ApplySectionUpdate(
                         currentBody, step.Name, lastResult.Section);
@@ -871,6 +883,19 @@ public sealed partial class AgentRunner(
                         await SurfaceSectionDiagnosticAsync(
                             cardId, state.Name, runId, sectionDiagnostic, cancellationToken);
                     }
+                }
+                else if (lastResult.Section is not null && !stepWritesSection)
+                {
+                    // Step explicitly opts out of writing description sections
+                    // (e.g. gate-style steps wired into the main pipeline). The
+                    // agent returned a section_update but we suppress it: don't
+                    // touch the body, don't fall back to the legacy task-file
+                    // sync, don't compute a section_output_hash. The detail is
+                    // still posted as a comment downstream and the directive is
+                    // captured raw in step_result.section_update_json for replay.
+                    logger.LogInformation(
+                        "Suppressed section_update for step '{Step}' on card {CardId}: writesDescriptionSection=false",
+                        step.Name, cardId);
                 }
                 else
                 {
@@ -1738,6 +1763,168 @@ public sealed partial class AgentRunner(
             return new GateCheckResult(null, null);
         }
 
+        // Gate-check caching (rerun redesign Round-8). When the gate's input
+        // bundle is byte-identical to the prior gate's COMPLETE row, skip the
+        // executor — the verdict would be identical. Avoids paying gate-check
+        // tokens on every re-run that didn't change inputs.
+        //
+        // The hashed bundle is the operator-authored prefix + non-aiboard-log
+        // comments + every prior step's section_output_hash + gate config JSON
+        // + gate system prompt + the FULLY RESOLVED gate prompt (which
+        // already folds in {Diff}, {AgentReport}, {CreatedTickets},
+        // {UnrecognizedFiles}, {StepHistory}). On hit we skip execution and
+        // do NOT replay any prior optional-step requests — those already ran
+        // on the cached source run; this re-run inherits a clean PASS verdict.
+        //
+        // gateInputHash is captured here so the full-run gate row persisted
+        // below can record it for future re-runs to match against.
+        string? gateInputHash = null;
+        if (cacheGate is not null)
+        {
+            string gateSystemPromptContents = "";
+            try
+            {
+                if (File.Exists(gateSystemPromptPath))
+                {
+                    gateSystemPromptContents = await File.ReadAllTextAsync(
+                        gateSystemPromptPath, cancellationToken);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Could not read gate system prompt for hashing on state '{State}'; using empty contents — cache key may differ from prior runs",
+                    state.Name);
+            }
+
+            var diffThresholdForCache =
+                workflowConfig.Rerun?.Diff?.SummaryThresholdBytes ?? gateCheck.MaxDiffChars;
+            var gateConfigJson = RerunCacheGate.SerializeGateConfig(
+                gateCheck, gateRole, state.ProviderParams, diffThresholdForCache);
+
+            // Upstream section hashes: every main step in this state that has
+            // a managed section currently on the body. Visitation order is the
+            // step list order — same convention as the per-step cache check.
+            var bodyForHash = currentBody ?? "";
+            var upstreamSectionHashes = new List<string>();
+            if (state.Steps is { Count: > 0 })
+            {
+                foreach (var s in state.Steps)
+                {
+                    var h = RerunHashBuilder.ComputeSectionHash(bodyForHash, s.Name);
+                    if (h is not null) upstreamSectionHashes.Add(h);
+                }
+            }
+
+            // Refresh comments: gate runs after every main step's comment was
+            // already posted, so the cached comment set must include them
+            // (kind:step rows are filtered out as agent-generated, so they
+            // don't poison the operator-comment leg of the hash, but a fresh
+            // fetch ensures any human comments posted mid-run are included).
+            IReadOnlyList<CardComment> commentsForGateCache;
+            try
+            {
+                commentsForGateCache = await boardClient.GetCardCommentsAsync(cardId, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Could not refresh comments for gate cache hash on card {Card}; falling back to empty list",
+                    cardId);
+                commentsForGateCache = [];
+            }
+
+            CacheGateResult? gateCacheResult = null;
+            try
+            {
+                gateCacheResult = await cacheGate.EvaluateGateAsync(
+                    cardId, bodyForHash, state,
+                    gateConfigJson, gateSystemPromptContents, gatePrompt,
+                    commentsForGateCache, upstreamSectionHashes,
+                    cancellationToken);
+                gateInputHash = gateCacheResult.CurrentInputHash;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Gate cache evaluation failed for state '{State}' on card {Card}; proceeding with executor",
+                    state.Name, cardId);
+            }
+
+            if (gateCacheResult is { IsHit: true })
+            {
+                var src = gateCacheResult.Source!;
+                var cachedDetail = src.OutputSummary
+                    ?? src.Detail
+                    ?? "Gate skipped: inputs unchanged since prior COMPLETE.";
+                logger.LogInformation(
+                    "Gate cache HIT — skipping executor for state '{State}' on card {Card}",
+                    state.Name, cardId);
+
+                // Persist a synthetic gate step_result row so attempt counts,
+                // metrics, and the v_cache_hit_rate view all see the cache
+                // decision. ExecutionKind = "cache_hit" excludes it from
+                // duration / cost averages by intent.
+                var gateAttempt = await ResolveStepAttemptAsync(
+                    cardId, state.Name, "gate_check", cancellationToken);
+                var nowUtc = DateTimeOffset.UtcNow;
+                var cacheGateRecord = new StepResultRecord(
+                    RunId: runId,
+                    CardId: cardId,
+                    StateName: state.Name,
+                    StepName: "gate_check",
+                    StepIndex: state.Steps?.Count ?? 0,
+                    Role: gateCheck.Role,
+                    Model: gateRole.Model,
+                    Outcome: AgentOutcome.COMPLETE,
+                    Summary: cachedDetail,
+                    Detail: null,
+                    ReferenceContent: null,
+                    ConversationLog: null,
+                    Questions: null,
+                    RequestedSteps: null,
+                    StartedAtUtc: nowUtc,
+                    CompletedAtUtc: nowUtc,
+                    SessionExecMs: null,
+                    Provider: gateRole.Provider,
+                    InputHash: gateCacheResult.CurrentInputHash,
+                    SectionOutputHash: null,
+                    ExecutionKind: "cache_hit",
+                    SourceRunId: src.RunId,
+                    SourceStepResultId: src.Id,
+                    OutputSummary: src.OutputSummary,
+                    SectionUpdateJson: null);
+                await SafeDbCallAsync(() => runStore.SaveStepResultAsync(cacheGateRecord, cancellationToken));
+
+                // Post a kind:cache_hit comment so the operator can see the
+                // gate decision in the timeline. Same shape as main-step
+                // cache hits.
+                var cacheFields = new[]
+                {
+                    KeyValuePair.Create("state", state.Name),
+                    KeyValuePair.Create("step", "gate_check"),
+                    KeyValuePair.Create("run", runId),
+                    KeyValuePair.Create("outcome", AgentOutcome.COMPLETE.ToString()),
+                    KeyValuePair.Create("attempt", gateAttempt.ToString(CultureInfo.InvariantCulture)),
+                    KeyValuePair.Create("source_run", src.RunId),
+                };
+                var cacheMarker = AiboardLogMarker.Build(AiboardLogMarker.KindCacheHit, cacheFields);
+                var cachePrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, gateCheck.Role, gateRole.Provider, gateRole.Model);
+                var cacheBody =
+                    $"{cachePrefix}\n\n" +
+                    $"**Gate check** — cache hit\n\n" +
+                    $"Skipped: gate inputs unchanged since run `{src.RunId}` (completed " +
+                    $"{src.CompletedAtUtc.UtcDateTime:yyyy-MM-dd HH:mm} UTC). Prior verdict reused.";
+                await PostKindCommentAsync(cardId, AiboardLogMarker.KindCacheHit,
+                    cacheBody, cacheMarker, cancellationToken);
+
+                // PASS with no requested optional steps — the cached gate's
+                // optional steps already ran on the source run; this re-run
+                // doesn't replay them.
+                return new GateCheckResult(null, null);
+            }
+        }
+
         // Execute gate check
         AgentResult gateResult;
         try
@@ -1767,6 +1954,8 @@ public sealed partial class AgentRunner(
             // when Steps is null so the gate still records cleanly. fast_path_hit
             // is no longer populated post-rerun-redesign; cache hits are
             // surfaced via ExecutionKind = "cache_hit" instead.
+            // input_hash is populated when the cache gate evaluated this run
+            // (whether hit or miss) so the next re-run can match against it.
             var gateFastPathHit = (bool?)null;
             var gateRecord = new StepResultRecord(
                 RunId: runId,
@@ -1795,6 +1984,8 @@ public sealed partial class AgentRunner(
                 FastPathHit: gateFastPathHit,
                 StructurerFallbackUsed: gateResult.StructurerFallbackUsed,
                 SectionUpdateJson: gateResult.SectionUpdateJson,
+                InputHash: gateInputHash,
+                ExecutionKind: "full_run",
                 OutputSummary: BuildOutputSummary(gateResult));
             await SafeDbCallAsync(() => runStore.SaveStepResultAsync(gateRecord, cancellationToken));
         }
@@ -1868,7 +2059,6 @@ public sealed partial class AgentRunner(
                         $"**Latest failure reason:**\n{gateResult.Detail ?? "No detail provided."}";
                     await PostGateCommentAsync(cardId, state, runId, "escalated",
                         escalateBody, cancellationToken,
-                        legacyMarkerExtras: $" result:ERROR attempt:{previousFailures + 1}",
                         attemptForKindFields: previousFailures + 1);
 
                     if (state.Transitions.TryGetValue(TransitionKeys.NeedsInfo, out var questionsCol))
@@ -1886,7 +2076,6 @@ public sealed partial class AgentRunner(
                     $"## Gate Check: Failed {gateIdentityFail}\n\n{gateResult.Detail ?? "The gate check detected issues with the agent's output."}";
                 await PostGateCommentAsync(cardId, state, runId, "ERROR",
                     failBody, cancellationToken,
-                    legacyMarkerExtras: $" result:ERROR attempt:{previousFailures + 1}",
                     attemptForKindFields: previousFailures + 1);
 
                 var transitionKey = state.Transitions.ContainsKey(TransitionKeys.GateFail) ? TransitionKeys.GateFail : TransitionKeys.Error;
@@ -1900,19 +2089,12 @@ public sealed partial class AgentRunner(
     }
 
     /// <summary>
-    /// Posts a gate-check comment via the comment router (kind:gate, append) when
-    /// the router is wired, or via the legacy upsert path with the
-    /// <c>&lt;!-- gate-check:{state.Name} --&gt;</c> marker when it isn't. Centralises
-    /// the dual-path so the gate's four emit sites (warning / NEEDS_INFO / escalate
-    /// / ERROR) stay aligned.
+    /// Posts a gate-check comment via the comment router (kind:gate). Centralises
+    /// the gate's four emit sites (warning / NEEDS_INFO / escalate / ERROR) so
+    /// they all use the same marker shape.
     /// </summary>
-    /// <param name="legacyMarkerExtras">
-    /// Extra fields appended INSIDE the legacy marker (e.g. " result:ERROR attempt:3").
-    /// Ignored when the router is wired (the new marker carries those as
-    /// structured key:value fields instead).
-    /// </param>
     /// <param name="attemptForKindFields">
-    /// When &gt; 0, included as the marker's <c>attempt</c> key in the new shape.
+    /// When &gt; 0, included as the marker's <c>attempt</c> key.
     /// </param>
     private async Task PostGateCommentAsync(
         string cardId,
@@ -1921,7 +2103,6 @@ public sealed partial class AgentRunner(
         string outcomeLabel,
         string body,
         CancellationToken cancellationToken,
-        string legacyMarkerExtras = "",
         int attemptForKindFields = 0)
     {
         var fields = new List<KeyValuePair<string, string>>
@@ -1936,10 +2117,6 @@ public sealed partial class AgentRunner(
                 attemptForKindFields.ToString(CultureInfo.InvariantCulture)));
 
         var marker = AiboardLogMarker.Build(AiboardLogMarker.KindGate, fields);
-        // Rerun redesign Problem 2: emit only aiboard-log markers. The
-        // legacyMarkerExtras parameter is preserved for binary-compat with
-        // call sites pending cleanup but is no longer interpreted.
-        _ = legacyMarkerExtras;
         await PostKindCommentAsync(cardId, AiboardLogMarker.KindGate, body, marker, cancellationToken);
     }
 
@@ -2042,10 +2219,13 @@ public sealed partial class AgentRunner(
             // Update card body. Mirrors the regular-step path: when the agent
             // returned a structured section_update directive (rerun redesign
             // Problem 2), apply it via DescriptionWriter — optional reviewers
-            // ARE allowed to write description sections per spec. Otherwise
-            // sync from the worktree task file as before.
+            // ARE allowed to write description sections per spec, unless the
+            // operator explicitly set writesDescriptionSection=false on the
+            // optional definition (review-only specialists whose verdict
+            // belongs in comments). Otherwise sync from the worktree task file.
             string? optionalSectionOutputHash = null;
-            if (result.Section is not null)
+            var optionalWritesSection = step.WritesDescriptionSection != false;
+            if (result.Section is not null && optionalWritesSection)
             {
                 var newBody = DescriptionWriter.ApplySectionUpdate(
                     optionalCurrentBody, $"optional:{step.Name}", result.Section);
@@ -2073,6 +2253,12 @@ public sealed partial class AgentRunner(
                     await SurfaceSectionDiagnosticAsync(
                         cardId, state.Name, runId, optDiagnostic, cancellationToken);
                 }
+            }
+            else if (result.Section is not null && !optionalWritesSection)
+            {
+                logger.LogInformation(
+                    "Suppressed section_update for optional step '{Step}' on card {CardId}: writesDescriptionSection=false",
+                    step.Name, cardId);
             }
             else
             {

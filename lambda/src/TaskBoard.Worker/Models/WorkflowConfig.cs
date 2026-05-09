@@ -307,7 +307,15 @@ public sealed record OptionalStepDefinition(
     string? TaskPromptFile = null,
     string Description = "",
     string Triggers = "",
-    Dictionary<string, string>? ProviderParams = null);
+    Dictionary<string, string>? ProviderParams = null,
+    /// <summary>
+    /// Whether this optional reviewer is permitted to write its managed step
+    /// section in the card description (rerun redesign Problem 2). Default
+    /// true, mirroring <see cref="WorkflowStep.WritesDescriptionSection"/>.
+    /// Operators set this to <c>false</c> for review-only specialists whose
+    /// verdict belongs in comments rather than the description.
+    /// </summary>
+    bool? WritesDescriptionSection = null);
 
 public sealed record WorkflowState(
     string Name,
@@ -498,5 +506,9 @@ public sealed record GateCheckConfig(
     string Role,
     string? TaskPromptFile = null,
     string? TaskPrompt = null,
-    int MaxDiffChars = 50_000,
+    // Default chosen to match rerun.diff.summaryThresholdBytes (51200 = 50 KiB)
+    // so the legacy fallback in AgentRunner.RunGateCheckAsync produces the
+    // same threshold whether or not the workflow JSON sets rerun.diff. The
+    // gate-check field is preserved as the per-gate override path.
+    int MaxDiffChars = 51_200,
     int MaxRetries = 2);
