@@ -528,8 +528,8 @@ public class AgentRunnerOptionalStepsTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 [TriggerListId] = new(
-                    "Implementation", "senior_engineer", "agent_run",
-                    "implement the feature for {TaskName} ({TaskId})",
+                    "Implementation", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-done"),
@@ -539,6 +539,10 @@ public class AgentRunnerOptionalStepsTests : IDisposable
                     },
                     GitBehavior: "discard",
                     ProviderParams: new Dictionary<string, string> { ["effort"] = "medium" },
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "implement the feature for {TaskName} ({TaskId})"),
+                    ],
                     GateCheck: new GateCheckConfig(
                         Role: "gate_checker",
                         TaskPrompt: "Check security_audit for '{TaskName}'.\n\n## Changes\n{Diff}\n\n## Report\n{AgentReport}"),
@@ -564,8 +568,8 @@ public class AgentRunnerOptionalStepsTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 [TriggerListId] = new(
-                    "Implementation", "senior_engineer", "agent_run",
-                    "implement the feature for {TaskName} ({TaskId})",
+                    "Implementation", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-done"),
@@ -574,6 +578,10 @@ public class AgentRunnerOptionalStepsTests : IDisposable
                         ["GATE_FAIL"] = TransitionTarget.ForColumn(TriggerListId),
                     },
                     GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "implement the feature for {TaskName} ({TaskId})"),
+                    ],
                     GateCheck: new GateCheckConfig(
                         Role: "gate_checker",
                         TaskPrompt: "Gate check.\n\n## Changes\n{Diff}\n\n## Report\n{AgentReport}"))

@@ -1,7 +1,64 @@
+using TaskBoard.Worker.Configuration;
+
 namespace TaskBoard.Worker.Models;
 
 public static class WorkflowConfigValidator
 {
+    /// <summary>
+    /// Validates a role's <see cref="WorkflowRole.Fallbacks"/> chain (if any).
+    /// Errors:
+    /// <list type="bullet">
+    ///   <item>Each fallback's <c>provider</c> must be non-empty.</item>
+    ///   <item>Each fallback's <c>provider</c> must be a recognised executor key
+    ///         (per <see cref="StartupConfigValidator.KnownAgentExecutors"/>).
+    ///         A typo here would surface as a runtime resolver miss when the
+    ///         fallback fires — possibly hours into a polling run.</item>
+    ///   <item><c>fallbackOn</c> cannot contain <c>AGENT_ERROR</c>. The agent's
+    ///         in-band ERROR verdict is a quality signal handled by candidate
+    ///         evaluation, not a runtime failure that should swap providers.</item>
+    /// </list>
+    /// </summary>
+    private static void ValidateRoleFallback(string roleId, WorkflowRole role, List<string> errors)
+    {
+        if (role.Fallbacks is { Count: > 0 } fallbacks)
+        {
+            for (var i = 0; i < fallbacks.Count; i++)
+            {
+                var fb = fallbacks[i];
+                if (string.IsNullOrWhiteSpace(fb.Provider))
+                {
+                    errors.Add($"Role '{roleId}' fallback #{i} has an empty provider.");
+                    continue;
+                }
+
+                if (!StartupConfigValidator.KnownAgentExecutors.Contains(
+                        fb.Provider.Trim().ToLowerInvariant()))
+                {
+                    errors.Add(
+                        $"Role '{roleId}' fallback #{i} references unknown provider '{fb.Provider}'. " +
+                        $"Accepted values: {string.Join(", ", StartupConfigValidator.KnownAgentExecutors)}.");
+                }
+            }
+        }
+
+        if (role.FallbackOn is { Count: > 0 } fallbackOn)
+        {
+            if (fallbackOn.Contains(FailureReason.AGENT_ERROR))
+            {
+                errors.Add(
+                    $"Role '{roleId}' has fallbackOn containing AGENT_ERROR. AGENT_ERROR is the " +
+                    "agent's in-band quality verdict, not a runtime failure — fallback would mask " +
+                    "real issues. Use candidate evaluation if you want to compare agents on quality.");
+            }
+
+            if ((role.Fallbacks is null or { Count: 0 }))
+            {
+                errors.Add(
+                    $"Role '{roleId}' has fallbackOn set but no fallbacks declared. The set would " +
+                    "never apply — either add fallbacks or remove fallbackOn.");
+            }
+        }
+    }
     private static readonly HashSet<string> KnownGateTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         GateTypes.AgentRun, GateTypes.SystemMerge, GateTypes.ChildrenComplete,
@@ -29,6 +86,8 @@ public static class WorkflowConfigValidator
         {
             if (string.IsNullOrWhiteSpace(role.Model))
                 errors.Add($"Role '{roleId}' has no model.");
+
+            ValidateRoleFallback(roleId, role, errors);
         }
 
         // Track optional step names across the whole config (uniqueness)
@@ -43,6 +102,30 @@ public static class WorkflowConfigValidator
             // gitBehavior enum check
             if (!string.IsNullOrWhiteSpace(state.GitBehavior) && !KnownGitBehaviors.Contains(state.GitBehavior))
                 errors.Add($"State '{stateId}' ({state.Name}) has unknown gitBehavior '{state.GitBehavior}'. Expected one of: {string.Join(", ", KnownGitBehaviors)}.");
+
+            // Legacy state-level shape rejection (v0.0.25+).
+            // Pre-v0.0.25 a state could declare a single role + taskPrompt at
+            // the state level and the runtime auto-normalised it into a
+            // one-element steps array. The legacy shape is gone — every
+            // agent_run state must declare a `steps` array. We surface the
+            // error regardless of `gateType` because operators sometimes leave
+            // these fields set on a state they later flipped to a different
+            // gate type, and silent accept is the wrong behaviour.
+            if (state.Role is { Length: > 0 })
+                errors.Add(
+                    $"State '{stateId}' ({state.Name}) has a top-level 'role' field. " +
+                    "This legacy shape was removed in v0.0.25 — declare a 'steps' array instead. " +
+                    "Move the role into a step entry: \"steps\": [{ \"name\": \"<step>\", \"role\": \"" + state.Role + "\", ... }].");
+
+            if (state.TaskPrompt is { Length: > 0 })
+                errors.Add(
+                    $"State '{stateId}' ({state.Name}) has a top-level 'taskPrompt' field. " +
+                    "This legacy shape was removed in v0.0.25 — declare a 'steps' array with the prompt on a step entry instead.");
+
+            if (state.TaskPromptFile is { Length: > 0 })
+                errors.Add(
+                    $"State '{stateId}' ({state.Name}) has a top-level 'taskPromptFile' field. " +
+                    "This legacy shape was removed in v0.0.25 — declare a 'steps' array with the prompt file on a step entry instead.");
 
             if (string.Equals(state.GateType, GateTypes.AgentRun, StringComparison.OrdinalIgnoreCase))
             {
@@ -79,20 +162,10 @@ public static class WorkflowConfigValidator
                 }
                 else
                 {
-                    // Legacy single-step validation (state without steps array)
-                    if (string.IsNullOrWhiteSpace(state.Role))
-                        errors.Add($"State '{stateId}' ({state.Name}) is agent_run but has no role.");
-                    else if (!config.Roles.ContainsKey(state.Role))
-                        errors.Add($"State '{stateId}' ({state.Name}) references role '{state.Role}' which does not exist in Roles.");
-
-                    if (string.IsNullOrWhiteSpace(state.TaskPrompt) && string.IsNullOrWhiteSpace(state.TaskPromptFile))
-                        errors.Add($"State '{stateId}' ({state.Name}) is agent_run but has no taskPrompt or taskPromptFile.");
-
-                    if (!string.IsNullOrWhiteSpace(state.Role) && config.Roles.TryGetValue(state.Role, out var role))
-                    {
-                        if (string.IsNullOrWhiteSpace(role.SystemPrompt) && string.IsNullOrWhiteSpace(role.SystemPromptFile))
-                            errors.Add($"Role '{state.Role}' has no systemPrompt or systemPromptFile.");
-                    }
+                    // No legacy fallback: every agent_run state needs a steps array.
+                    errors.Add(
+                        $"State '{stateId}' ({state.Name}) is agent_run but has no 'steps' array. " +
+                        "Declare at least one step: \"steps\": [{ \"name\": \"<step>\", \"role\": \"<role>\", \"taskPromptFile\": \"<path>\" }].");
                 }
             }
 
@@ -719,18 +792,9 @@ public static class WorkflowConfigValidator
                 }
             }
 
-            // Legacy single-role states (no steps array) — Normalise() will convert them,
-            // but Audit may run before normalisation. Check the top-level Role too.
-            if ((state.Steps is null or { Count: 0 })
-                && state.Role is { Length: > 0 }
-                && IsCodexRole(config, state.Role)
-                && !stateHasSandboxChoice)
-            {
-                warnings.Add(
-                    $"State '{stateId}' ({state.Name}) uses Codex role '{state.Role}' but no sandbox policy " +
-                    $"is configured in providerParams. Set one of {string.Join("/", CodexSandboxParamKeys)} " +
-                    "to make the sandbox choice explicit.");
-            }
+            // Legacy single-role state-level audit removed in v0.0.25:
+            // the legacy shape is now a hard validator error, so audit
+            // doesn't need a side path for it.
         }
     }
 

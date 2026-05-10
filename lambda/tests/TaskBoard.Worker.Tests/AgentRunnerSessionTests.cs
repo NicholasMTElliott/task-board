@@ -160,15 +160,19 @@ public class AgentRunnerSessionTests : IDisposable
         return new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                [ListId] = new("Design", "engineer", "agent_run",
-                    "Do the work {TaskName} ({TaskId})",
+                [ListId] = new("Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-done"),
                         ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-q"),
                         ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                     },
-                    GitBehavior: "discard"),
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("engineer", "engineer", TaskPrompt: "Do the work {TaskName} ({TaskId})"),
+                    ]),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {

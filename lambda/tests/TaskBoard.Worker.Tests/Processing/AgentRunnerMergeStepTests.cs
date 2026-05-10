@@ -418,15 +418,19 @@ public class AgentRunnerMergeStepTests : IDisposable
         return new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                [ImplColumnId] = new("Ready for Implementation", "senior_engineer", "agent_run",
-                    "Implement {TaskName}",
+                [ImplColumnId] = new("Ready for Implementation", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn(CompleteCol),
                         ["NEEDS_INFO"] = TransitionTarget.ForColumn(QuestionsCol),
                         ["ERROR"] = TransitionTarget.ForColumn(ErrorCol),
                     },
-                    GitBehavior: "commit_and_push"),
+                    GitBehavior: "commit_and_push",
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "Implement {TaskName}"),
+                    ]),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -443,8 +447,8 @@ public class AgentRunnerMergeStepTests : IDisposable
         return new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                [TestColumnId] = new("Ready for Test", "qa", "agent_run",
-                    "Test {TaskName}",
+                [TestColumnId] = new("Ready for Test", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn(CompleteCol),
@@ -452,7 +456,11 @@ public class AgentRunnerMergeStepTests : IDisposable
                         ["ERROR"] = TransitionTarget.ForColumn(ErrorCol),
                         ["MERGE_CONFLICT"] = TransitionTarget.ForColumn(ReadyForImplCol),
                     },
-                    GitBehavior: "commit_and_push"),
+                    GitBehavior: "commit_and_push",
+                    Steps:
+                    [
+                        new WorkflowStep("qa", "qa", TaskPrompt: "Test {TaskName}"),
+                    ]),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -472,15 +480,19 @@ public class AgentRunnerMergeStepTests : IDisposable
         return new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                [DesignColumnId] = new("Ready for Design", "senior_engineer", "agent_run",
-                    "Design {TaskName}",
+                [DesignColumnId] = new("Ready for Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn(CompleteCol),
                         ["NEEDS_INFO"] = TransitionTarget.ForColumn(QuestionsCol),
                         ["ERROR"] = TransitionTarget.ForColumn(ErrorCol),
                     },
-                    GitBehavior: "discard"),
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "Design {TaskName}"),
+                    ]),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {

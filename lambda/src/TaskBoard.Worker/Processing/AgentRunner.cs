@@ -667,6 +667,13 @@ public sealed partial class AgentRunner(
                 // to a single-element slot list so the same code path handles both.
                 AgentResult stepResult;
                 int? stepSessionExecMs;
+                // Actual provider/model that produced the result. For the
+                // single-agent path this defaults to the role's primary; the
+                // role-fallback wrapper overrides when a fallback ran. For the
+                // slot-driven path this stays at the role's primary (the
+                // candidate-level metrics tell that story).
+                string stepActualProvider = stepRole.Provider;
+                string stepActualModel = stepRole.Model;
                 if (cacheHit)
                 {
                     // Cache hit: synthesize a COMPLETE AgentResult and skip the
@@ -798,8 +805,12 @@ public sealed partial class AgentRunner(
                         ProviderParams: state.ProviderParams,
                         CommentsFilePath: commentsFilePath);
 
-                    (stepResult, stepSessionExecMs) = await ExecuteWithSessionAsync(
-                        session, stepRole.Provider, context, step.Name, runId, cancellationToken);
+                    var (sr, ms, actualProvider, actualModel) = await ExecuteWithSessionAndRoleFallbackAsync(
+                        session, stepRole, context, step.Name, runId, cancellationToken);
+                    stepResult = sr;
+                    stepSessionExecMs = ms;
+                    stepActualProvider = actualProvider;
+                    stepActualModel = actualModel;
                 }
                 lastResult = stepResult;
 
@@ -998,7 +1009,7 @@ public sealed partial class AgentRunner(
                         StepName: step.Name,
                         StepIndex: stepIndex,
                         Role: step.Role,
-                        Model: stepRole.Model,
+                        Model: stepActualModel,
                         Outcome: lastResult.Outcome,
                         Summary: lastResult.Detail,
                         Detail: taskFileSnapshot,
@@ -1009,7 +1020,7 @@ public sealed partial class AgentRunner(
                         StartedAtUtc: stepStartedAt,
                         CompletedAtUtc: stepCompletedAt,
                         SessionExecMs: stepSessionExecMs,
-                        Provider: stepRole.Provider,
+                        Provider: stepActualProvider,
                         CostUsd: lastResult.Usage?.CostUsd,
                         InputTokens: lastResult.Usage?.InputTokens,
                         OutputTokens: lastResult.Usage?.OutputTokens,
@@ -1040,7 +1051,7 @@ public sealed partial class AgentRunner(
                 // append (chronological log entry), so the operator can see
                 // every cache decision in the timeline. Full-run steps post
                 // kind:step comments with the same marker grammar.
-                var stepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role, stepRole.Provider, stepRole.Model);
+                var stepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role, stepActualProvider, stepActualModel);
 
                 if (cacheHit)
                 {
@@ -1942,8 +1953,15 @@ public sealed partial class AgentRunner(
         var fullRunGateAttempt = await ResolveStepAttemptAsync(
             cardId, state.Name, "gate_check", cancellationToken);
 
-        // Execute gate check
+        // Execute gate check.
+        //
+        // gateActualProvider / gateActualModel are hoisted out of the try so
+        // the catch block can reference them — the role-fallback wrapper
+        // overrides them when a fallback ran, but if the very first attempt
+        // throws (no fallback survives) the catch sees the role's primary.
         AgentResult gateResult;
+        var gateActualProvider = gateRole.Provider;
+        var gateActualModel = gateRole.Model;
         try
         {
             var gateContext = new AgentExecutionContext(
@@ -1961,9 +1979,12 @@ public sealed partial class AgentRunner(
 
             logger.LogInformation("Running gate check for card {CardId} in state {State}", cardId, state.Name);
             var gateStartedAt = DateTimeOffset.UtcNow;
-            var (gateResult2, gateSessionExecMs) = await ExecuteWithSessionAsync(
-                session, gateRole.Provider, gateContext, "gate_check", runId, cancellationToken);
+            var (gateResult2, gateSessionExecMs, ap, am) =
+                await ExecuteWithSessionAndRoleFallbackAsync(
+                    session, gateRole, gateContext, "gate_check", runId, cancellationToken);
             gateResult = gateResult2;
+            gateActualProvider = ap;
+            gateActualModel = am;
             logger.LogInformation("Gate check result for card {CardId}: {Outcome}", cardId, gateResult.Outcome);
 
             // Save gate check result to DB.
@@ -1981,7 +2002,7 @@ public sealed partial class AgentRunner(
                 StepName: "gate_check",
                 StepIndex: state.Steps?.Count ?? 0,
                 Role: gateCheck.Role,
-                Model: gateRole.Model,
+                Model: gateActualModel,
                 Outcome: gateResult.Outcome,
                 Summary: gateResult.Detail,
                 Detail: null,
@@ -1992,7 +2013,7 @@ public sealed partial class AgentRunner(
                 StartedAtUtc: gateStartedAt,
                 CompletedAtUtc: DateTimeOffset.UtcNow,
                 SessionExecMs: gateSessionExecMs,
-                Provider: gateRole.Provider,
+                Provider: gateActualProvider,
                 CostUsd: gateResult.Usage?.CostUsd,
                 InputTokens: gateResult.Usage?.InputTokens,
                 OutputTokens: gateResult.Usage?.OutputTokens,
@@ -2010,7 +2031,7 @@ public sealed partial class AgentRunner(
         {
             // Gate check infrastructure failure is non-blocking
             logger.LogError(ex, "Gate check failed to execute for card {CardId} — proceeding without verification", cardId);
-            var gateIdentity = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
+            var gateIdentity = $"(via {agentIdentity.FormatAgentName(gateActualProvider, gateActualModel)})";
             var warningBody =
                 $"## Gate Check Warning {gateIdentity}\n\nGate check failed to execute: {ex.Message}\nProceeding without verification.";
             await PostGateCommentAsync(cardId, state, runId, "warning", warningBody, cancellationToken, fullRunGateAttempt);
@@ -2023,7 +2044,7 @@ public sealed partial class AgentRunner(
             case AgentOutcome.COMPLETE:
                 // PASS — proceed with normal flow (possibly with optional step requests)
                 logger.LogInformation("Gate check PASSED for card {CardId}", cardId);
-                var gateIdentityPass = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
+                var gateIdentityPass = $"(via {agentIdentity.FormatAgentName(gateActualProvider, gateActualModel)})";
                 var passBody =
                     $"## Gate Check: Passed {gateIdentityPass}\n\n{gateResult.Detail ?? "The gate check passed."}";
                 await PostGateCommentAsync(cardId, state, runId, "COMPLETE",
@@ -2033,7 +2054,7 @@ public sealed partial class AgentRunner(
             case AgentOutcome.NEEDS_INFO:
             {
                 // CONCERNS — route to questions column
-                var gateIdentityConcerns = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
+                var gateIdentityConcerns = $"(via {agentIdentity.FormatAgentName(gateActualProvider, gateActualModel)})";
                 var concernsBody =
                     $"## Gate Check: Concerns {gateIdentityConcerns}\n\n{gateResult.Detail ?? "The gate check raised concerns."}";
                 await PostGateCommentAsync(cardId, state, runId, "NEEDS_INFO",
@@ -2075,7 +2096,7 @@ public sealed partial class AgentRunner(
                     // Escalate to NEEDS_INFO for human intervention
                     logger.LogWarning("Gate check for card {CardId} has failed {Count} times — escalating to NEEDS_INFO",
                         cardId, previousFailures + 1);
-                    var gateIdentityEscalate = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
+                    var gateIdentityEscalate = $"(via {agentIdentity.FormatAgentName(gateActualProvider, gateActualModel)})";
                     var escalateBody =
                         $"## Gate Check: Escalated to Human Review {gateIdentityEscalate}\n\n" +
                         $"The gate check has failed {previousFailures + 1} consecutive times. Escalating for human review.\n\n" +
@@ -2093,7 +2114,7 @@ public sealed partial class AgentRunner(
                 }
 
                 // Route via GATE_FAIL (re-trigger) or fall back to ERROR
-                var gateIdentityFail = $"(via {agentIdentity.FormatAgentName(gateRole.Provider, gateRole.Model)})";
+                var gateIdentityFail = $"(via {agentIdentity.FormatAgentName(gateActualProvider, gateActualModel)})";
                 var failBody =
                     $"## Gate Check: Failed {gateIdentityFail}\n\n{gateResult.Detail ?? "The gate check detected issues with the agent's output."}";
                 await PostGateCommentAsync(cardId, state, runId, "ERROR",
@@ -2223,8 +2244,9 @@ public sealed partial class AgentRunner(
                 CommentsFilePath: commentsFilePath);
 
             var optionalStepStartedAt = DateTimeOffset.UtcNow;
-            var (result, optionalSessionExecMs) = await ExecuteWithSessionAsync(
-                session, stepRole.Provider, context, $"optional:{step.Name}", runId, cancellationToken);
+            var (result, optionalSessionExecMs, optionalActualProvider, optionalActualModel) =
+                await ExecuteWithSessionAndRoleFallbackAsync(
+                    session, stepRole, context, $"optional:{step.Name}", runId, cancellationToken);
 
             // Resolve attempt count BEFORE the optional step row is persisted
             // so the COUNT predicate excludes the current attempt (rerun
@@ -2292,7 +2314,7 @@ public sealed partial class AgentRunner(
                 StepName: $"optional:{step.Name}",
                 StepIndex: (state.Steps?.Count ?? 0) + 1 + i,
                 Role: step.Role,
-                Model: stepRole.Model,
+                Model: optionalActualModel,
                 Outcome: result.Outcome,
                 Summary: result.Detail,
                 Detail: null,
@@ -2303,7 +2325,7 @@ public sealed partial class AgentRunner(
                 StartedAtUtc: optionalStepStartedAt,
                 CompletedAtUtc: DateTimeOffset.UtcNow,
                 SessionExecMs: optionalSessionExecMs,
-                Provider: stepRole.Provider,
+                Provider: optionalActualProvider,
                 CostUsd: result.Usage?.CostUsd,
                 InputTokens: result.Usage?.InputTokens,
                 OutputTokens: result.Usage?.OutputTokens,
@@ -2318,7 +2340,7 @@ public sealed partial class AgentRunner(
 
             // Post step-specific comment with optional: prefix to avoid marker collision.
             // Build a per-step prefix so the header reflects the actual specialist-reviewer role.
-            var optionalStepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role, stepRole.Provider, stepRole.Model);
+            var optionalStepPrefix = BuildCommentPrefix(state, workflowConfig, agentIdentity, step.Role, optionalActualProvider, optionalActualModel);
             var stepBody = $"{optionalStepPrefix}\n\n**Optional Step: {step.Name}**\n\n{FormatComment(result, includeConversationLog: runStore is NullRunStore)}";
             // kind:optional → append (chronological log entry). Marker carries
             // attempt for cross-run correlation; no legacy fallback (rerun
@@ -2412,6 +2434,85 @@ public sealed partial class AgentRunner(
     /// falls back to direct per-step execution transparently.
     /// Returns the result and the session execution time in ms (null if not executed via session).
     /// </summary>
+    /// <summary>
+    /// Wraps <see cref="ExecuteWithSessionAsync"/> with role-level fallback.
+    /// When the role's primary provider throws an exception classified to a
+    /// <see cref="FailureReason"/> in the role's effective <c>FallbackOn</c>
+    /// set, walks <see cref="WorkflowRole.Fallbacks"/> in order and tries each
+    /// fallback as a fresh direct (no-session) invocation.
+    ///
+    /// <para>
+    /// Sessions are tied to the primary provider's image, so fallback attempts
+    /// always pass <c>session=null</c> to <see cref="ExecuteWithSessionAsync"/>
+    /// (which then falls through to the executor-resolver direct path). The
+    /// init-mirror, resource-pool lease, and provider-mismatch fall-through
+    /// inside <see cref="ExecuteWithSessionAsync"/> all run unchanged for each
+    /// attempt.
+    /// </para>
+    ///
+    /// <para>
+    /// Returns the actual provider/model that produced the result, so callers
+    /// persist the fallback's identity to <c>step_result</c> rather than the
+    /// role's primary — that's what makes a future
+    /// <c>v_role_fallback_rate</c> view possible.
+    /// </para>
+    /// </summary>
+    private async Task<(AgentResult Result, int? SessionExecMs, string ActualProvider, string ActualModel)>
+        ExecuteWithSessionAndRoleFallbackAsync(
+            IAgentExecutorSession? session,
+            WorkflowRole role,
+            AgentExecutionContext primaryContext,
+            string stepLabel,
+            string runId,
+            CancellationToken cancellationToken)
+    {
+        var attempts = RoleInvoker.BuildAttempts(role, primaryContext.ProviderParams);
+        var fallbackOn = RoleInvoker.EffectiveFallbackOn(role);
+        Exception? lastException = null;
+
+        for (var i = 0; i < attempts.Count; i++)
+        {
+            var attempt = attempts[i];
+            var attemptContext = RoleInvoker.BuildAttemptContext(primaryContext, attempt);
+            // Sessions belong to the primary provider's image; for fallbacks
+            // pass null so ExecuteWithSessionAsync falls through to direct.
+            var attemptSession = i == 0 ? session : null;
+
+            try
+            {
+                var (result, execMs) = await ExecuteWithSessionAsync(
+                    attemptSession, attempt.Provider, attemptContext, stepLabel, runId, cancellationToken);
+
+                if (i > 0)
+                {
+                    logger.LogWarning(
+                        "Role fallback succeeded on attempt {Index} ({Provider}/{Model}) for '{StepLabel}'",
+                        i, attempt.Provider, attempt.Model, stepLabel);
+                }
+
+                return (result, execMs, attempt.Provider, attempt.Model);
+            }
+            catch (Exception ex) when (
+                ex is not OperationCanceledException
+                && i < attempts.Count - 1
+                && RoleInvoker.ShouldFallback(ex, fallbackOn))
+            {
+                var nextAttempt = attempts[i + 1];
+                logger.LogWarning(ex,
+                    "Role primary {Provider}/{Model} hit {Reason} on '{StepLabel}'; falling back to {NextProvider}/{NextModel} (attempt {Next}/{Total})",
+                    attempt.Provider, attempt.Model, RoleInvoker.Classify(ex), stepLabel,
+                    nextAttempt.Provider, nextAttempt.Model, i + 1, attempts.Count - 1);
+                lastException = ex;
+            }
+        }
+
+        // Unreachable when at least one attempt exists and didn't either throw
+        // a non-fallback exception or return — defensive guard.
+        throw lastException
+            ?? new InvalidOperationException(
+                $"RoleInvoker exhausted attempts for '{stepLabel}' with no captured exception (provider chain length {attempts.Count}).");
+    }
+
     private async Task<(AgentResult Result, int? SessionExecMs)> ExecuteWithSessionAsync(
         IAgentExecutorSession? session,
         string providerKey,

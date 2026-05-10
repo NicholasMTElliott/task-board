@@ -16,7 +16,14 @@ public static class StartupConfigValidator
     public readonly record struct Finding(Severity Severity, string Key, string Message);
 
     private static readonly string[] KnownBoardProviders = { "github", "trello", "live", "stub" };
-    private static readonly string[] KnownAgentExecutors = { "stub", "claude-cli", "docker-claude-cli", "docker-codex", "docker-opencode", "docker-claude-qwen", "codex" };
+    /// <summary>
+    /// Recognised provider keys for <c>AgentExecutor</c> selection, role
+    /// providers, candidate overrides, and role fallbacks. Internal so other
+    /// validators (notably <see cref="Models.WorkflowConfigValidator"/>) can
+    /// cross-check role/fallback provider names against the same source of
+    /// truth without duplicating the list.
+    /// </summary>
+    internal static readonly string[] KnownAgentExecutors = { "stub", "claude-cli", "docker-claude-cli", "docker-codex", "docker-opencode", "docker-claude-qwen", "codex" };
 
     /// <summary>
     /// Runs all pre-flight checks against the merged configuration and returns

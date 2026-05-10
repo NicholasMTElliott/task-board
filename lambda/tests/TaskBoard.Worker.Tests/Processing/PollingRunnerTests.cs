@@ -16,15 +16,16 @@ public class PollingRunnerTests
     private static readonly WorkflowConfig TestConfig = new WorkflowConfig(
         States: new Dictionary<string, WorkflowState>
         {
-            ["Ready for Design"] = new("Ready for Design", "se", "agent_run",
-                "Design it.",
+            ["Ready for Design"] = new("Ready for Design", null, "agent_run",
+                null,
                 new Dictionary<string, TransitionTarget>
                 {
                     ["IN_PROGRESS"] = TransitionTarget.ForColumn("Designing"),
                     ["COMPLETE"]    = TransitionTarget.ForColumn("Designed"),
                     ["ERROR"]       = TransitionTarget.ForColumn("Error"),
                 },
-                PipelineOrder: 1),
+                PipelineOrder: 1,
+                Steps: [new WorkflowStep("design", "se", TaskPrompt: "Design it.")]),
             ["Designing"] = new("Designing", null, "in_progress",
                 null, new Dictionary<string, TransitionTarget>()),
             ["Designed"] = new("Designed", null, "manual_gate",

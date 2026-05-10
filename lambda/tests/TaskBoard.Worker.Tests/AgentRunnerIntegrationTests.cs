@@ -236,15 +236,19 @@ public class AgentRunnerIntegrationTests : IDisposable
         return new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                [DesignListId] = new("Design", "senior_engineer", "agent_run",
-                    "You are working on the task {TaskName} ({TaskId}).  All project tasks are available in /.aiboard/tasks/ for context. Your job is to update ONLY the file for this task to add a detailed technical design approach. Include: architecture decisions, component interactions, data flow, edge cases, and implementation notes.  Do not modify any other file. You should include enough information for an unambiguous implementation. You may respond with questions where there is ambiguity, conflict, or mistakes; you should only proceed when you are fully confident you understand the request and the subject material fully.  It is always appropriate to say 'I do not understand', 'I need help', or 'This does not seem correct'.",
+                [DesignListId] = new("Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-review"),
                         ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
                         ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                     },
-                    GitBehavior: "discard"),
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "You are working on the task {TaskName} ({TaskId}).  All project tasks are available in /.aiboard/tasks/ for context. Your job is to update ONLY the file for this task to add a detailed technical design approach. Include: architecture decisions, component interactions, data flow, edge cases, and implementation notes.  Do not modify any other file. You should include enough information for an unambiguous implementation. You may respond with questions where there is ambiguity, conflict, or mistakes; you should only proceed when you are fully confident you understand the request and the subject material fully.  It is always appropriate to say 'I do not understand', 'I need help', or 'This does not seem correct'."),
+                    ]),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {

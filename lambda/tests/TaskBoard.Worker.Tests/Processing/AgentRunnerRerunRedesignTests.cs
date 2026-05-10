@@ -368,8 +368,8 @@ public class AgentRunnerRerunRedesignTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 [DesignListId] = new(
-                    "Design", "senior_engineer", "agent_run",
-                    "Work on {TaskName}",
+                    "Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
@@ -1264,8 +1264,8 @@ public class AgentRunnerRerunRedesignTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 [DesignListId] = new(
-                    "Design", "senior_engineer", "agent_run",
-                    "Work on {TaskName}",
+                    "Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
@@ -1379,8 +1379,8 @@ public class AgentRunnerRerunRedesignTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 [DesignListId] = new(
-                    "Design", "senior_engineer", "agent_run",
-                    "Work on {TaskName} ({TaskId})",
+                    "Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
@@ -1410,8 +1410,8 @@ public class AgentRunnerRerunRedesignTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 [DesignListId] = new(
-                    "Design", "senior_engineer", "agent_run",
-                    "Work on {TaskName} ({TaskId})",
+                    "Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
@@ -1459,8 +1459,8 @@ public class AgentRunnerRerunRedesignTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 [DesignListId] = new(
-                    "Design", "senior_engineer", "agent_run",
-                    "Work on {TaskName} ({TaskId})",
+                    "Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
@@ -1557,8 +1557,8 @@ public class AgentRunnerRerunRedesignTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 ["list-impl"] = new(
-                    "Implementation", "senior_engineer", "agent_run",
-                    "Work on {TaskName} ({TaskId})",
+                    "Implementation", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-tested"),
@@ -1567,6 +1567,10 @@ public class AgentRunnerRerunRedesignTests : IDisposable
                         ["GATE_FAIL"] = TransitionTarget.ForColumn("list-impl"),
                     },
                     GitBehavior: "commit_and_push",
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "Work on {TaskName} ({TaskId})"),
+                    ],
                     GateCheck: new GateCheckConfig(
                         Role: "gate_checker",
                         TaskPrompt: "Gate.\n\n## Body\n{TaskBody}\n\n## Diff\n{Diff}\n\n## Report\n{AgentReport}",
@@ -1595,8 +1599,8 @@ public class AgentRunnerRerunRedesignTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 [DesignListId] = new(
-                    "Design", "senior_engineer", "agent_run",
-                    "Work on {TaskName} ({TaskId})",
+                    "Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
@@ -1605,6 +1609,10 @@ public class AgentRunnerRerunRedesignTests : IDisposable
                         ["GATE_FAIL"] = TransitionTarget.ForColumn(DesignListId),
                     },
                     GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("create_design", "senior_engineer", TaskPrompt: "Work on {TaskName} ({TaskId})"),
+                    ],
                     GateCheck: new GateCheckConfig(
                         Role: "gate_checker",
                         TaskPrompt: "Gate.\n\n## Body\n{TaskBody}\n\n## Diff\n{Diff}\n\n## Report\n{AgentReport}")),
@@ -1628,8 +1636,8 @@ public class AgentRunnerRerunRedesignTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 [DesignListId] = new(
-                    "Design", "senior_engineer", "agent_run",
-                    "Work on {TaskName} ({TaskId})",
+                    "Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),

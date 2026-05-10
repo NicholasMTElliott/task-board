@@ -541,8 +541,8 @@ public class AgentRunnerGateCheckTests : IDisposable
             {
                 [listId] = new(
                     gitBehavior == "discard" ? "Design" : "Implementation",
-                    "senior_engineer", "agent_run",
-                    "Work on {TaskName} ({TaskId})",
+                    null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
@@ -551,6 +551,10 @@ public class AgentRunnerGateCheckTests : IDisposable
                         ["GATE_FAIL"] = TransitionTarget.ForColumn(listId),
                     },
                     GitBehavior: gitBehavior,
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "Work on {TaskName} ({TaskId})"),
+                    ],
                     GateCheck: new GateCheckConfig(
                         Role: "gate_checker",
                         TaskPrompt: "Gate check for '{TaskName}' ({TaskId}).\n\n## Task\n{TaskBody}\n\n## Changes\n{Diff}\n\n## Report\n{AgentReport}")),
@@ -575,8 +579,8 @@ public class AgentRunnerGateCheckTests : IDisposable
         return new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                [DesignListId] = new("Design", "senior_engineer", "agent_run",
-                    "Work on {TaskName} ({TaskId})",
+                [DesignListId] = new("Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
@@ -585,6 +589,10 @@ public class AgentRunnerGateCheckTests : IDisposable
                         // No GATE_FAIL transition
                     },
                     GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "Work on {TaskName} ({TaskId})"),
+                    ],
                     GateCheck: new GateCheckConfig(
                         Role: "gate_checker",
                         TaskPrompt: "Gate check.\n\n## Task\n{TaskBody}\n\n## Changes\n{Diff}\n\n## Report\n{AgentReport}")),
@@ -609,15 +617,19 @@ public class AgentRunnerGateCheckTests : IDisposable
         return new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                [DesignListId] = new("Design", "senior_engineer", "agent_run",
-                    "Work on {TaskName} ({TaskId})",
+                [DesignListId] = new("Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
                         ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
                         ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                     },
-                    GitBehavior: "discard"),
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "Work on {TaskName} ({TaskId})"),
+                    ]),
                 ["list-designed"] = new("Designed", null, "manual_gate", null,
                     new Dictionary<string, TransitionTarget>()),
                 ["list-questions"] = new("Questions", null, "holding", null,

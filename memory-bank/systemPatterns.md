@@ -55,7 +55,7 @@ States can define multiple sequential steps, each with its own role (and therefo
 
 If any step returns non-COMPLETE, the chain halts and the card transitions based on that outcome.
 
-Legacy single-step states (top-level `role` + `taskPrompt`) are auto-normalized to a one-element steps array via `WorkflowState.Normalise()`.
+**Legacy state-level shape removed (v0.0.25).** Pre-v0.0.25 a state could declare `role` + `taskPrompt`/`taskPromptFile` at the state level and the runtime auto-normalised it into a one-element `Steps` array. Both the auto-normalisation (`WorkflowState.Normalise`) and the runtime fallback paths are gone. The legacy fields remain on the `WorkflowState` record so they survive JSON deserialisation, but `WorkflowConfigValidator.Validate` now hard-errors on any state where `state.Role`/`state.TaskPrompt`/`state.TaskPromptFile` is non-null and on any `agent_run` state without a `Steps` array. `WorkflowConfig.Normalised()` is preserved as `=> this` (no-op pass-through) so legacy test callers keep compiling. The audit's legacy-Codex-state branch was deleted at the same time — its only condition (state.Role set, no Steps) is now unreachable for valid configs.
 
 **Deterministic re-run cache (rerun redesign Problem 1).** When a card returns from a Questions column for a re-run, the runtime decides per-step whether to skip the LLM call entirely based on a hash comparison. `RerunCacheGate.EvaluateAsync` is called from `AgentRunner` before each step (single-agent OR candidate-group). It hashes an input bundle — operator-authored description prefix, operator (non-`aiboard-log`) comments, prior steps' `section_output_hash` values, step config JSON (provider/model/candidates/slots/prompts), system prompt contents, task prompt contents — and looks up the most recent `COMPLETE` `step_result` row for `(card, state, step)` (`step_name = step.Name AND candidate_group_id IS NULL`). On match (input hash == prior `input_hash` AND current managed section hash == prior `section_output_hash`), the step is skipped: a synthetic `COMPLETE` `AgentResult` is constructed from the cached `output_summary`, and a `kind:cache_hit` aiboard-log comment is appended marking the decision. On miss the agent runs normally, and the new row carries an `input_hash` for future caches. The check is opt-in via DI (`RerunCacheGate` registered in Program.cs). Replaces the previous LLM-judgment "preamble" fast-path entirely (`RerunPreambleBuilder` was deleted in Round-4 of the redesign). Force re-run = edit any operator-side input the hash sees (description prefix, non-aiboard-log comments, managed-section content, workflow JSON, prompt files) — deleting an agent-generated `aiboard-log` comment does NOT invalidate the cache because those are filtered out of the hash via `TaskFileManager.ContainsAgentMarker`.
 
@@ -583,6 +583,35 @@ Schema:
 | `specialist_reviewer` | claude-sonnet-4-6 | On-demand specialist reviews requested by gate checks |
 | `senior_specialist_reviewer` | claude-opus-4-6 | High-stakes specialist reviews (legal, compliance, privacy) |
 | `merge_resolver` | claude-sonnet-4-6 | Merge conflict resolution |
+
+### Role-level fallback (v0.0.25+)
+
+A `WorkflowRole` may declare an ordered `Fallbacks` chain — list of `RoleFallback(Provider, Model?, ProviderParams?)` — that the runtime walks when the role's primary provider throws an exception classified to a `FailureReason` in the role's `FallbackOn` set. Default `FallbackOn` = `[RATE_LIMIT, INFRASTRUCTURE]`; `TIMEOUT` is operator opt-in; `AGENT_ERROR` is rejected by the validator (the agent's in-band ERROR verdict is a quality signal handled by candidate evaluation, not a runtime failure that should swap providers). Cancellation (`OperationCanceledException`) is never a fallback trigger.
+
+Wired into the **single-agent invocation sites only**: gate check, optional reviewer, simple-step main path (no slots/candidates), and the evaluator role inside `CandidateExecutor`. **NOT wired** into `CandidateExecutor.ExecuteSingleCandidateAsync` — candidates already have per-candidate `Retries` / `RetryOn` and slot-level chain mechanisms, and adding role-level fallback there would overlap.
+
+`AgentRunner.ExecuteWithSessionAndRoleFallbackAsync` walks the chain: attempt 0 uses the configured session if provider matches, attempts 1+ pass `session=null` so the existing `ExecuteWithSessionAsync` falls through to direct execution (sessions are tied to the primary provider's image; a fallback can't reuse them). The init-mirror, resource-pool lease, and provider-mismatch logic inside `ExecuteWithSessionAsync` all run unchanged per attempt. The wrapper returns `(AgentResult, SessionExecMs, ActualProvider, ActualModel)` so callers persist the fallback's identity to `step_result.provider/model` rather than the role's primary — this is what makes a future `v_role_fallback_rate` view possible from data already on disk.
+
+`CandidateExecutor.RunEvaluatorAsync` uses an analogous loop without sessions (the evaluator never had session reuse). The evaluator schema (`AgentSchemas.EvaluatorOutcomeSchema` vs the OpenAI variant) is recomputed per attempt via the new `SchemaForProvider(providerKey)` helper so a Claude → Codex fallback chain swaps the schema correctly. If the loop ends without setting a result (e.g. the final attempt threw a `RateLimitException` not in the catch's allow-list), the wrapper rethrows so the outer rate-limit handler restores the card to the trigger column.
+
+A fallback's `Model` defaults to the role's primary `Model` when omitted, and its `ProviderParams` overlay (rather than replace) the caller's primary params on key collision. Cross-provider fallbacks should pin a model that the fallback's executor accepts (Codex doesn't accept `claude-opus-4-6`); the existing `AuditCrossProviderCandidateModels` warning surfaces this case for candidates, and operators are expected to follow the same guidance for fallbacks.
+
+Validator (`WorkflowConfigValidator.ValidateRoleFallback`) errors on: empty fallback provider; unknown fallback provider (cross-checked against `StartupConfigValidator.KnownAgentExecutors`); `FallbackOn` containing `AGENT_ERROR`; `FallbackOn` set without any `Fallbacks` declared. `WorkflowConfig.GetRequiredProviders` and `GetAllReferencedProviders` both include fallback providers, so `--mode validation`'s Docker-image probe pass tests fallback images even when no role uses the fallback as its primary.
+
+Schema (additions to `WorkflowRole` JSON):
+```json
+"roles": {
+  "gate_checker": {
+    "provider": "docker-claude-cli",
+    "model": "claude-haiku-4-5-20251001",
+    "systemPromptFile": "prompts/gate_checker.md",
+    "fallbacks": [
+      { "provider": "docker-codex", "model": "gpt-5.4-mini" }
+    ],
+    "fallbackOn": ["RATE_LIMIT", "INFRASTRUCTURE"]
+  }
+}
+```
 
 ## Prompt File Structure
 

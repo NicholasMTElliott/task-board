@@ -105,8 +105,8 @@ public class AgentRunnerFailureReasonTests : IDisposable
         return new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                [TriggerColumn] = new("Ready for Design", "senior_engineer", "agent_run",
-                    "Design task {TaskName} ({TaskId})",
+                [TriggerColumn] = new("Ready for Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["IN_PROGRESS"] = TransitionTarget.ForColumn("Designing"),
@@ -114,7 +114,11 @@ public class AgentRunnerFailureReasonTests : IDisposable
                         ["NEEDS_INFO"] = TransitionTarget.ForColumn("Design Questions"),
                         ["ERROR"] = TransitionTarget.ForColumn("Error"),
                     },
-                    GitBehavior: "discard"),
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "Design task {TaskName} ({TaskId})"),
+                    ]),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {

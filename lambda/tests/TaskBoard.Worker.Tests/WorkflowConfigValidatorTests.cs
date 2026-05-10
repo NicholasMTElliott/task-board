@@ -11,12 +11,16 @@ public class WorkflowConfigValidatorTests
             States: new Dictionary<string, WorkflowState>
             {
                 ["list-req"] = new WorkflowState(
-                    "Requirements", "ba", "agent_run",
-                    "Analyze the card.",
+                    "Requirements", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-review"),
                         ["ERROR"]    = TransitionTarget.ForColumn("list-error"),
+                    },
+                    Steps: new List<WorkflowStep>
+                    {
+                        new("analyze", "ba", TaskPrompt: "Analyze the card."),
                     }),
                 ["list-review"] = new WorkflowState(
                     "Review", null, "manual_gate", null,
@@ -46,8 +50,12 @@ public class WorkflowConfigValidatorTests
             States: new Dictionary<string, WorkflowState>
             {
                 ["list-req"] = new WorkflowState(
-                    "Requirements", "nonexistent_role", "agent_run",
-                    "Analyze.", new Dictionary<string, TransitionTarget>())
+                    "Requirements", null, "agent_run",
+                    null, new Dictionary<string, TransitionTarget>(),
+                    Steps: new List<WorkflowStep>
+                    {
+                        new("analyze", "nonexistent_role", TaskPrompt: "Analyze."),
+                    })
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -122,9 +130,12 @@ public class WorkflowConfigValidatorTests
             States: new Dictionary<string, WorkflowState>
             {
                 ["list-req"] = new WorkflowState(
-                    "Requirements", "ba", "agent_run",
+                    "Requirements", null, "agent_run",
                     null, new Dictionary<string, TransitionTarget>(),
-                    TaskPromptFile: "prompts/states/requirements.md")
+                    Steps: new List<WorkflowStep>
+                    {
+                        new("analyze", "ba", TaskPromptFile: "prompts/states/requirements.md"),
+                    })
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -133,7 +144,8 @@ public class WorkflowConfigValidatorTests
 
         var errors = WorkflowConfigValidator.Validate(config);
 
-        Assert.DoesNotContain(errors, e => e.Contains("taskPrompt"));
+        Assert.DoesNotContain(errors, e =>
+            e.Contains("has no taskPrompt") || e.Contains("has no taskPromptFile"));
     }
 
     [Fact]
@@ -143,9 +155,14 @@ public class WorkflowConfigValidatorTests
             States: new Dictionary<string, WorkflowState>
             {
                 ["list-req"] = new WorkflowState(
-                    "Requirements", "ba", "agent_run",
-                    "Inline prompt", new Dictionary<string, TransitionTarget>(),
-                    TaskPromptFile: "prompts/states/requirements.md")
+                    "Requirements", null, "agent_run",
+                    null, new Dictionary<string, TransitionTarget>(),
+                    Steps: new List<WorkflowStep>
+                    {
+                        new("analyze", "ba",
+                            TaskPrompt: "Inline prompt",
+                            TaskPromptFile: "prompts/states/requirements.md"),
+                    })
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -154,7 +171,8 @@ public class WorkflowConfigValidatorTests
 
         var errors = WorkflowConfigValidator.Validate(config);
 
-        Assert.DoesNotContain(errors, e => e.Contains("taskPrompt"));
+        Assert.DoesNotContain(errors, e =>
+            e.Contains("has no taskPrompt") || e.Contains("has no taskPromptFile"));
     }
 
     [Fact]
@@ -205,8 +223,12 @@ public class WorkflowConfigValidatorTests
             States: new Dictionary<string, WorkflowState>
             {
                 ["list-req"] = new WorkflowState(
-                    "Requirements", "ba", "agent_run",
-                    "Analyze.", new Dictionary<string, TransitionTarget>())
+                    "Requirements", null, "agent_run",
+                    null, new Dictionary<string, TransitionTarget>(),
+                    Steps: new List<WorkflowStep>
+                    {
+                        new("analyze", "ba", TaskPrompt: "Analyze."),
+                    })
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -467,45 +489,251 @@ public class WorkflowConfigValidatorTests
         Assert.Contains(errors, e => e.Contains("taskPrompt") && e.Contains("design"));
     }
 
+    // ── Legacy state-level shape rejection (v0.0.25+) ──────────────────────
+    // Pre-v0.0.25 a state could declare `role` + `taskPrompt[File]` at the
+    // state level and the runtime auto-normalised it into a one-element
+    // `steps` array. The auto-conversion is gone; the validator now hard-
+    // errors on the legacy shape. These tests pin the new behavior.
+
     [Fact]
-    public void Normalise_LegacyState_CreatesStepsArray()
+    public void LegacyStateLevelRole_IsRejected()
     {
-        var raw = new WorkflowState("Design", "senior_engineer", "agent_run",
-            "Design it.", new Dictionary<string, TransitionTarget>());
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Design"] = new WorkflowState(
+                    "Design", "senior_engineer", "agent_run",
+                    null, new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = new WorkflowRole(
+                    "claude-opus-4-6", "prompt", new List<string> { "Design" }),
+            });
 
-        var normalised = WorkflowState.Normalise(raw);
+        var errors = WorkflowConfigValidator.Validate(config);
 
-        Assert.NotNull(normalised.Steps);
-        Assert.Single(normalised.Steps);
-        Assert.Equal("senior_engineer", normalised.Steps[0].Name);
-        Assert.Equal("senior_engineer", normalised.Steps[0].Role);
-        Assert.Equal("Design it.", normalised.Steps[0].TaskPrompt);
+        Assert.Contains(errors, e => e.Contains("top-level 'role' field") && e.Contains("v0.0.25"));
     }
 
     [Fact]
-    public void Normalise_StateWithSteps_ReturnsUnchanged()
+    public void LegacyStateLevelTaskPrompt_IsRejected()
     {
-        var steps = new List<WorkflowStep>
-        {
-            new("step1", "ba", TaskPrompt: "Do it."),
-        };
-        var raw = new WorkflowState("Design", null, "agent_run",
-            null, new Dictionary<string, TransitionTarget>(), Steps: steps);
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Design"] = new WorkflowState(
+                    "Design", null, "agent_run",
+                    "Design it.", new Dictionary<string, TransitionTarget>(),
+                    Steps: new List<WorkflowStep>
+                    {
+                        new("create_design", "senior_engineer", TaskPrompt: "x"),
+                    }),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = new WorkflowRole(
+                    "claude-opus-4-6", "prompt", new List<string> { "Design" }),
+            });
 
-        var normalised = WorkflowState.Normalise(raw);
+        var errors = WorkflowConfigValidator.Validate(config);
 
-        Assert.Same(raw, normalised);
+        Assert.Contains(errors, e => e.Contains("top-level 'taskPrompt' field"));
     }
 
     [Fact]
-    public void Normalise_NonAgentState_ReturnsUnchanged()
+    public void LegacyStateLevelTaskPromptFile_IsRejected()
     {
-        var raw = new WorkflowState("Review", null, "manual_gate",
-            null, new Dictionary<string, TransitionTarget>());
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Design"] = new WorkflowState(
+                    "Design", null, "agent_run",
+                    null, new Dictionary<string, TransitionTarget>(),
+                    TaskPromptFile: "prompts/design.md",
+                    Steps: new List<WorkflowStep>
+                    {
+                        new("create_design", "senior_engineer", TaskPrompt: "x"),
+                    }),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = new WorkflowRole(
+                    "claude-opus-4-6", "prompt", new List<string> { "Design" }),
+            });
 
-        var normalised = WorkflowState.Normalise(raw);
+        var errors = WorkflowConfigValidator.Validate(config);
 
-        Assert.Same(raw, normalised);
+        Assert.Contains(errors, e => e.Contains("top-level 'taskPromptFile' field"));
+    }
+
+    [Fact]
+    public void AgentRunStateWithoutSteps_IsRejected()
+    {
+        // Pre-v0.0.25 an agent_run state could omit both `steps` AND
+        // `role`/`taskPrompt` and validator just complained about missing
+        // legacy fields. Now: every agent_run state needs a `steps` array.
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Design"] = new WorkflowState(
+                    "Design", null, "agent_run",
+                    null, new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = new WorkflowRole(
+                    "claude-opus-4-6", "prompt", new List<string> { "Design" }),
+            });
+
+        var errors = WorkflowConfigValidator.Validate(config);
+
+        Assert.Contains(errors, e =>
+            e.Contains("agent_run") && e.Contains("no 'steps' array"));
+    }
+
+    // ── Role fallback validation (v0.0.25+) ────────────────────────────────
+    // Roles can declare an ordered Fallbacks chain that fires on RATE_LIMIT
+    // or INFRASTRUCTURE (default) failures from the primary provider.
+
+    private static WorkflowConfig MakeConfigWithRole(WorkflowRole role)
+    {
+        return new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["Design"] = new WorkflowState(
+                    "Design", null, "agent_run",
+                    null, new Dictionary<string, TransitionTarget>(),
+                    Steps: new List<WorkflowStep>
+                    {
+                        new("design", "senior_engineer", TaskPrompt: "do it"),
+                    }),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = role,
+            });
+    }
+
+    [Fact]
+    public void Role_FallbacksWithKnownProviders_PassesValidation()
+    {
+        var role = new WorkflowRole(
+            "claude-opus-4-6", "prompt", new List<string> { "Design" },
+            Provider: "docker-claude-cli",
+            Fallbacks: new List<RoleFallback>
+            {
+                new("docker-codex", Model: "gpt-5.5"),
+                new("docker-opencode", Model: "qwen3.6-35b-a3b"),
+            });
+
+        var errors = WorkflowConfigValidator.Validate(MakeConfigWithRole(role));
+
+        Assert.DoesNotContain(errors, e => e.Contains("fallback"));
+    }
+
+    [Fact]
+    public void Role_FallbackWithEmptyProvider_ReportsError()
+    {
+        var role = new WorkflowRole(
+            "claude-opus-4-6", "prompt", new List<string> { "Design" },
+            Provider: "docker-claude-cli",
+            Fallbacks: new List<RoleFallback> { new("") });
+
+        var errors = WorkflowConfigValidator.Validate(MakeConfigWithRole(role));
+
+        Assert.Contains(errors, e => e.Contains("fallback") && e.Contains("empty provider"));
+    }
+
+    [Fact]
+    public void Role_FallbackWithUnknownProvider_ReportsError()
+    {
+        // Operator typo'd 'docker-codexx' → catch at startup, not 5 hours into
+        // a polling run when the fallback first fires.
+        var role = new WorkflowRole(
+            "claude-opus-4-6", "prompt", new List<string> { "Design" },
+            Provider: "docker-claude-cli",
+            Fallbacks: new List<RoleFallback> { new("docker-codexx") });
+
+        var errors = WorkflowConfigValidator.Validate(MakeConfigWithRole(role));
+
+        Assert.Contains(errors, e =>
+            e.Contains("docker-codexx") && e.Contains("unknown provider"));
+    }
+
+    [Fact]
+    public void Role_FallbackOnContainsAgentError_ReportsError()
+    {
+        // AGENT_ERROR is the agent's in-band quality verdict, not a runtime
+        // failure. Fallback would mask quality issues; validator rejects.
+        var role = new WorkflowRole(
+            "claude-opus-4-6", "prompt", new List<string> { "Design" },
+            Provider: "docker-claude-cli",
+            Fallbacks: new List<RoleFallback> { new("docker-codex", "gpt-5.5") },
+            FallbackOn: new List<FailureReason> { FailureReason.AGENT_ERROR });
+
+        var errors = WorkflowConfigValidator.Validate(MakeConfigWithRole(role));
+
+        Assert.Contains(errors, e =>
+            e.Contains("AGENT_ERROR") && e.Contains("not a runtime failure"));
+    }
+
+    [Fact]
+    public void Role_FallbackOnSetWithNoFallbacks_ReportsError()
+    {
+        // Misconfiguration: set FallbackOn without any fallbacks. The set has
+        // no behaviour. Must error so operators catch the missing chain.
+        var role = new WorkflowRole(
+            "claude-opus-4-6", "prompt", new List<string> { "Design" },
+            Provider: "docker-claude-cli",
+            FallbackOn: new List<FailureReason> { FailureReason.RATE_LIMIT });
+
+        var errors = WorkflowConfigValidator.Validate(MakeConfigWithRole(role));
+
+        Assert.Contains(errors, e =>
+            e.Contains("fallbackOn") && e.Contains("no fallbacks declared"));
+    }
+
+    [Fact]
+    public void Role_FallbackOnTimeout_PassesValidation()
+    {
+        // Operator opt-in to TIMEOUT triggering fallback is allowed.
+        var role = new WorkflowRole(
+            "claude-opus-4-6", "prompt", new List<string> { "Design" },
+            Provider: "docker-claude-cli",
+            Fallbacks: new List<RoleFallback> { new("docker-codex", "gpt-5.5") },
+            FallbackOn: new List<FailureReason>
+            {
+                FailureReason.RATE_LIMIT,
+                FailureReason.INFRASTRUCTURE,
+                FailureReason.TIMEOUT,
+            });
+
+        var errors = WorkflowConfigValidator.Validate(MakeConfigWithRole(role));
+
+        Assert.DoesNotContain(errors, e => e.Contains("fallback"));
+    }
+
+    [Fact]
+    public void Role_FallbackProvidersAreEnumeratedByGetAllReferenced()
+    {
+        // GetAllReferencedProviders must surface fallback providers so
+        // --mode validation's image-probe pass tests their Docker images
+        // even when the primary doesn't reference them.
+        var config = MakeConfigWithRole(new WorkflowRole(
+            "claude-opus-4-6", "prompt", new List<string> { "Design" },
+            Provider: "docker-claude-cli",
+            Fallbacks: new List<RoleFallback>
+            {
+                new("docker-codex", Model: "gpt-5.5"),
+                new("docker-claude-qwen", Model: "qwen3.6-35b-a3b-think"),
+            }));
+
+        var providers = config.GetAllReferencedProviders();
+
+        Assert.Contains("docker-claude-cli", providers);
+        Assert.Contains("docker-codex", providers);
+        Assert.Contains("docker-claude-qwen", providers);
     }
 
     // ── Gate check validation tests ────────────────────────────────
@@ -1497,12 +1725,16 @@ public class WorkflowConfigValidatorAllowedChildrenTests
             States: new Dictionary<string, WorkflowState>
             {
                 ["list-req"] = new WorkflowState(
-                    "Requirements", "ba", "agent_run",
-                    "Analyze the card.",
+                    "Requirements", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-review"),
                         ["ERROR"]    = TransitionTarget.ForColumn("list-error"),
+                    },
+                    Steps: new List<WorkflowStep>
+                    {
+                        new("analyze", "ba", TaskPrompt: "Analyze the card."),
                     }),
                 ["list-review"] = new WorkflowState(
                     "Review", null, "manual_gate", null,
@@ -2097,31 +2329,9 @@ public class WorkflowConfigValidatorAllowedChildrenTests
         Assert.Empty(errors);
     }
 
-    [Fact]
-    public void Audit_LegacySingleRoleState_WithCodex_WarnsOnMissingSandbox()
-    {
-        // Legacy shape: state.Role set, no Steps array. Audit should still catch this
-        // before Normalise() runs.
-        var cfg = new WorkflowConfig(
-            States: new Dictionary<string, WorkflowState>
-            {
-                ["impl"] = new("Implementing", "codex_role", "agent_run", "prompt",
-                    new Dictionary<string, TransitionTarget>
-                    {
-                        ["COMPLETE"] = TransitionTarget.ForColumn("impl"),
-                        ["ERROR"]    = TransitionTarget.ForColumn("impl"),
-                    }),
-            },
-            Roles: new Dictionary<string, WorkflowRole>
-            {
-                ["codex_role"] = new("gpt-4.1", "sys", ["x"], Provider: "codex"),
-            });
-
-        var warnings = WorkflowConfigValidator.Audit(cfg);
-
-        Assert.Contains(warnings, w =>
-            w.Contains("Codex role 'codex_role'") && w.Contains("no sandbox policy"));
-    }
+    // Removed in v0.0.25: the legacy state-level shape (`state.Role` + `state.TaskPrompt`
+    // without a Steps array) is now a hard validator error, so the audit branch
+    // that warned on it is unreachable and was deleted alongside this test.
 
     // ── Audit: cross-provider candidate model leak ────────────────────────────
 

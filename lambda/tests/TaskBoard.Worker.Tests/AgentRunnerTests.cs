@@ -290,15 +290,19 @@ public class AgentRunnerTests : IDisposable
         var configWithInProgress = new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                [DesignListId] = new("Ready for Design", "senior_engineer", "agent_run",
-                    "Design task {TaskName} ({TaskId})",
+                [DesignListId] = new("Ready for Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["IN_PROGRESS"] = TransitionTarget.ForColumn("list-designing"),
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
                         ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
                         ["ERROR"] = TransitionTarget.ForColumn("list-error"),
-                    }),
+                    },
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "Design task {TaskName} ({TaskId})"),
+                    ]),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -696,15 +700,19 @@ public class AgentRunnerTests : IDisposable
         return new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                [DesignListId] = new("Design", "senior_engineer", "agent_run",
-                    "Design task {TaskName} ({TaskId})",
+                [DesignListId] = new("Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-review"),
                         ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
                         ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                     },
-                    GitBehavior: "discard"),
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "Design task {TaskName} ({TaskId})"),
+                    ]),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {
@@ -731,15 +739,19 @@ public class AgentRunnerTests : IDisposable
         return new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                [ImplListId] = new("Ready for Implementation", "senior_engineer", "agent_run",
-                    "Implement task {TaskName} ({TaskId})",
+                [ImplListId] = new("Ready for Implementation", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-review"),
                         ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
                         ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                     },
-                    GitBehavior: "commit_and_push"),
+                    GitBehavior: "commit_and_push",
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "Implement task {TaskName} ({TaskId})"),
+                    ]),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {

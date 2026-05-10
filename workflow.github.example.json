@@ -2,9 +2,7 @@
   "states": {
     "Backlog": {
       "name": "Backlog",
-      "role": null,
       "gateType": "manual_entry",
-      "taskPrompt": null,
       "includeInAgentContext": false,
       "transitions": {}
     },
@@ -106,7 +104,9 @@
           "taskPromptFile": "prompts/optional-steps/design/legal_regulatory_review.md",
           "description": "Reviews legal and regulatory implications: data protection (GDPR/CCPA), terms of service, licensing, and consent flows.",
           "triggers": "Features handling PII, user consent, data retention/deletion, third-party data sharing, or regulated industries.",
-          "providerParams": { "effort": "max" }
+          "providerParams": {
+            "effort": "max"
+          }
         },
         {
           "name": "migration_compatibility_review",
@@ -133,8 +133,15 @@
       "transitions": {
         "IN_PROGRESS": "Designing",
         "COMPLETE": [
-          { "type": "moveToColumn", "value": "Designed" },
-          { "type": "setField", "field": "Estimate", "value": "{{estimation}}" }
+          {
+            "type": "moveToColumn",
+            "value": "Designed"
+          },
+          {
+            "type": "setField",
+            "field": "Estimate",
+            "value": "{{estimation}}"
+          }
         ],
         "NEEDS_INFO": "Design Questions",
         "ERROR": "Error",
@@ -144,25 +151,19 @@
     },
     "Designing": {
       "name": "Designing",
-      "role": null,
       "gateType": "in_progress",
-      "taskPrompt": null,
       "includeInAgentContext": false,
       "transitions": {}
     },
     "Design Questions": {
       "name": "Design Questions",
-      "role": null,
       "gateType": "holding",
-      "taskPrompt": null,
       "includeInAgentContext": false,
       "transitions": {}
     },
     "Designed": {
       "name": "Designed",
-      "role": null,
       "gateType": "manual_gate",
-      "taskPrompt": null,
       "includeInAgentContext": true,
       "transitions": {}
     },
@@ -199,7 +200,9 @@
           "taskPromptFile": "prompts/optional-steps/impl/security_audit.md",
           "description": "Reviews code for security vulnerabilities, injection risks, auth flaws, and data exposure.",
           "triggers": "Changes to authentication, authorization, API endpoints, user input processing, data serialization, or cryptography.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "soc2_compliance_audit",
@@ -207,7 +210,9 @@
           "taskPromptFile": "prompts/optional-steps/impl/soc2_compliance_audit.md",
           "description": "Thorough SOC2 compliance audit: audit logging, data retention, access controls, encryption.",
           "triggers": "Changes to audit logging, data retention, access controls, encryption, or explicit compliance requirements.",
-          "providerParams": { "effort": "max" }
+          "providerParams": {
+            "effort": "max"
+          }
         },
         {
           "name": "infrastructure_code_review",
@@ -215,7 +220,9 @@
           "taskPromptFile": "prompts/optional-steps/impl/infrastructure_code_review.md",
           "description": "Reviews IaC, deployment scripts, CI/CD changes, container configs, and environment management.",
           "triggers": "Changes to Dockerfiles, CI/CD workflows, Terraform/CDK, environment variables, or deployment scripts.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "performance_review",
@@ -223,7 +230,9 @@
           "taskPromptFile": "prompts/optional-steps/impl/performance_review.md",
           "description": "Reviews for N+1 queries, blocking I/O, missing indexes, and algorithmic complexity.",
           "triggers": "Database query changes, loop-heavy processing, high-traffic paths, or cache logic.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "accessibility_audit",
@@ -231,7 +240,9 @@
           "taskPromptFile": "prompts/optional-steps/impl/accessibility_audit.md",
           "description": "WCAG 2.1 AA compliance: semantic HTML, ARIA, keyboard nav, focus, contrast.",
           "triggers": "UI component changes, forms, modals, navigation changes, or dynamic content updates.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "api_contract_review",
@@ -239,7 +250,9 @@
           "taskPromptFile": "prompts/optional-steps/impl/api_contract_review.md",
           "description": "Reviews API changes for backward compatibility, error consistency, and client impact.",
           "triggers": "Modified API endpoints, changed request/response schemas, new error codes, or versioning changes.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "database_review",
@@ -247,7 +260,9 @@
           "taskPromptFile": "prompts/optional-steps/impl/database_review.md",
           "description": "Reviews schema changes, migration safety, query performance, and data integrity.",
           "triggers": "New/altered tables, migration scripts, complex queries, transaction logic, or foreign key changes.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "dependency_audit",
@@ -255,7 +270,9 @@
           "taskPromptFile": "prompts/optional-steps/impl/dependency_audit.md",
           "description": "Reviews third-party dependencies: known vulnerabilities, license compatibility, and supply chain risk.",
           "triggers": "New package additions, version upgrades, or changes to dependency resolution.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "ui_visual_review",
@@ -263,7 +280,9 @@
           "taskPromptFile": "prompts/optional-steps/impl/ui_visual_review.md",
           "description": "Reviews visual implementation: design system adherence, responsive layout, theming, spacing/typography consistency.",
           "triggers": "UI component implementation, CSS/style changes, theme modifications, or responsive layout work.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "error_handling_review",
@@ -271,7 +290,9 @@
           "taskPromptFile": "prompts/optional-steps/impl/error_handling_review.md",
           "description": "Reviews error handling completeness: exception coverage, user-facing errors, retry logic, and graceful degradation.",
           "triggers": "New error paths, external service calls, user input validation, or changes to error reporting.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "internationalization_review",
@@ -279,7 +300,9 @@
           "taskPromptFile": "prompts/optional-steps/impl/internationalization_review.md",
           "description": "Reviews i18n readiness: string externalization, locale handling, date/number formatting, RTL support.",
           "triggers": "User-facing text additions, date/time handling, currency/number formatting, or locale-dependent logic.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "privacy_review",
@@ -287,7 +310,9 @@
           "taskPromptFile": "prompts/optional-steps/impl/privacy_review.md",
           "description": "Reviews data privacy practices: PII handling, data minimization, consent enforcement, anonymization.",
           "triggers": "Changes to user data collection, storage, processing, sharing, or deletion flows.",
-          "providerParams": { "effort": "max" }
+          "providerParams": {
+            "effort": "max"
+          }
         }
       ],
       "transitions": {
@@ -300,17 +325,13 @@
     },
     "Implementing": {
       "name": "Implementing",
-      "role": null,
       "gateType": "in_progress",
-      "taskPrompt": null,
       "includeInAgentContext": true,
       "transitions": {}
     },
     "Implementation Questions": {
       "name": "Implementation Questions",
-      "role": null,
       "gateType": "holding",
-      "taskPrompt": null,
       "includeInAgentContext": true,
       "transitions": {}
     },
@@ -346,7 +367,9 @@
           "taskPromptFile": "prompts/optional-steps/test/security_test_review.md",
           "description": "Reviews security testing adequacy: auth test coverage, authorization boundary tests, injection testing.",
           "triggers": "Implementation included auth, input handling, data exposure, or API security changes.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "performance_test_review",
@@ -354,7 +377,9 @@
           "taskPromptFile": "prompts/optional-steps/test/performance_test_review.md",
           "description": "Reviews performance testing coverage: load tests, latency benchmarks, resource utilization tests.",
           "triggers": "Implementation included high-traffic paths, database-heavy operations, or performance-sensitive changes.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "accessibility_test_review",
@@ -362,7 +387,9 @@
           "taskPromptFile": "prompts/optional-steps/test/accessibility_test_review.md",
           "description": "Reviews accessibility testing completeness: automated a11y scans, keyboard navigation, WCAG checkpoint verification.",
           "triggers": "Implementation included UI changes, interactive components, or navigation modifications.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "integration_test_review",
@@ -370,7 +397,9 @@
           "taskPromptFile": "prompts/optional-steps/test/integration_test_review.md",
           "description": "Reviews integration and E2E test coverage: external service tests, cross-component flows, failure scenarios.",
           "triggers": "Implementation included external API calls, multi-component interactions, or event-driven flows.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "edge_case_review",
@@ -378,7 +407,9 @@
           "taskPromptFile": "prompts/optional-steps/test/edge_case_review.md",
           "description": "Reviews boundary condition and edge case coverage: null/empty inputs, overflow, concurrency, race conditions.",
           "triggers": "Implementation included input validation, numeric operations, concurrent access, or state machine logic.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "regression_risk_review",
@@ -386,7 +417,9 @@
           "taskPromptFile": "prompts/optional-steps/test/regression_risk_review.md",
           "description": "Assesses regression risk: identifies areas impacted by changes that may lack test coverage.",
           "triggers": "Implementation touched shared utilities, core abstractions, or widely-referenced modules.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "data_integrity_test_review",
@@ -394,7 +427,9 @@
           "taskPromptFile": "prompts/optional-steps/test/data_integrity_test_review.md",
           "description": "Reviews data validation and consistency testing: constraint enforcement, referential integrity, migration rollback.",
           "triggers": "Implementation included schema changes, data migration, or data transformation logic.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "compliance_test_review",
@@ -402,7 +437,9 @@
           "taskPromptFile": "prompts/optional-steps/test/compliance_test_review.md",
           "description": "Reviews compliance verification testing: audit log tests, data retention verification, consent flow tests.",
           "triggers": "Implementation included compliance-related changes (audit logging, data retention, access controls).",
-          "providerParams": { "effort": "max" }
+          "providerParams": {
+            "effort": "max"
+          }
         },
         {
           "name": "disaster_recovery_review",
@@ -410,7 +447,9 @@
           "taskPromptFile": "prompts/optional-steps/test/disaster_recovery_review.md",
           "description": "Reviews failure mode testing: service outage handling, data recovery procedures, failover verification.",
           "triggers": "Implementation included infrastructure changes, data storage modifications, or high-availability features.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         },
         {
           "name": "monitoring_alerting_review",
@@ -418,7 +457,9 @@
           "taskPromptFile": "prompts/optional-steps/test/monitoring_alerting_review.md",
           "description": "Reviews observability testing: log output verification, metric emission tests, alert threshold validation.",
           "triggers": "Implementation included new logging, metrics, alerting rules, or monitoring integration.",
-          "providerParams": { "effort": "medium" }
+          "providerParams": {
+            "effort": "medium"
+          }
         }
       ],
       "transitions": {
@@ -432,17 +473,13 @@
     },
     "Testing": {
       "name": "Testing",
-      "role": null,
       "gateType": "in_progress",
-      "taskPrompt": null,
       "includeInAgentContext": true,
       "transitions": {}
     },
     "Tested": {
       "name": "Tested",
-      "role": null,
       "gateType": "manual_gate",
-      "taskPrompt": null,
       "includeInAgentContext": true,
       "transitions": {}
     },
@@ -463,25 +500,19 @@
     },
     "Merging": {
       "name": "Merging",
-      "role": null,
       "gateType": "in_progress",
-      "taskPrompt": null,
       "includeInAgentContext": false,
       "transitions": {}
     },
     "Done": {
       "name": "Done",
-      "role": null,
       "gateType": "terminal",
-      "taskPrompt": null,
       "includeInAgentContext": false,
       "transitions": {}
     },
     "Error": {
       "name": "Error",
-      "role": null,
       "gateType": "holding",
-      "taskPrompt": null,
       "includeInAgentContext": false,
       "transitions": {}
     }
@@ -490,17 +521,29 @@
     "senior_engineer": {
       "model": "claude-opus-4-6",
       "systemPromptFile": "prompts/senior_engineer.md",
-      "sections": ["Design Review Summary", "Technical Design", "Decisions", "Implementation"]
+      "sections": [
+        "Design Review Summary",
+        "Technical Design",
+        "Decisions",
+        "Implementation"
+      ]
     },
     "qa": {
       "model": "claude-opus-4-6",
       "systemPromptFile": "prompts/qa.md",
-      "sections": ["Test Plan", "Test Results"]
+      "sections": [
+        "Test Plan",
+        "Test Results"
+      ]
     },
     "implementer": {
       "model": "claude-sonnet-4-6",
       "systemPromptFile": "prompts/senior_engineer.md",
-      "sections": ["Technical Design", "Decisions", "Implementation"]
+      "sections": [
+        "Technical Design",
+        "Decisions",
+        "Implementation"
+      ]
     },
     "code_reviewer": {
       "model": "claude-sonnet-4-6",
@@ -546,19 +589,30 @@
   },
   "polling": {
     "priorityFieldName": "priority",
-    "priorityOrder": ["P0", "P1", "P2"]
+    "priorityOrder": [
+      "P0",
+      "P1",
+      "P2"
+    ]
   },
   "estimation": {
     "calibrationTicketId": "34",
     "calibrationSize": 1,
     "fieldName": "Estimate",
-    "scale": [1, 2, 4, 8]
+    "scale": [
+      1,
+      2,
+      4,
+      8
+    ]
   },
   "cardTypes": {
     "story": {
       "name": "User Story",
       "labelPrefix": "type",
-      "allowedChildren": ["task"]
+      "allowedChildren": [
+        "task"
+      ]
     },
     "task": {
       "name": "Task",

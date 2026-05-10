@@ -97,8 +97,8 @@ public class AgentRunnerRateLimitTests : IDisposable
         return new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                [TriggerColumn] = new("Ready for Design", "senior_engineer", "agent_run",
-                    "Design task {TaskName} ({TaskId})",
+                [TriggerColumn] = new("Ready for Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["IN_PROGRESS"] = TransitionTarget.ForColumn("Designing"),
@@ -106,7 +106,11 @@ public class AgentRunnerRateLimitTests : IDisposable
                         ["NEEDS_INFO"] = TransitionTarget.ForColumn("Design Questions"),
                         ["ERROR"] = TransitionTarget.ForColumn("Error"),
                     },
-                    GitBehavior: gitBehavior),
+                    GitBehavior: gitBehavior,
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "Design task {TaskName} ({TaskId})"),
+                    ]),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {

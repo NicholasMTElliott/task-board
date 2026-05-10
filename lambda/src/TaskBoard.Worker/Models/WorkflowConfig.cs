@@ -225,14 +225,14 @@ public sealed record WorkflowConfig(
             foreach (var step in state.Steps)
             {
                 if (Roles.TryGetValue(step.Role, out var role))
-                    providers.Add(role.Provider);
+                    AddRoleProviders(role, providers);
             }
         }
 
         if (state.GateCheck is not null
             && Roles.TryGetValue(state.GateCheck.Role, out var gateRole))
         {
-            providers.Add(gateRole.Provider);
+            AddRoleProviders(gateRole, providers);
         }
 
         if (state.OptionalSteps is { Count: > 0 })
@@ -240,11 +240,26 @@ public sealed record WorkflowConfig(
             foreach (var optStep in state.OptionalSteps)
             {
                 if (Roles.TryGetValue(optStep.Role, out var optRole))
-                    providers.Add(optRole.Provider);
+                    AddRoleProviders(optRole, providers);
             }
         }
 
         return providers;
+    }
+
+    private static void AddRoleProviders(WorkflowRole role, HashSet<string> sink)
+    {
+        if (!string.IsNullOrWhiteSpace(role.Provider))
+            sink.Add(role.Provider);
+
+        if (role.Fallbacks is { Count: > 0 })
+        {
+            foreach (var fb in role.Fallbacks)
+            {
+                if (!string.IsNullOrWhiteSpace(fb.Provider))
+                    sink.Add(fb.Provider);
+            }
+        }
     }
 
     /// <summary>
@@ -263,8 +278,7 @@ public sealed record WorkflowConfig(
 
         foreach (var role in Roles.Values)
         {
-            if (!string.IsNullOrWhiteSpace(role.Provider))
-                providers.Add(role.Provider);
+            AddRoleProviders(role, providers);
         }
 
         foreach (var state in States.Values)
@@ -289,15 +303,13 @@ public sealed record WorkflowConfig(
     }
 
     /// <summary>
-    /// Returns a new config with all states normalised (legacy single-step → steps array).
+    /// Pass-through. Pre-v0.0.25 this auto-converted legacy state-level
+    /// <c>role</c> + <c>taskPrompt</c> into a one-element <c>steps</c> array.
+    /// The legacy shape is now rejected by <see cref="WorkflowConfigValidator"/>
+    /// at startup, so the conversion is unnecessary. The method is preserved
+    /// as a no-op so existing callers keep compiling.
     /// </summary>
-    public WorkflowConfig Normalised()
-    {
-        var normalisedStates = States.ToDictionary(
-            kvp => kvp.Key,
-            kvp => WorkflowState.Normalise(kvp.Value));
-        return this with { States = normalisedStates };
-    }
+    public WorkflowConfig Normalised() => this;
 }
 
 public sealed record OptionalStepDefinition(
@@ -332,31 +344,7 @@ public sealed record WorkflowState(
     GateCheckConfig? GateCheck = null,
     List<OptionalStepDefinition>? OptionalSteps = null,
     List<CardFilter>? Filters = null,
-    string? Column = null)
-{
-    /// <summary>
-    /// Normalises a legacy single-step state (top-level Role + TaskPrompt) into
-    /// the canonical steps-based model. States that already have Steps or are not
-    /// agent_run are returned unchanged.
-    /// </summary>
-    public static WorkflowState Normalise(WorkflowState raw)
-    {
-        if (raw.Steps is { Count: > 0 })
-            return raw;
-
-        if (raw.Role is null || (raw.TaskPrompt is null && raw.TaskPromptFile is null))
-            return raw; // not an agent_run state; leave as-is
-
-        var stepName = raw.Role;
-        return raw with
-        {
-            Steps =
-            [
-                new WorkflowStep(stepName, raw.Role, raw.TaskPrompt, raw.TaskPromptFile)
-            ]
-        };
-    }
-}
+    string? Column = null);
 
 public sealed record WorkflowStep(
     string Name,
@@ -487,12 +475,51 @@ public enum EvaluatorScoring
     WinnerWithScores,
 }
 
+/// <summary>
+/// Optional fallback provider for a <see cref="WorkflowRole"/>. When the role's
+/// primary <see cref="WorkflowRole.Provider"/> throws an executor-side exception
+/// classified to a <see cref="FailureReason"/> in the role's
+/// <see cref="WorkflowRole.FallbackOn"/> list (defaults: <c>RATE_LIMIT</c> +
+/// <c>INFRASTRUCTURE</c>), the runtime walks the role's <see cref="WorkflowRole.Fallbacks"/>
+/// in order and tries each one before propagating the failure.
+/// <para>
+/// Fallback applies to single-agent invocation sites only — gates, evaluators,
+/// optional reviewers, and simple steps without slots/candidates. Candidate
+/// invocations inside a slot already have their own per-candidate
+/// <see cref="CandidateOverride.Retries"/> and slot-level chain mechanisms.
+/// </para>
+/// <para>
+/// <see cref="Model"/> is optional and defaults to the role's
+/// <see cref="WorkflowRole.Model"/> when omitted — but for cross-provider
+/// fallbacks (e.g. Claude → Codex) you almost always want to pin a model that
+/// the fallback's executor accepts. <see cref="ProviderParams"/> overlay the
+/// state's <c>ProviderParams</c> for this fallback only.
+/// </para>
+/// </summary>
+public sealed record RoleFallback(
+    string Provider,
+    string? Model = null,
+    Dictionary<string, string>? ProviderParams = null);
+
 public sealed record WorkflowRole(
     string Model,
     string SystemPrompt,
     List<string> Sections,
     string? SystemPromptFile = null,
-    string Provider = "claude-cli");
+    string Provider = "claude-cli",
+    /// <summary>
+    /// Ordered fallback chain. Tried in order when the primary provider throws
+    /// an exception classified to a <see cref="FailureReason"/> listed in
+    /// <see cref="FallbackOn"/>. Empty/null = no fallback (pre-feature behaviour).
+    /// </summary>
+    List<RoleFallback>? Fallbacks = null,
+    /// <summary>
+    /// Failure categories that trigger fallback. <c>null</c> = the default set
+    /// <c>[RATE_LIMIT, INFRASTRUCTURE]</c>. <c>AGENT_ERROR</c> is rejected by
+    /// the validator (an agent's in-band ERROR verdict is a quality signal,
+    /// not a runtime failure — different mechanism).
+    /// </summary>
+    List<FailureReason>? FallbackOn = null);
 
 public sealed record PollingConfig(
     string? PriorityFieldName = null,

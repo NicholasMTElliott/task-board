@@ -181,15 +181,19 @@ public class AgentRunnerDesignTests : IDisposable
         return new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                [DesignListId] = new("Design", "senior_engineer", "agent_run",
-                    "You are working on the task {TaskName} ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context. Your job is to update ONLY the file for this task to add a detailed technical design approach.",
+                [DesignListId] = new("Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-review"),
                         ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
                         ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                     },
-                    GitBehavior: "discard"),
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("senior_engineer", "senior_engineer", TaskPrompt: "You are working on the task {TaskName} ({TaskId}). All project tasks are available in /.aiboard/tasks/ for context. Your job is to update ONLY the file for this task to add a detailed technical design approach."),
+                    ]),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {

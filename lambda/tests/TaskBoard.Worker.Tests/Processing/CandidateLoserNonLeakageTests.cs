@@ -500,8 +500,8 @@ public class CandidateLoserNonLeakageTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 ["list-design"] = new(
-                    "Design", "senior_engineer", "agent_run",
-                    "Work on {TaskName}",
+                    "Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
@@ -531,8 +531,8 @@ public class CandidateLoserNonLeakageTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 ["list-design"] = new(
-                    "Design", "senior_engineer", "agent_run",
-                    "Design prompt for {TaskName}",
+                    "Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-impl"),
@@ -556,8 +556,8 @@ public class CandidateLoserNonLeakageTests : IDisposable
                             ]),
                     ]),
                 ["list-impl"] = new(
-                    "Implementation", "implementer", "agent_run",
-                    "Implementation prompt for {TaskName}\n\n## Design\n{TaskBody}",
+                    "Implementation", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-tested"),

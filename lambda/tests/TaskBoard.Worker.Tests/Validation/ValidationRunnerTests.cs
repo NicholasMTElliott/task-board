@@ -23,12 +23,13 @@ public class ValidationRunnerTests
     private static WorkflowConfig ValidConfig() => new(
         States: new Dictionary<string, WorkflowState>
         {
-            ["Ready"] = new("Ready", "ba", "agent_run", "p",
+            ["Ready"] = new("Ready", null, "agent_run", null,
                 new Dictionary<string, TransitionTarget>
                 {
                     ["COMPLETE"] = TransitionTarget.ForColumn("Done"),
                 },
-                PipelineOrder: 1),
+                PipelineOrder: 1,
+                Steps: [new WorkflowStep("impl", "ba", TaskPrompt: "p")]),
             ["Done"] = new("Done", null, "terminal", null, new Dictionary<string, TransitionTarget>()),
         },
         Roles: new Dictionary<string, WorkflowRole>
@@ -111,7 +112,7 @@ public class ValidationRunnerTests
         var cfg = new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                ["Ready"] = new("Ready", "ba", "agent_run", null,
+                ["Ready"] = new("Ready", null, "agent_run", null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("Done"),

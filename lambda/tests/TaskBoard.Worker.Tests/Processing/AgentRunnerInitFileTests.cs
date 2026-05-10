@@ -154,15 +154,19 @@ public class AgentRunnerInitFileTests : IDisposable
             States: new Dictionary<string, WorkflowState>
             {
                 [DesignListId] = new(
-                    "Design", "implementer", "agent_run",
-                    "Work on {TaskName} ({TaskId})",
+                    "Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-done"),
                         ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
                         ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                     },
-                    GitBehavior: "discard"),
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("implementer", "implementer", TaskPrompt: "Work on {TaskName} ({TaskId})"),
+                    ]),
                 ["list-done"] = new("Done", null, "manual_gate", null,
                     new Dictionary<string, TransitionTarget>()),
                 ["list-questions"] = new("Questions", null, "holding", null,

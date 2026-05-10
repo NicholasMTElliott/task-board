@@ -1055,15 +1055,19 @@ public class DockerClaudeMountBuilderTests : IDisposable
         return new WorkflowConfig(
             States: new Dictionary<string, WorkflowState>
             {
-                ["list-design"] = new("Design", "engineer", "agent_run",
-                    "Do the work",
+                ["list-design"] = new("Design", null, "agent_run",
+                    null,
                     new Dictionary<string, TransitionTarget>
                     {
                         ["COMPLETE"] = TransitionTarget.ForColumn("list-done"),
                         ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-q"),
                         ["ERROR"] = TransitionTarget.ForColumn("list-error"),
                     },
-                    GitBehavior: "discard"),
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new WorkflowStep("engineer", "engineer", TaskPrompt: "Do the work"),
+                    ]),
             },
             Roles: new Dictionary<string, WorkflowRole>
             {

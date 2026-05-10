@@ -519,6 +519,17 @@ public sealed class CandidateExecutor(
         => totalSlots > 1 ? $":slot-{slotIndex}" : string.Empty;
 
     /// <summary>
+    /// Picks the evaluator schema variant for a given provider key. Codex needs
+    /// the OpenAI shape (object-of-string-arrays for <c>required</c>);
+    /// everything else uses the JSON-Schema-2020-12 if/then form. Recomputed
+    /// per attempt so a Claude→Codex fallback chain swaps schemas correctly.
+    /// </summary>
+    private static string SchemaForProvider(string providerKey)
+        => string.Equals(providerKey, "codex", StringComparison.OrdinalIgnoreCase)
+            ? AgentSchemas.EvaluatorOutcomeSchemaOpenAI
+            : AgentSchemas.EvaluatorOutcomeSchema;
+
+    /// <summary>
     /// Default failure categories that are retried in-place when the candidate
     /// doesn't supply its own <see cref="CandidateOverride.RetryOn"/> list.
     /// Both are typically transient; the others (AGENT_ERROR, INFRASTRUCTURE)
@@ -1083,7 +1094,6 @@ public sealed class CandidateExecutor(
         CancellationToken cancellationToken)
     {
         var evaluatorRole = request.WorkflowRoles[evaluatorCfg.Role];
-        var evaluatorExecutor = executorResolver.Resolve(evaluatorRole.Provider);
 
         var evaluatorTaskPrompt = await BuildEvaluatorTaskPromptAsync(
             request, evaluatorCfg, executions, slotStartCanonicalSha, cancellationToken);
@@ -1102,13 +1112,11 @@ public sealed class CandidateExecutor(
         // this, the LLM can pick a winner in prose but omit the structured
         // field, and the orchestrator silently cleans up all candidates with
         // no winner promoted (KvA card #3 v0.0.15 reproduction). The variant
-        // matches the evaluator's provider — codex needs the OpenAI shape;
-        // everything else uses the JSON-Schema-2020-12 if/then form.
-        var schemaOverride = string.Equals(evaluatorRole.Provider, "codex", StringComparison.OrdinalIgnoreCase)
-            ? AgentSchemas.EvaluatorOutcomeSchemaOpenAI
-            : AgentSchemas.EvaluatorOutcomeSchema;
-
-        var context = new AgentExecutionContext(
+        // matches the EVALUATOR-ATTEMPT'S provider — for fallback attempts
+        // this is recomputed per attempt because primary may be Claude (if/then
+        // schema) and fallback may be Codex (OpenAI shape). Build it inside the
+        // attempt loop.
+        var primaryContext = new AgentExecutionContext(
             TargetCardId: request.CardId,
             TargetCardTitle: request.CardTitle,
             WorkspacePath: request.WorktreePath,
@@ -1117,44 +1125,104 @@ public sealed class CandidateExecutor(
             Model: evaluatorRole.Model,
             ProviderParams: request.StateProviderParams,
             CommentsFilePath: request.CommentsFilePath,
-            SchemaOverride: schemaOverride);
+            SchemaOverride: SchemaForProvider(evaluatorRole.Provider));
 
-        // Mirror CLAUDE.md ↔ AGENTS.md so the evaluator's provider has the
-        // project init file regardless of which name the repo committed.
-        // Cleanup runs in the finally so the mirror doesn't survive into
-        // post-evaluator-step git operations or get re-discovered by a
-        // subsequent step in the same run.
-        var initMirror = AgentInitFileResolver.EnsureInitFile(
-            request.WorktreePath, evaluatorRole.Provider, logger);
+        // Walk the role's fallback chain. Like the AgentRunner wrapper, this
+        // goes direct (no session) per attempt — evaluator never had session
+        // reuse to begin with.
+        var attempts = RoleInvoker.BuildAttempts(evaluatorRole, primaryContext.ProviderParams);
+        var fallbackOn = RoleInvoker.EffectiveFallbackOn(evaluatorRole);
+        AgentResult evaluatorResult = null!;
+        var actualProvider = evaluatorRole.Provider;
+        var actualModel = evaluatorRole.Model;
+        Exception? lastException = null;
 
-        AgentResult evaluatorResult;
-        try
+        for (var i = 0; i < attempts.Count; i++)
         {
-            // Acquire named resources for the evaluator's provider, same
-            // pattern as candidate execution.
-            if (resourcePool is not null)
+            var attempt = attempts[i];
+            var attemptContext = RoleInvoker.BuildAttemptContext(primaryContext, attempt) with
             {
-                await using var lease = await resourcePool.AcquireAsync(
-                    evaluatorRole.Provider, cancellationToken);
-                evaluatorResult = await evaluatorExecutor.ExecuteAsync(context, cancellationToken);
+                // Schema is provider-specific — recompute per attempt.
+                SchemaOverride = SchemaForProvider(attempt.Provider),
+            };
+
+            // Mirror CLAUDE.md ↔ AGENTS.md per attempt so each provider has
+            // the project init file regardless of which name the repo
+            // committed. Cleanup in finally so it doesn't leak between
+            // attempts or into post-evaluator git operations.
+            var initMirror = AgentInitFileResolver.EnsureInitFile(
+                request.WorktreePath, attempt.Provider, logger);
+
+            try
+            {
+                var executor = executorResolver.Resolve(attempt.Provider);
+                if (resourcePool is not null)
+                {
+                    await using var lease = await resourcePool.AcquireAsync(
+                        attempt.Provider, cancellationToken);
+                    evaluatorResult = await executor.ExecuteAsync(attemptContext, cancellationToken);
+                }
+                else
+                {
+                    evaluatorResult = await executor.ExecuteAsync(attemptContext, cancellationToken);
+                }
+                actualProvider = attempt.Provider;
+                actualModel = attempt.Model;
+                if (i > 0)
+                {
+                    logger.LogWarning(
+                        "Evaluator role fallback succeeded on attempt {Index} ({Provider}/{Model}) for step '{StepName}'",
+                        i, attempt.Provider, attempt.Model, request.Step.Name);
+                }
+                break;
             }
-            else
+            catch (Exception ex) when (
+                ex is not OperationCanceledException
+                && i < attempts.Count - 1
+                && RoleInvoker.ShouldFallback(ex, fallbackOn))
             {
-                evaluatorResult = await evaluatorExecutor.ExecuteAsync(context, cancellationToken);
+                var nextAttempt = attempts[i + 1];
+                logger.LogWarning(ex,
+                    "Evaluator primary {Provider}/{Model} hit {Reason} for step '{StepName}'; falling back to {NextProvider}/{NextModel}",
+                    attempt.Provider, attempt.Model, RoleInvoker.Classify(ex), request.Step.Name,
+                    nextAttempt.Provider, nextAttempt.Model);
+                lastException = ex;
+            }
+            catch (Exception ex) when (
+                ex is not OperationCanceledException
+                && ex is not RateLimitException)
+            {
+                // Last attempt threw a non-fallback (or non-rate-limit if final attempt
+                // is rate-limited and FallbackOn says no — preserve original
+                // "convert to ERROR result" semantics for everything except cancellation
+                // and unhandled rate-limit). RateLimitException still propagates so the
+                // orchestrator's top-level handler restores the card.
+                logger.LogError(ex, "Evaluator threw for step '{StepName}'", request.Step.Name);
+                evaluatorResult = new AgentResult(
+                    AgentOutcome.ERROR,
+                    $"Evaluator threw {ex.GetType().Name}: {ex.Message}");
+                actualProvider = attempt.Provider;
+                actualModel = attempt.Model;
+                break;
+            }
+            finally
+            {
+                AgentInitFileResolver.CleanupInitFile(initMirror, logger);
             }
         }
-        catch (Exception ex) when (
-            ex is not OperationCanceledException
-            && ex is not RateLimitException)
+
+        // If the loop ended without setting a result (all attempts in the
+        // fallback chain threw fallback-eligible exceptions and the final
+        // one's exception was a fallback-eligible RateLimitException, which
+        // the catch block doesn't intercept), propagate the last exception so
+        // the orchestrator's outer handler restores the card to the trigger
+        // column. Reproduces the pre-fallback behaviour for the all-rate-limit
+        // case.
+        if (evaluatorResult is null)
         {
-            logger.LogError(ex, "Evaluator threw for step '{StepName}'", request.Step.Name);
-            evaluatorResult = new AgentResult(
-                AgentOutcome.ERROR,
-                $"Evaluator threw {ex.GetType().Name}: {ex.Message}");
-        }
-        finally
-        {
-            AgentInitFileResolver.CleanupInitFile(initMirror, logger);
+            throw lastException
+                ?? new InvalidOperationException(
+                    $"Evaluator exhausted attempts for step '{request.Step.Name}' with no captured exception (chain length {attempts.Count}).");
         }
 
         var completedAt = DateTimeOffset.UtcNow;
@@ -1170,7 +1238,7 @@ public sealed class CandidateExecutor(
             StepName: $"{request.Step.Name}{SlotInfix(slotIndex, totalSlots)}:evaluator",
             StepIndex: request.StepIndex,
             Role: evaluatorCfg.Role,
-            Model: evaluatorRole.Model,
+            Model: actualModel,
             Outcome: evaluatorResult.Outcome,
             Summary: evaluatorResult.Detail,
             Detail: null,
@@ -1181,7 +1249,7 @@ public sealed class CandidateExecutor(
             StartedAtUtc: startedAt,
             CompletedAtUtc: completedAt,
             SessionExecMs: null,
-            Provider: evaluatorRole.Provider,
+            Provider: actualProvider,
             SlotIndex: totalSlots > 1 ? slotIndex : null,
             CostUsd: evaluatorResult.Usage?.CostUsd,
             InputTokens: evaluatorResult.Usage?.InputTokens,
