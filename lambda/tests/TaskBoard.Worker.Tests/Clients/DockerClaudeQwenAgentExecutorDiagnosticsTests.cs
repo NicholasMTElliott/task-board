@@ -163,6 +163,35 @@ public class DockerClaudeQwenAgentExecutorDiagnosticsTests
         finally { Cleanup(ws); }
     }
 
+    /// <summary>
+    /// Defensive parity with the real-Anthropic Claude executors. If the local
+    /// proxy ever forwards an upstream Anthropic-shape <c>rate_limit_event</c> in
+    /// stdout (some proxies do), we must classify it as RATE_LIMIT, not
+    /// AGENT_ERROR. Same root cause as the KvA cards-6/10/12 misclassification
+    /// on the real-Anthropic path.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_NonZeroExit_WithRateLimitEventInStdout_ThrowsRateLimitException()
+    {
+        var (ws, promptFile) = NewWorkspace();
+        try
+        {
+            var stdout = """
+{"type":"system","subtype":"init","cwd":"/workspace"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour"}}
+""";
+            ProcessRunnerDelegate runner = (exe, args, wd, t, ct, stdin, rm, n, _)
+                => Task.FromResult((1, stdout, ""));
+
+            var executor = CreateExecutor(runner);
+
+            var ex = await Assert.ThrowsAsync<RateLimitException>(() =>
+                executor.ExecuteAsync(NewContext(ws, promptFile), CancellationToken.None));
+            Assert.Equal(RateLimitSource.AgentCli, ex.Source);
+        }
+        finally { Cleanup(ws); }
+    }
+
     [Fact]
     public async Task ExecuteAsync_DockerExitCode127_ThrowsCliInfrastructureException()
     {

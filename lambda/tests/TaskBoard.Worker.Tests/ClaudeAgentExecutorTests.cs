@@ -689,4 +689,104 @@ public class ClaudeAgentExecutorTests
     [Fact]
     public void IsRateLimited_OverloadedCaseInsensitive_ReturnsTrue()
         => Assert.True(ClaudeAgentExecutor.IsRateLimited("The system is OVERLOADED right now"));
+
+    // ── IsRateLimitedStdout / HasRejectedRateLimitEvent tests ───────────────
+    //
+    // Claude CLI 2.1.x in --output-format stream-json emits the machine-readable
+    // rate-limit signal in STDOUT as a structured `rate_limit_event` line, NOT in
+    // stderr. Without scanning stdout, the 5-hour-window-rejected and out-of-credits
+    // failure shapes get misclassified as AGENT_ERROR. See AgentOutputParser
+    // .HasRejectedRateLimitEvent.
+
+    [Fact]
+    public void IsRateLimitedStdout_RejectedFiveHourWindow_ReturnsTrue()
+    {
+        // Real shape captured from `claude --print --output-format stream-json`
+        // when the user's 5-hour window is full.
+        var stdout = """
+{"type":"system","subtype":"init","cwd":"/workspace","session_id":"abc"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1778438400,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"out_of_credits","isUsingOverage":false},"uuid":"x","session_id":"abc"}
+""";
+        Assert.True(ClaudeAgentExecutor.IsRateLimitedStdout(stdout));
+    }
+
+    [Fact]
+    public void IsRateLimitedStdout_AllowedStatus_ReturnsFalse()
+    {
+        // The "allowed" status is the healthy case; even with overage rejected it
+        // must NOT trip the rate-limit path because the request itself succeeded.
+        var stdout = """
+{"type":"system","subtype":"init"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"out_of_credits"}}
+""";
+        Assert.False(ClaudeAgentExecutor.IsRateLimitedStdout(stdout));
+    }
+
+    [Fact]
+    public void IsRateLimitedStdout_NoRateLimitEvent_ReturnsFalse()
+    {
+        // Successful run — no rate_limit_event at all.
+        var stdout = """
+{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"hi"}
+""";
+        Assert.False(ClaudeAgentExecutor.IsRateLimitedStdout(stdout));
+    }
+
+    [Fact]
+    public void IsRateLimitedStdout_AssistantMentionsRateLimitInProse_ReturnsFalse()
+    {
+        // Regression guard: the detection MUST be type-discriminated, not
+        // substring-based. Agents discuss rate limiting all the time without
+        // being rate-limited themselves.
+        var stdout = """
+{"type":"assistant","message":{"content":[{"type":"text","text":"To handle this, you should add rate limit checks before each call."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"ok"}
+""";
+        Assert.False(ClaudeAgentExecutor.IsRateLimitedStdout(stdout));
+    }
+
+    [Fact]
+    public void IsRateLimitedStdout_MalformedNdjsonLine_StillScansRemaining()
+    {
+        // A malformed line in the middle of the stream must not abort the scan —
+        // the rate_limit_event arriving on a later line still counts.
+        var stdout = """
+{"type":"system","subtype":"init"}
+{not valid json at all
+{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour"}}
+""";
+        Assert.True(ClaudeAgentExecutor.IsRateLimitedStdout(stdout));
+    }
+
+    [Fact]
+    public void IsRateLimitedStdout_EmptyStdout_ReturnsFalse()
+        => Assert.False(ClaudeAgentExecutor.IsRateLimitedStdout(""));
+
+    [Fact]
+    public void IsRateLimitedStdout_NullStdout_ReturnsFalse()
+        => Assert.False(ClaudeAgentExecutor.IsRateLimitedStdout(null!));
+
+    [Fact]
+    public void IsRateLimitedStdout_RateLimitEventWithoutStatusField_ReturnsFalse()
+    {
+        // Defensive: a `rate_limit_event` missing rate_limit_info or status must
+        // not fire — we don't know the state and "rejected" is the only signal
+        // we treat as failure.
+        var stdout = """
+{"type":"rate_limit_event","rate_limit_info":{}}
+{"type":"rate_limit_event"}
+""";
+        Assert.False(ClaudeAgentExecutor.IsRateLimitedStdout(stdout));
+    }
+
+    [Fact]
+    public void IsRateLimitedStdout_QueuedStatus_ReturnsTrue()
+    {
+        // Forward-compat: any status that isn't "allowed" is treated as
+        // rate-limited so future CLI versions don't silently regress.
+        var stdout = """{"type":"rate_limit_event","rate_limit_info":{"status":"queued"}}""";
+        Assert.True(ClaudeAgentExecutor.IsRateLimitedStdout(stdout));
+    }
 }

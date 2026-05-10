@@ -60,6 +60,20 @@ public sealed class ClaudeAgentExecutor(
                     RateLimitSource.AgentCli);
             }
 
+            // Stream-json mode emits the machine-readable rate-limit signal in stdout
+            // (a `rate_limit_event` NDJSON line), not stderr. Without this branch the
+            // 5-hour-window-rejected / out-of-credits shape gets misclassified as
+            // AGENT_ERROR and the card moves to Problems instead of being held.
+            if (IsRateLimitedStdout(stdout))
+            {
+                logger.LogWarning(
+                    "Claude CLI rate limited for card {CardId} via stdout rate_limit_event. Exit code {ExitCode}.",
+                    context.TargetCardId, exitCode);
+                throw new RateLimitException(
+                    $"Claude CLI rate limited (exit code {exitCode}, rate_limit_event in stdout).",
+                    RateLimitSource.AgentCli);
+            }
+
             logger.LogError("Claude agent exited with code {ExitCode}. Stderr: {Stderr}. Stdout: {Stdout}",
                 exitCode, stderr, stdout[..Math.Min(500, stdout.Length)]);
 
@@ -200,14 +214,30 @@ public sealed class ClaudeAgentExecutor(
         exitCode is 126 or 127;
 
     /// <summary>
-    /// Checks stderr for Claude CLI rate-limit signals.
-    /// Deliberately does NOT check stdout — agent conversation content flows through
-    /// stdout as NDJSON and may discuss rate limiting without being rate-limited.
-    /// Thin shim over <see cref="CliRateLimitDetector"/> for backward compatibility
-    /// and for reuse by <see cref="DockerClaudeAgentExecutor"/>.
+    /// Checks stderr for Claude CLI rate-limit signals (substring match — see
+    /// <see cref="CliRateLimitDetector.ClaudePatterns"/>). Stderr-only by design:
+    /// agent conversation prose flows through stdout and may mention "rate limit"
+    /// in a way that has nothing to do with the request being rate-limited.
     /// </summary>
+    /// <remarks>
+    /// Pair with <see cref="IsRateLimitedStdout"/> at every exit-non-zero handler
+    /// site: Claude CLI in <c>--output-format stream-json</c> emits its
+    /// machine-readable rate-limit signal as a structured <c>rate_limit_event</c>
+    /// in stdout, NOT stderr. Checking only stderr misses the
+    /// <c>five_hour</c>-window-rejected and out-of-credits failure shapes.
+    /// </remarks>
     internal static bool IsRateLimited(string stderr)
         => CliRateLimitDetector.Matches(stderr, CliRateLimitDetector.ClaudePatterns);
+
+    /// <summary>
+    /// Checks Claude CLI stdout NDJSON for a <c>rate_limit_event</c> whose
+    /// <c>rate_limit_info.status</c> is not <c>"allowed"</c>. Thin shim over
+    /// <see cref="AgentOutputParser.HasRejectedRateLimitEvent"/> for symmetry with
+    /// <see cref="IsRateLimited"/> and for reuse by <see cref="DockerClaudeAgentExecutor"/>
+    /// and <see cref="DockerClaudeQwenAgentExecutor"/>.
+    /// </summary>
+    internal static bool IsRateLimitedStdout(string stdout)
+        => AgentOutputParser.HasRejectedRateLimitEvent(stdout);
 
     internal static AgentResult ParseResult(string stdout)
         => AgentOutputParser.ParseResult(stdout);

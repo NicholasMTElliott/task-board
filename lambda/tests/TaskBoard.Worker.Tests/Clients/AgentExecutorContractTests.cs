@@ -46,14 +46,22 @@ public abstract class AgentExecutorContractTests
     /// </summary>
     protected abstract AgentExecutionContext CreateContext(string workspacePath);
 
-    private static ProcessRunnerDelegate StubRunner(
+    /// <summary>
+    /// Builds a no-op <see cref="ProcessRunnerDelegate"/> that replays the given
+    /// exit code / stdout / stderr triple. <c>protected</c> so subclasses can add
+    /// provider-specific scenarios beyond the shared contract.
+    /// </summary>
+    protected static ProcessRunnerDelegate StubRunner(
         int exitCode, string stdout, string stderr)
     {
         return (exe, args, wd, t, ct, stdin, remove, name, _)
             => Task.FromResult((exitCode, stdout, stderr));
     }
 
-    private string NewWorkspace()
+    /// <summary>
+    /// Creates a fresh per-test workspace directory. <c>protected</c> for subclass reuse.
+    /// </summary>
+    protected string NewWorkspace()
     {
         var dir = Path.Combine(Path.GetTempPath(),
             "executor-contract-" + Guid.NewGuid().ToString("N")[..8]);
@@ -61,7 +69,10 @@ public abstract class AgentExecutorContractTests
         return dir;
     }
 
-    private void CleanupWorkspace(string path)
+    /// <summary>
+    /// Best-effort workspace teardown. <c>protected</c> for subclass reuse.
+    /// </summary>
+    protected void CleanupWorkspace(string path)
     {
         try { Directory.Delete(path, recursive: true); } catch { /* best-effort */ }
     }

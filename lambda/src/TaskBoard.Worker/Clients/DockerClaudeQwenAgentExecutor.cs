@@ -157,6 +157,20 @@ public sealed class DockerClaudeQwenAgentExecutor(
                         RateLimitSource.AgentCli);
                 }
 
+                // Stream-json mode emits the machine-readable rate-limit signal in stdout
+                // (a `rate_limit_event` NDJSON line), not stderr. Defensive parity with
+                // the real-Anthropic executors — covers the case where the local proxy
+                // forwards an upstream Anthropic-shape rate-limit event.
+                if (!IsDockerExitCode(exitCode) && ClaudeAgentExecutor.IsRateLimitedStdout(stdout))
+                {
+                    logger.LogWarning(
+                        "Docker/Claude→Qwen rate limited for card {CardId} via stdout rate_limit_event. Exit code {ExitCode}.",
+                        context.TargetCardId, exitCode);
+                    throw new RateLimitException(
+                        $"Docker/Claude→Qwen rate limited (exit code {exitCode}, rate_limit_event in stdout).",
+                        RateLimitSource.AgentCli);
+                }
+
                 logger.LogError(
                     "Docker/Claude→Qwen agent exited with code {ExitCode}. Stderr: {Stderr}. Stdout: {Stdout}",
                     exitCode, Truncate(stderr, 10_000), Truncate(stdout, 2_000));

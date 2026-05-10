@@ -519,6 +519,83 @@ internal static class AgentOutputParser
     }
 
     /// <summary>
+    /// Scans Claude CLI NDJSON stdout for a <c>rate_limit_event</c> whose
+    /// <c>rate_limit_info.status</c> is anything other than <c>"allowed"</c>.
+    /// Returns true on the first match.
+    /// </summary>
+    /// <remarks>
+    /// Why this exists: Claude CLI in <c>--output-format stream-json</c> mode emits
+    /// the rate-limit signal in <b>stdout</b>, not stderr. The shape is:
+    /// <code>
+    /// {"type":"rate_limit_event","rate_limit_info":{
+    ///   "status":"rejected",
+    ///   "rateLimitType":"five_hour",
+    ///   "overageStatus":"rejected",
+    ///   "overageDisabledReason":"out_of_credits"
+    /// }}
+    /// </code>
+    /// On a 5-hour-window rejection (or out-of-credits with overage disabled), the
+    /// CLI exits non-zero with empty stderr and only the init + rate_limit_event in
+    /// stdout. <see cref="CliRateLimitDetector.Matches"/> is stderr-only, so without
+    /// this helper the failure flows through as <c>InvalidOperationException</c> →
+    /// <c>AGENT_ERROR</c>, the card moves to Problems, and the poller never backs off.
+    /// <para>
+    /// Forward-compatible: any non-<c>"allowed"</c> status (including hypothetical
+    /// future <c>"queued"</c>/<c>"throttled"</c>) is treated as rate-limited.
+    /// Malformed NDJSON lines are skipped; the function never throws.
+    /// </para>
+    /// <para>
+    /// Conservative: only fires when the <c>type</c> field IS <c>"rate_limit_event"</c>.
+    /// An assistant message that happens to mention the words "rate limit" in prose
+    /// will not match.
+    /// </para>
+    /// </remarks>
+    internal static bool HasRejectedRateLimitEvent(string stdout)
+    {
+        if (string.IsNullOrEmpty(stdout)) return false;
+
+        foreach (var line in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0 || trimmed[0] != '{') continue;
+
+            JsonDocument? doc = null;
+            try
+            {
+                doc = JsonDocument.Parse(trimmed);
+                var root = doc.RootElement;
+
+                if (!root.TryGetProperty("type", out var typeEl)
+                    || typeEl.ValueKind != JsonValueKind.String
+                    || typeEl.GetString() != "rate_limit_event")
+                    continue;
+
+                if (!root.TryGetProperty("rate_limit_info", out var info)
+                    || info.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                if (!info.TryGetProperty("status", out var statusEl)
+                    || statusEl.ValueKind != JsonValueKind.String)
+                    continue;
+
+                var status = statusEl.GetString();
+                if (!string.Equals(status, "allowed", StringComparison.Ordinal))
+                    return true;
+            }
+            catch (JsonException)
+            {
+                // Malformed line — keep scanning.
+            }
+            finally
+            {
+                doc?.Dispose();
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Writes the agent prompt to a temp file and logs a reproduction block with
     /// the exact command, workspace path, and prompt file path. Called on agent failure
     /// to enable local reproduction of the error.

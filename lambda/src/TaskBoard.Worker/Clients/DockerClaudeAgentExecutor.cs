@@ -137,6 +137,20 @@ public sealed class DockerClaudeAgentExecutor(
                         RateLimitSource.AgentCli);
                 }
 
+                // Stream-json mode emits the machine-readable rate-limit signal in stdout
+                // (a `rate_limit_event` NDJSON line), not stderr. Without this branch the
+                // 5-hour-window-rejected / out-of-credits shape gets misclassified as
+                // AGENT_ERROR and the card moves to Problems instead of being held.
+                if (!IsDockerExitCode(exitCode) && ClaudeAgentExecutor.IsRateLimitedStdout(stdout))
+                {
+                    logger.LogWarning(
+                        "Docker/Claude rate limited for card {CardId} via stdout rate_limit_event. Exit code {ExitCode}.",
+                        context.TargetCardId, exitCode);
+                    throw new RateLimitException(
+                        $"Docker/Claude rate limited (exit code {exitCode}, rate_limit_event in stdout).",
+                        RateLimitSource.AgentCli);
+                }
+
                 logger.LogError(
                     "Docker agent exited with code {ExitCode}. Stderr: {Stderr}. Stdout: {Stdout}",
                     exitCode, stderr, stdout[..Math.Min(500, stdout.Length)]);
