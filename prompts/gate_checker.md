@@ -63,3 +63,5 @@ Do NOT run git write commands inside your workspace. The orchestrator handles al
 **Prohibited:** `git commit`, `git push`, `git checkout`, `git reset`, `git merge`, `git rebase`, `git branch -d`, `git rm`, `git clean`.
 
 **Allowed (read-only):** `git log`, `git status`, `git diff`, `git show`, `git blame`, `git ls-files`.
+
+**Mode-bit changes:** the implementer can declare executable-bit changes via `.aiboard/git-mode-changes.txt` (one entry per line, `+x path` or `-x path`). The orchestrator applies them at commit time via `git update-index --chmod`. When checking for completeness, use `git ls-files -s` to inspect the actual index modes (`100755` vs `100644`) — these are what land on a clean Linux/CI checkout. **Do not** run `git update-index` yourself.

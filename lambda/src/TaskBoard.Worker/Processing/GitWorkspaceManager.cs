@@ -1080,6 +1080,14 @@ public sealed class GitWorkspaceManager(
         logger.LogInformation("Committing changes in {Repo}", repoPath);
         await RunGitAsync(repoPath, ["add", "."], cancellationToken);
 
+        // Apply mode-bit manifest after staging so paths exist in the index,
+        // before commit so the index entries we just touched land in the commit.
+        // Mechanism for cross-platform parity: Windows host + Linux Docker can't
+        // propagate executable bits through `git add`, so agents declare mode
+        // changes in `.aiboard/git-mode-changes.txt` and the orchestrator
+        // applies them via `git update-index --chmod`.
+        await ApplyModeChangesManifestAsync(repoPath, cancellationToken);
+
         if (!await HasStagedChangesAsync(repoPath, cancellationToken))
         {
             logger.LogInformation("No staged changes to commit in {Repo}", repoPath);
@@ -1087,6 +1095,104 @@ public sealed class GitWorkspaceManager(
         }
 
         await RunGitAsync(repoPath, ["commit", "-m", message], cancellationToken);
+    }
+
+    private static readonly string ModeChangesManifestRelativePath =
+        Path.Combine(".aiboard", "git-mode-changes.txt");
+
+    /// <summary>
+    /// Reads <c>.aiboard/git-mode-changes.txt</c> from the worktree (if present)
+    /// and applies each entry as a <c>git update-index --chmod</c> call. Format:
+    /// one entry per line, <c>+x &lt;relpath&gt;</c> or <c>-x &lt;relpath&gt;</c>.
+    /// Lines starting with <c>#</c> and blank lines are ignored. Per-entry
+    /// failures (path not in index, malformed line) log a warning and continue
+    /// — never fail the surrounding commit.
+    /// </summary>
+    private async Task ApplyModeChangesManifestAsync(
+        string repoPath, CancellationToken cancellationToken)
+    {
+        var manifestPath = Path.Combine(repoPath, ModeChangesManifestRelativePath);
+        if (!File.Exists(manifestPath))
+        {
+            return;
+        }
+
+        string[] lines;
+        try
+        {
+            lines = await File.ReadAllLinesAsync(manifestPath, cancellationToken);
+        }
+        catch (IOException ex)
+        {
+            logger.LogWarning(ex, "Could not read mode-changes manifest at {Path}", manifestPath);
+            return;
+        }
+
+        var applied = 0;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i].Trim();
+            if (string.IsNullOrEmpty(line) || line.StartsWith('#'))
+            {
+                continue;
+            }
+
+            var firstSpace = line.IndexOf(' ');
+            if (firstSpace <= 0 || firstSpace == line.Length - 1)
+            {
+                logger.LogWarning(
+                    "Skipping malformed mode-changes line {LineNumber} in {Path}: {Line}",
+                    i + 1, manifestPath, line);
+                continue;
+            }
+
+            var flag = line[..firstSpace].Trim();
+            var relPath = line[(firstSpace + 1)..].Trim();
+
+            if (flag != "+x" && flag != "-x")
+            {
+                logger.LogWarning(
+                    "Skipping mode-changes line {LineNumber} in {Path}: " +
+                    "flag must be '+x' or '-x', got '{Flag}'",
+                    i + 1, manifestPath, flag);
+                continue;
+            }
+
+            if (Path.IsPathRooted(relPath) || relPath.Contains(".."))
+            {
+                logger.LogWarning(
+                    "Skipping mode-changes line {LineNumber} in {Path}: " +
+                    "path must be repo-relative without '..' segments, got '{RelPath}'",
+                    i + 1, manifestPath, relPath);
+                continue;
+            }
+
+            try
+            {
+                await RunGitAsync(
+                    repoPath,
+                    ["update-index", $"--chmod={flag}", relPath],
+                    cancellationToken);
+                logger.LogInformation(
+                    "Applied mode change {Flag} {RelPath} in {Repo}",
+                    flag, relPath, repoPath);
+                applied++;
+            }
+            catch (GitOperationException ex)
+            {
+                logger.LogWarning(ex,
+                    "Failed to apply mode change {Flag} {RelPath} from manifest " +
+                    "(path may not be in index)",
+                    flag, relPath);
+            }
+        }
+
+        if (applied > 0)
+        {
+            logger.LogInformation(
+                "Applied {Count} mode-bit change(s) from manifest in {Repo}",
+                applied, repoPath);
+        }
     }
 
     public async Task PushAsync(

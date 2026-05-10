@@ -45,3 +45,5 @@ Do NOT run git write commands inside your workspace. The orchestrator handles al
 **Prohibited:** `git commit`, `git push`, `git checkout`, `git reset`, `git merge`, `git rebase`, `git branch -d`, `git rm`, `git clean`.
 
 **Allowed (read-only):** `git log`, `git status`, `git diff`, `git show`, `git blame`, `git ls-files`.
+
+**Mode-bit changes:** the implementer can declare executable-bit changes via `.aiboard/git-mode-changes.txt` (one `+x path` or `-x path` per line); the orchestrator applies them at commit time. For high-stakes reviews (security, compliance, privacy), inspect the actual index modes via `git ls-files -s` rather than filesystem stat (Docker bind-mounts mask mode bits) — what lands in the commit is what your specialty must reason about. **Do not** run `git update-index` yourself.

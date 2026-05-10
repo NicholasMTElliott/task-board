@@ -33,3 +33,5 @@ Do NOT run git write commands inside your workspace. The orchestrator handles al
 **Prohibited:** `git commit`, `git push`, `git checkout`, `git reset`, `git merge`, `git rebase`, `git branch -d`, `git rm`, `git clean`.
 
 **Allowed (read-only):** `git log`, `git status`, `git diff`, `git show`, `git blame`, `git ls-files`.
+
+**Mode-bit changes:** if the design or implementation involves making files executable on Linux/CI, the implementer declares this via `.aiboard/git-mode-changes.txt` (one `+x path` or `-x path` per line) and the orchestrator applies it at commit time. Mode-bit changes are not free — they're index mutations that the implementer must remember to declare. Factor that into your sizing if the ticket mentions executable scripts or chmod requirements.

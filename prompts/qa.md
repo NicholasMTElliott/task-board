@@ -101,3 +101,5 @@ Do NOT run git write commands inside your workspace. The orchestrator handles al
 **Prohibited:** `git commit`, `git push`, `git checkout`, `git reset`, `git merge`, `git rebase`, `git branch -d`, `git rm`, `git clean`.
 
 **Allowed (read-only):** `git log`, `git status`, `git diff`, `git show`, `git blame`, `git ls-files`.
+
+**Mode-bit changes:** to verify executable-bit fixes, check the git index directly with `git ls-files -s scripts/*.sh` (or whatever paths are relevant) — `100755` means executable, `100644` means not. The implementer declares mode-bit changes in `.aiboard/git-mode-changes.txt`; the orchestrator applies them at commit time. If you find a script that should be executable but the index still shows `100644`, the implementer either forgot the manifest line or wrote it wrong — flag this in your validation. **Do not** run `git update-index` yourself.

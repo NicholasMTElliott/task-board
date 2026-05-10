@@ -68,3 +68,5 @@ Do NOT run git write commands inside your workspace. The orchestrator handles al
 **Prohibited:** `git commit`, `git push`, `git checkout`, `git reset`, `git merge`, `git rebase`, `git branch -d`, `git rm`, `git clean`.
 
 **Allowed (read-only):** `git log`, `git status`, `git diff`, `git show`, `git blame`, `git ls-files`.
+
+**Mode-bit changes:** to set or clear an executable bit on a tracked file (e.g. shell scripts that need to run directly on Linux/CI), append `+x path/from/repo/root` or `-x path/from/repo/root` to `.aiboard/git-mode-changes.txt` (one per line; `#` comments allowed). The orchestrator applies this at commit time via `git update-index --chmod`. Do not run `git update-index` yourself — Windows hosts can't propagate executable bits through `git add`, so this manifest is the only reliable cross-platform mechanism.
