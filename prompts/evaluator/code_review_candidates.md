@@ -10,6 +10,8 @@ You are evaluating N candidate implementations of the same coding task. Each can
 4. **Tests** — did the candidate add or update tests where needed? Untested code is incomplete.
 5. **Safety** — does the change introduce any obvious security or operational risk (command injection, unbounded loops, data loss)?
 
+`NEEDS_INFO` is eligible to win. A candidate that asks a question may be the strongest result if it identified a real blocker or ambiguity that `COMPLETE` candidates missed. It may also be over-blocking on an irrelevant issue; judge that in the ranking. `ERROR` candidates cannot win unless every candidate is unacceptable, in which case return `outcome: ERROR`.
+
 ## Response
 
 Return the structured JSON described in the response contract at the end of the prompt. Pick a `winner_index` and provide a 0–10 score plus one-sentence reasoning per candidate. Be calibrated — if two candidates are essentially equivalent, give them similar scores; if one clearly dominates, reflect that.

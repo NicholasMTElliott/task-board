@@ -32,7 +32,7 @@ For a step that declares `candidates`, the runtime:
    - Runs the candidate's executor (`docker-claude-cli`, `docker-opencode`, etc.) against that worktree with the candidate's optional model + providerParams overrides.
    - Commits the candidate's changes (commit-based git behaviors only — see "Limitations" below).
    - Saves a `step_result` row with `candidate_group_id`, `candidate_index`, `provider`, `selected = NULL`.
-3. **Short-circuits to ERROR** if every candidate returned a non-`COMPLETE` outcome — no point running the evaluator on nothing but failures.
+3. **Short-circuits to ERROR** only if every candidate returned `ERROR` — no point running the evaluator on nothing but hard failures. `NEEDS_INFO` is evaluator-eligible and ranked alongside `COMPLETE`.
 4. Runs the evaluator step (a different role, e.g. `evaluator` → Claude Opus). The evaluator sees the original task prompt + each candidate's `detail` + each candidate's git diff against the canonical branch. Saves an evaluator `step_result` row (no `candidate_group_id`; correlated by step_name suffix `:evaluator`).
 5. Parses the evaluator's verdict — `winner_index` (0-indexed) plus optional 0–10 score + reasoning per candidate. Updates the candidate rows: `selected = (index == winner_index)`, `quality_score`, `evaluator_reasoning`.
 6. **Promotes the winner**: `git reset --hard {winner-branch}` on the canonical worktree so subsequent steps see the winner's commits.
@@ -111,7 +111,7 @@ For multi-stage failover (e.g. "race subscription providers; if both fail, fall 
 1. Slot 0 runs (parallel candidates + evaluator → winner).
 2. If slot 0 returned a winner → that's the step result; **slot 1 is NOT invoked**.
 3. If slot 0 winner returned NEEDS_INFO → step ends with NEEDS_INFO; slot 1 NOT invoked. (User chose this so a cheap fallback can't repeatedly avoid a real question.)
-4. If slot 0 failed (all candidates non-COMPLETE, OR evaluator returned ERROR / no winner_index, OR promotion failed) → slot 1 fires.
+4. If slot 0 failed (all candidates `ERROR`, OR evaluator returned ERROR / no winner_index, OR promotion failed) → slot 1 fires.
 5. After all slots exhausted: surface the LAST slot's result.
 
 **Single-candidate slots may omit the evaluator** — the runtime surfaces that candidate's outcome directly. This is the natural shape for the last fallback ("just run local Qwen and use whatever it produces").
@@ -168,7 +168,8 @@ The evaluator returns the standard Agent Contract JSON (`outcome` + `detail`) ex
 
 - `outcome = COMPLETE` + a valid `winner_index` → winner promoted, candidate rows updated.
 - `outcome = COMPLETE` + missing/null `winner_index` → **schema violation**. The orchestrator overrides the result to `ERROR` with a diagnostic detail (instead of silently cleaning up with no winner promoted, which is the v0.0.15 KvA-reported bug). The evaluator schema (`AgentSchemas.EvaluatorOutcomeSchema`) makes `winner_index` required when `outcome = COMPLETE` via JSON Schema `if`/`then`; the OpenAI variant types it `["integer", "null"]` and relies on parser-side enforcement.
-- `outcome = NEEDS_INFO` / `ERROR` → no winner; cleanup; AgentRunner follows the matching transition.
+- Evaluator `outcome = NEEDS_INFO` / `ERROR` → no winner; cleanup; AgentRunner follows the matching transition.
+- Candidate `outcome = NEEDS_INFO` is not a failure. It is eligible to win; if the evaluator selects it, its questions propagate and the step ends with `NEEDS_INFO`.
 
 The parser accepts the JSON either as a top-level object (entire response) or inside a ```json fenced block. If both prose and JSON appear, the JSON must come last.
 
@@ -349,4 +350,4 @@ The pool is opt-in: an empty `ResourcePool` config (the default) registers a sin
 - **Watch the cost meter.** Three candidates × one Opus evaluator per step is real money. The metrics console output and the Grafana dashboard both show `AvgDur` so you can ballpark the cost overhead.
 - **Same-provider model A/B is fine.** Two `docker-claude-cli` candidates with different `model` (e.g. Opus vs Sonnet) work and produce useful comparison data. Identical (provider, model) twice also works as a variance-measurement run.
 - **Use a strong evaluator.** A weak evaluator picks weak winners. Default config routes the `evaluator` role to Opus; if you swap it, expect noisier verdicts.
-- **Failed candidates can't win.** If every candidate's outcome is non-`COMPLETE`, the runtime short-circuits to ERROR without running the evaluator. Don't spend the evaluator tokens trying to pick a least-bad failure.
+- **ERROR candidates can't win.** If every candidate's outcome is `ERROR`, the runtime short-circuits to ERROR without running the evaluator. `NEEDS_INFO` candidates are ranked with `COMPLETE` candidates because a real blocker can be the best result.

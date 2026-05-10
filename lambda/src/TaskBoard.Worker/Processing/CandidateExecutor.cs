@@ -231,7 +231,7 @@ public sealed class CandidateExecutor(
         // ── Phase 1b: single-candidate slot with no evaluator ────────────────
         // The slot's result is the (only) candidate's result, regardless of
         // outcome. Skip the evaluator phase entirely. Checked BEFORE the
-        // all-failed short-circuit so a NEEDS_INFO from the single candidate
+        // all-error short-circuit so a NEEDS_INFO from the single candidate
         // surfaces as NeedsInfo (propagate questions to operator) rather than
         // Failed (force fallback to next slot, losing the questions).
         if (skipEvaluator)
@@ -289,45 +289,35 @@ public sealed class CandidateExecutor(
                 cancellationToken);
         }
 
-        // ── Short-circuit: if every candidate failed, skip the evaluator ─────
+        // ── Short-circuit: if every candidate errored, skip the evaluator ────
         // (Multi-candidate slot path. The single-candidate-no-evaluator case
         // was handled above so it can surface NEEDS_INFO as the slot's outcome.)
-        if (executions.All(e => e.AgentResult.Outcome != AgentOutcome.COMPLETE))
+        if (executions.All(e => e.AgentResult.Outcome == AgentOutcome.ERROR))
         {
             logger.LogWarning(
-                "All {Count} candidate(s) for step '{StepName}' slot {SlotIndex} returned non-COMPLETE outcomes; halting without running evaluator",
+                "All {Count} candidate(s) for step '{StepName}' slot {SlotIndex} returned ERROR outcomes; halting without running evaluator",
                 executions.Count, step.Name, slotIndex);
 
             await CleanupCandidateWorktreesAsync(
                 request.RepoPath, executions, cancellationToken);
 
-            // Pick the merged outcome by recoverability rather than candidate
-            // declaration order: NEEDS_INFO is recoverable by a human (card moves
-            // to Questions), ERROR is terminal. The SLOT outcome is Failed
-            // either way — the slot didn't produce a single coherent result,
-            // so AgentRunner should try the next slot. The merged
-            // NEEDS_INFO/ERROR matters only as the AgentResult to surface if
-            // every slot ends up failing.
-            var mergedOutcome = executions.Any(e => e.AgentResult.Outcome == AgentOutcome.NEEDS_INFO)
-                ? AgentOutcome.NEEDS_INFO
-                : AgentOutcome.ERROR;
-            var detail = BuildAllFailedDetail(executions);
+            var detail = BuildAllErroredDetail(executions);
 
-            // Best-effort: post per-candidate audit comments even on all-failed
+            // Best-effort: post per-candidate audit comments even on all-error
             // so the operator can see what each provider returned. No verdict
             // yet (no evaluator ran); pass an empty verdict.
             try
             {
                 await PostCandidateCommentsAsync(
                     request, step.Name, slotIndex, totalSlots, executions,
-                    new AgentResult(mergedOutcome, detail),
+                    new AgentResult(AgentOutcome.ERROR, detail),
                     new EvaluatorVerdict(WinnerIndex: null, Scores: []),
                     cancellationToken);
             }
             catch (Exception ex)
             {
                 logger.LogWarning(ex,
-                    "Failed to post per-candidate comments for all-failed slot {SlotIndex} of step '{StepName}'",
+                    "Failed to post per-candidate comments for all-error slot {SlotIndex} of step '{StepName}'",
                     slotIndex, step.Name);
             }
 
@@ -340,7 +330,7 @@ public sealed class CandidateExecutor(
             var slotWasRateLimited = executions.All(e => e.RateLimited);
             return new SlotResult(
                 SlotOutcome.Failed,
-                new AgentResult(mergedOutcome, detail),
+                new AgentResult(AgentOutcome.ERROR, detail),
                 WasRateLimited: slotWasRateLimited);
         }
 
@@ -556,7 +546,7 @@ public sealed class CandidateExecutor(
     /// <see cref="AgentOutcome.ERROR"/> result with <c>RateLimited=true</c>
     /// rather than propagating. This lets sibling candidates in the same slot
     /// continue to run (a single bad provider no longer aborts the whole slot)
-    /// and lets the slot's all-failed short-circuit produce a slot-level
+    /// and lets the slot's all-error short-circuit produce a slot-level
     /// rate-limit signal that AgentRunner can use to fall through to the next
     /// slot in the fallback chain.
     /// </para>
@@ -622,7 +612,7 @@ public sealed class CandidateExecutor(
                 // chance; if every candidate at every level rate-limits,
                 // AgentRunner re-raises a RateLimitException at the top.
                 logger.LogWarning(ex,
-                    "Slot {Slot} candidate {Index} ({Provider}) rate-limited after {Attempt} attempt(s); recording as ERROR outcome (will surface as slot-level rate-limit if all candidates fail)",
+                    "Slot {Slot} candidate {Index} ({Provider}) rate-limited after {Attempt} attempt(s); recording as ERROR outcome (will surface as slot-level rate-limit if all candidates error)",
                     slotIndex, candidateIndex, candidate.Provider, attempt + 1);
                 return (
                     new AgentResult(
@@ -1065,10 +1055,10 @@ public sealed class CandidateExecutor(
         }
     }
 
-    private static string BuildAllFailedDetail(IReadOnlyList<CandidateExecution> executions)
+    private static string BuildAllErroredDetail(IReadOnlyList<CandidateExecution> executions)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("All candidates failed; halted before running evaluator.");
+        sb.AppendLine("All candidates errored; halted before running evaluator.");
         sb.AppendLine();
         for (var i = 0; i < executions.Count; i++)
         {
@@ -1356,8 +1346,9 @@ public sealed class CandidateExecutor(
             "You are comparing N candidate implementations of the same task. Read the original task, " +
             "each candidate's output, and each candidate's diff against the canonical branch. Pick the " +
             "winner based on correctness, code quality, and adherence to the task. Score each 0–10. " +
-            "Failed candidates (outcome != COMPLETE) cannot win — assign them a low score with reasoning " +
-            "and pick from the rest.";
+            "Candidates with outcome COMPLETE or NEEDS_INFO are both eligible to win; a NEEDS_INFO " +
+            "candidate may be the best result when it identifies a real blocker. Candidates with " +
+            "outcome ERROR cannot win — assign them a low score with reasoning and pick from the rest.";
     }
 
     /// <summary>

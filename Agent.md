@@ -690,16 +690,16 @@ If your step is `gitBehavior: discard`, do NOT route the evaluator to `code_revi
 
 **What happens at runtime:**
 1. N candidate worktrees spawn off canonical HEAD: `aiboard-cand/{cardId}-{groupShort}-{index}-{provider}`.
-2. Candidates run grouped by provider — each provider group's candidates execute in declaration order, but the groups themselves run concurrently (`Task.WhenAll`). Per-candidate `step_result` rows persist with `candidate_group_id`, `candidate_index`, `provider`.
+2. Candidates run fully in parallel via `Task.WhenAll`. Per-candidate `step_result` rows persist with `candidate_group_id`, `candidate_index`, `provider`.
 3. Evaluator role runs against the canonical worktree with comparison material per candidate. **The material differs by `gitBehavior`:**
    - **commit modes**: each candidate's `git diff` against the canonical branch (the actual code change).
    - **discard mode**: each candidate's `.aiboard/tasks/{cardId}.md` contents (the design / card body) plus any `.aiboard/updates/*.md` files (child-card requests). Diffs are useless for discard candidates because nothing is committed and `.aiboard/` is gitignored.
-   Returns `{outcome: COMPLETE, winner_index: N, scores: [{index, score, reasoning}, ...]}`. Saved as a `step_result` with name suffix `:evaluator` (no `candidate_group_id` so metrics views don't double-count).
+   Returns `{outcome: COMPLETE, winner_index: N, scores: [{index, score, reasoning}, ...]}` when it can pick a winner. `NEEDS_INFO` candidates are eligible winners; if selected, the winning candidate's `NEEDS_INFO` propagates. Saved as a `step_result` with name suffix `:evaluator` (no `candidate_group_id` so metrics views don't double-count).
 4. **Winner promotion** depends on `gitBehavior`:
    - **commit modes** (`commit_only` / `commit_and_push`): `git reset --hard` the canonical worktree to the winner's branch HEAD. Winner's branch survives; loser worktrees + branches are cleaned up.
    - **discard mode**: copy the winner's `.aiboard/tasks/` and `.aiboard/updates/` contents into the canonical worktree (clearing the canonical files first so a winner that *removed* a file is reflected). All candidate branches torn down; canonical's git state is unchanged. AgentRunner's normal post-step processors (TaskFileManager updates the card body, UpdateFileProcessor creates child cards) then read the winner's outputs from canonical as if a single agent had run.
    Per-candidate rows are updated with `selected`, `quality_score`, `evaluator_reasoning`.
-5. **All-failed merge logic**: if every candidate returns non-COMPLETE, the merged outcome prefers `NEEDS_INFO` over `ERROR` (recoverable wins over terminal). Card routes to Questions instead of Error.
+5. **All-error shortcut**: only all-`ERROR` candidate groups skip the evaluator. `NEEDS_INFO` is ranked with `COMPLETE` because a real blocker can be the best result.
 
 **Score sanitisation**: scores outside `[0, 10]` are dropped to null (kept `reasoning`); duplicate `index` entries are deduped last-write-wins. The V19 partial UNIQUE index on `(tenant_id, candidate_group_id, candidate_index)` ensures a runtime bug that double-saves a candidate row fails loudly at the DB.
 
@@ -755,7 +755,7 @@ The single `candidates[]` + `evaluator` shape (above) is now also available as a
 - Slots are tried **sequentially**: slot 0 first; on slot 0 failure, slot 1 fires; etc.
 - **Inside** a slot, candidates run in **parallel** (just like the legacy single-slot flow). The evaluator picks one winner.
 - A slot **succeeds** when its evaluator picks a winner whose outcome is COMPLETE — or, for a single-candidate slot, when the candidate completes.
-- A slot **fails** (→ try next slot) when: every candidate returns non-COMPLETE, OR the evaluator returns ERROR / no `winner_index`, OR winner promotion fails.
+- A slot **fails** (→ try next slot) when: every candidate returns ERROR, OR the evaluator returns ERROR / no `winner_index`, OR winner promotion fails.
 - A slot returning **NEEDS_INFO** (winner has legitimate questions for the operator) **propagates up — no fallback**. Operator answers and re-runs from slot 0. The user explicitly chose this so a cheap fallback can't repeatedly avoid a real question by guessing.
 - **Retries** fire in-place within a slot, only on `RATE_LIMIT` and `TIMEOUT` (defaults). 30s base, 2× exponential, 5min cap, ±20% jitter. Retries do NOT cross slot boundaries — that's what fallback slots are for. Override per candidate with `"retryOn": ["RATE_LIMIT"]` to opt out of timeout retries (e.g. for an expensive model where a 5-minute timeout is genuinely terminal).
 

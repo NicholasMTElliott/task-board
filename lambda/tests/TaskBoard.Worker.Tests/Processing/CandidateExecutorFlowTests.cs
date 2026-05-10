@@ -340,7 +340,7 @@ public class CandidateExecutorFlowTests : IDisposable
         Assert.DoesNotContain("aiboard-cand", registeredWorktrees);
     }
 
-    // ── All candidates fail ──────────────────────────────────────────────────
+    // ── All candidates error ─────────────────────────────────────────────────
 
     [Fact]
     public async Task AllCandidatesFail_HaltsBeforeRunningEvaluator()
@@ -359,7 +359,7 @@ public class CandidateExecutorFlowTests : IDisposable
             request, CancellationToken.None);
 
         Assert.Equal(AgentOutcome.ERROR, result.Outcome);
-        Assert.Contains("All candidates failed", result.Detail);
+        Assert.Contains("All candidates errored", result.Detail);
 
         // Two candidate rows persisted, NO evaluator row.
         Assert.Equal(2, _runStore.SavedSteps.Count);
@@ -370,18 +370,25 @@ public class CandidateExecutorFlowTests : IDisposable
     }
 
     [Fact]
-    public async Task AllCandidatesFail_MixedOutcomes_PrefersNeedsInfoOverError()
+    public async Task MixedCompleteAndNeedsInfo_RunsEvaluatorAndCanPickNeedsInfoWinner()
     {
-        // Mixed non-COMPLETE outcomes: candidate 0 errored, candidate 1 asked
-        // a question. The merged step outcome must surface NEEDS_INFO so the
-        // card routes to the Questions column rather than Error — otherwise
-        // the operator never sees the question candidate 1 actually raised.
-        // Candidate ordering must NOT determine the routing.
+        // NEEDS_INFO is a successful candidate outcome for ranking purposes:
+        // the candidate may have spotted a real blocker that COMPLETE
+        // candidates missed. The evaluator must decide, and if it picks the
+        // NEEDS_INFO candidate the slot propagates that question to the user.
         var candidateExecutor = BuildExecutor(
-            ("docker-claude-cli", AgentOutcome.ERROR,      "failed to compile"),
-            ("docker-opencode",   AgentOutcome.NEEDS_INFO, "Which API version do you want?"),
-            evaluatorOutcome: AgentOutcome.COMPLETE,  // never invoked
-            evaluatorDetail: "(should not appear)");
+            ("docker-claude-cli", AgentOutcome.COMPLETE, "Implemented the obvious path."),
+            ("docker-opencode",   AgentOutcome.NEEDS_INFO, "Critical API ambiguity needs resolution."),
+            evaluatorOutcome: AgentOutcome.COMPLETE,
+            evaluatorDetail: """
+                Candidate 1 wins because the ambiguity is real.
+                ```json
+                {"outcome":"COMPLETE","winner_index":1,"scores":[
+                  {"index":0,"score":6,"reasoning":"works but misses the blocker"},
+                  {"index":1,"score":8,"reasoning":"correctly blocks on a critical ambiguity"}
+                ]}
+                ```
+                """);
 
         var request = NewRequest(
             stepName: "implement",
@@ -391,11 +398,43 @@ public class CandidateExecutorFlowTests : IDisposable
             request, CancellationToken.None);
 
         Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
-        Assert.Contains("All candidates failed", result.Detail);
 
-        // Both candidates persisted; no evaluator row (still all-failed path).
-        Assert.Equal(2, _runStore.SavedSteps.Count);
-        Assert.DoesNotContain(_runStore.SavedSteps, r => r.StepName.EndsWith(":evaluator"));
+        // Both candidates persisted, evaluator ran, and the NEEDS_INFO
+        // candidate was selected.
+        Assert.Equal(3, _runStore.SavedSteps.Count);
+        Assert.Single(_runStore.SavedSteps, r => r.StepName.EndsWith(":evaluator"));
+        Assert.Single(_runStore.RecordedVerdicts, v => v.CandidateIndex == 1 && v.Selected);
+    }
+
+    [Fact]
+    public async Task AllCandidatesNeedInfo_RunsEvaluatorInsteadOfAllErrorShortcut()
+    {
+        var candidateExecutor = BuildExecutor(
+            ("docker-claude-cli", AgentOutcome.NEEDS_INFO, "Question A, with partial design."),
+            ("docker-opencode",   AgentOutcome.NEEDS_INFO, "Question B, with better risk analysis."),
+            evaluatorOutcome: AgentOutcome.COMPLETE,
+            evaluatorDetail: """
+                Candidate 1 wins; its question is the actionable blocker.
+                ```json
+                {"outcome":"COMPLETE","winner_index":1,"scores":[
+                  {"index":0,"score":6,"reasoning":"reasonable but less actionable"},
+                  {"index":1,"score":8,"reasoning":"best blocker analysis"}
+                ]}
+                ```
+                """);
+
+        var request = NewRequest(
+            stepName: "implement",
+            providers: ["docker-claude-cli", "docker-opencode"]);
+
+        var result = await candidateExecutor.ExecuteCandidateGroupAsync(
+            request, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
+        Assert.Equal("Question B, with better risk analysis.", result.Detail);
+        Assert.Equal(3, _runStore.SavedSteps.Count);
+        Assert.Single(_runStore.SavedSteps, r => r.StepName.EndsWith(":evaluator"));
+        Assert.Single(_runStore.RecordedVerdicts, v => v.CandidateIndex == 1 && v.Selected);
     }
 
     // ── Evaluator returns NEEDS_INFO ────────────────────────────────────────

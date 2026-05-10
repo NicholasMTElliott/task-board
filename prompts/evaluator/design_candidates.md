@@ -20,6 +20,8 @@ You are evaluating N candidate written artifacts (designs, analyses, write-ups) 
 - The contents of `.aiboard/tasks/{cardId}.md` from the candidate's worktree (the card body the agent wrote)
 - A list of any `.aiboard/updates/*.md` files the candidate produced, with their contents
 
+`NEEDS_INFO` is eligible to win. A candidate that asks a question may be the strongest result if it identified a real blocker or ambiguity that `COMPLETE` candidates missed. It may also be over-blocking on an irrelevant issue; judge that in the ranking. `ERROR` candidates cannot win unless every candidate is unacceptable, in which case return `outcome: ERROR`.
+
 There will NOT be a `git diff` — discard-mode state. Don't anchor your reasoning on "no commits / empty diff"; that's expected here.
 
 ## Response

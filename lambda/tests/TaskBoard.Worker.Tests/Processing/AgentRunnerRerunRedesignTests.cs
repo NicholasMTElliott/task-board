@@ -876,6 +876,78 @@ public class AgentRunnerRerunRedesignTests : IDisposable
     }
 
     [Fact]
+    public async Task CandidateGroup_NeedsInfoWinner_RoutesToQuestions_WithoutFallbackSlot()
+    {
+        // Regression guard for KvA #6: NEEDS_INFO candidates are successful
+        // candidates for evaluator ranking. If the evaluator picks one, the
+        // AgentRunner slot loop must surface NEEDS_INFO and stop; it must NOT
+        // treat the slot as failed and fall through to a fallback slot.
+        var needInfo0 = new TrackingExecutor(new AgentResult(
+            AgentOutcome.NEEDS_INFO,
+            "Question A is plausible but incomplete."));
+        var needInfo1 = new TrackingExecutor(new AgentResult(
+            AgentOutcome.NEEDS_INFO,
+            "Question B is the real blocker."));
+        var fallback = new TrackingExecutor(new AgentResult(
+            AgentOutcome.COMPLETE,
+            "fallback should not run"));
+        var evaluator = new TrackingExecutor(new AgentResult(
+            AgentOutcome.COMPLETE,
+            """
+            Candidate 1 wins because its question is the real blocker.
+            ```json
+            {"outcome":"COMPLETE","winner_index":1,"scores":[
+              {"index":0,"score":6,"reasoning":"plausible but weaker"},
+              {"index":1,"score":9,"reasoning":"correctly identifies the blocker"}
+            ]}
+            ```
+            """));
+
+        var executors = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["need-info-0"] = needInfo0,
+            ["need-info-1"] = needInfo1,
+            ["fallback"] = fallback,
+            ["eval"] = evaluator,
+        };
+        var resolver = new AgentExecutorResolver(executors);
+        var store = new ReplayingRunStore();
+        var candidateExecutor = new CandidateExecutor(
+            _gitWorkspaceManager,
+            resolver,
+            store,
+            _boardClient,
+            NullLogger<CandidateExecutor>.Instance);
+        var runner = CreateRunner(
+            resolver,
+            BuildNeedsInfoWinnerWithFallbackConfig(),
+            runStore: store,
+            candidateExecutor: candidateExecutor);
+        SetupBoardCards(DesignListId, initialBody: "Design the thing.");
+
+        var result = await runner.ExecuteAsync(TargetCardId, BoardId, _tempDir, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.NEEDS_INFO, result.Outcome);
+        Assert.Equal("Question B is the real blocker.", result.ErrorDetail);
+        Assert.Equal(1, needInfo0.Calls);
+        Assert.Equal(1, needInfo1.Calls);
+        Assert.Equal(1, evaluator.Calls);
+        Assert.Equal(0, fallback.Calls);
+
+        await _boardClient.Received(1).MoveCardToColumnAsync(
+            TargetCardId, "list-questions", Arg.Any<CancellationToken>());
+
+        var canonicalRow = store.SavedStepResults.Single(r =>
+            r.RunId == store.RunIds[0]
+            && r.StepName == "create_design"
+            && r.CandidateGroupId is null);
+        Assert.Equal(AgentOutcome.NEEDS_INFO, canonicalRow.Outcome);
+
+        var selected = store.RecordedVerdicts.Single(v => v.Selected);
+        Assert.Equal(1, selected.CandidateIndex);
+    }
+
+    [Fact]
     public async Task InterruptedCandidateGroup_DescriptionEdited_NewCanonicalHashDiffersFromUnchangedBaseline()
     {
         // Two-run: baseline run with body "ORIG" and partial rows; reset; new
@@ -1382,6 +1454,57 @@ public class AgentRunnerRerunRedesignTests : IDisposable
                     new List<string>(), Provider: "eval"),
             });
 
+    private static WorkflowConfig BuildNeedsInfoWinnerWithFallbackConfig() =>
+        new(
+            States: new Dictionary<string, WorkflowState>
+            {
+                [DesignListId] = new(
+                    "Design", "senior_engineer", "agent_run",
+                    "Work on {TaskName} ({TaskId})",
+                    new Dictionary<string, TransitionTarget>
+                    {
+                        ["COMPLETE"] = TransitionTarget.ForColumn("list-designed"),
+                        ["NEEDS_INFO"] = TransitionTarget.ForColumn("list-questions"),
+                        ["ERROR"] = TransitionTarget.ForColumn("list-error"),
+                    },
+                    GitBehavior: "discard",
+                    Steps:
+                    [
+                        new("create_design", "senior_engineer",
+                            TaskPrompt: "Design {TaskName}",
+                            Slots:
+                            [
+                                new SlotConfig(
+                                    Candidates:
+                                    [
+                                        new("need-info-0"),
+                                        new("need-info-1"),
+                                    ],
+                                    Evaluator: new EvaluatorConfig(
+                                        Role: "evaluator",
+                                        TaskPrompt: "Pick the candidate with the most important unresolved question.")),
+                                new SlotConfig(
+                                    Candidates:
+                                    [
+                                        new("fallback"),
+                                    ]),
+                            ]),
+                    ]),
+                ["list-designed"] = new("Designed", null, "manual_gate", null,
+                    new Dictionary<string, TransitionTarget>()),
+                ["list-questions"] = new("Questions", null, "holding", null,
+                    new Dictionary<string, TransitionTarget>()),
+                ["list-error"] = new("Error", null, "holding", null,
+                    new Dictionary<string, TransitionTarget>()),
+            },
+            Roles: new Dictionary<string, WorkflowRole>
+            {
+                ["senior_engineer"] = new("opus-4.6", "You are a Senior Engineer.",
+                    new List<string> { "Technical Design" }),
+                ["evaluator"] = new("eval-model", "You are an evaluator.",
+                    new List<string>(), Provider: "eval"),
+            });
+
     private FiveCandidateHarness CreateFiveCandidateHarness(IRunStore runStore)
     {
         var executors = Enumerable.Range(0, 5)
@@ -1602,6 +1725,14 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         }
     }
 
+    private sealed record RecordedVerdict(
+        string RunId,
+        Guid CandidateGroupId,
+        int CandidateIndex,
+        bool Selected,
+        decimal? QualityScore,
+        string? EvaluatorReasoning);
+
     /// <summary>
     /// Records the order of CreateRunAsync vs SetStateEntryShaAsync calls plus
     /// the SHA value passed to SetStateEntryShaAsync. Other IRunStore methods
@@ -1696,6 +1827,7 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         public List<StepResultRecord> SavedStepResults { get; } = [];
         public List<RunRecord> RunRecords { get; } = [];
         public List<string> RunIds { get; } = [];
+        public List<RecordedVerdict> RecordedVerdicts { get; } = [];
         public bool InjectSyntheticCandidateRowsForLatestRun { get; init; }
         private readonly Dictionary<string, double> _runEstimates = [];
         public double? LastPersistedEstimate { get; set; }
@@ -1781,7 +1913,17 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         public Task<IReadOnlyList<StepResultRecord>> GetLatestRunStepResultsAsync(string cardId, string stateName, CancellationToken ct)
             => Task.FromResult<IReadOnlyList<StepResultRecord>>([]);
         public Task UpdateRunSessionStartupMsAsync(string runId, int startupMs, CancellationToken ct) => Task.CompletedTask;
-        public Task UpdateCandidateEvaluationAsync(string runId, Guid candidateGroupId, int candidateIndex, bool selected, decimal? qualityScore, string? evaluatorReasoning, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateCandidateEvaluationAsync(string runId, Guid candidateGroupId, int candidateIndex, bool selected, decimal? qualityScore, string? evaluatorReasoning, CancellationToken ct)
+        {
+            RecordedVerdicts.Add(new RecordedVerdict(
+                runId,
+                candidateGroupId,
+                candidateIndex,
+                selected,
+                qualityScore,
+                evaluatorReasoning));
+            return Task.CompletedTask;
+        }
         public Task IncrementRateLimitEventsAsync(string runId, CancellationToken ct) => Task.CompletedTask;
         public Task FlagWinnersRegressedForRunAsync(string runId, CancellationToken ct) => Task.CompletedTask;
         public Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct) => Task.FromResult(0);

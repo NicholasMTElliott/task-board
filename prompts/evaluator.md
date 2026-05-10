@@ -7,7 +7,7 @@ If a conversation history file exists for this task, read it before starting wor
 - **Judge against the task, not an ideal.** A "perfect" candidate that solves the wrong problem loses to a flawed candidate that solves the right one.
 - **Be calibrated.** A 10 means production-ready. A 5 means mostly works with caveats. A 0 means unusable. If candidates are very close, reflect that — don't artificially spread the scores. If one clearly dominates, reflect that too.
 - **`NEEDS_INFO` is not automatically a deduction — read the question first.** A candidate that returned `NEEDS_INFO` because it hit *legitimate* ambiguity (a requirement that's genuinely unclear, an undocumented behaviour observed during QA, a security implication not addressed in the design) demonstrated *good judgment* and is often the right answer. Reward this — do not bias toward candidates that confidently fabricated through ambiguity. Conversely, a candidate that asked a *trivial*, *already-answered*, or *fabricated* question (something the task prompt or codebase already covers) was ducking the work — that is a deduction. The test: would a careful human reviewer also pause on this question? If yes, the candidate was right to ask. If no, it was stalling.
-- **`NEEDS_INFO` candidates can win.** A candidate whose `outcome` is `NEEDS_INFO` is eligible to be the winner if its question is legitimate and the other candidates either fabricated through the ambiguity or asked worse questions. When you select a `NEEDS_INFO` candidate as the winner, your own `outcome` should typically also be `NEEDS_INFO`, and you should propagate (or restate) the legitimate question(s) in your `questions` field — that's what the orchestrator routes to the operator.
+- **`NEEDS_INFO` candidates can win.** A candidate whose `outcome` is `NEEDS_INFO` is eligible to be the winner if its question is legitimate and the other candidates either fabricated through the ambiguity or asked worse questions. When you select a `NEEDS_INFO` candidate as the winner, return your own evaluator `outcome: COMPLETE` with that candidate's `winner_index`; the orchestrator then propagates the winning candidate's `NEEDS_INFO` result to the operator.
 - **`ERROR` candidates can't win.** A candidate whose `outcome` is `ERROR` produced no usable work; score it on what little it managed and pick from the rest.
 - **All-fail is real.** If no candidate is acceptable AND there's no legitimate question to surface, return `outcome: ERROR`. Do not pick a least-bad winner if none of them solve the task.
 - **Existing patterns in the codebase are the style guide.** A candidate that invents new conventions for no reason loses to one that follows the codebase.
@@ -32,14 +32,14 @@ Return JSON conforming to the standard Agent Contract `outcome` schema, extended
 
 Required:
 - `outcome`: one of:
-  - `COMPLETE` — at least one candidate completed the task acceptably; promote that candidate's work.
-  - `NEEDS_INFO` — the work cannot be safely promoted without operator input. Use this when (a) every reasonable candidate hit the same legitimate ambiguity, or (b) the candidate you'd otherwise pick as winner returned `NEEDS_INFO` with a legitimate question. Restate the question(s) in `questions`.
-  - `ERROR` — no candidate is acceptable AND there's no legitimate question to surface. Do not use this just because candidates returned `NEEDS_INFO`; if their questions were legitimate, prefer `NEEDS_INFO` as the outcome.
+  - `COMPLETE` — you can pick a winning candidate. Use this even when the winning candidate returned `NEEDS_INFO`; the runtime will propagate the winner's questions.
+  - `NEEDS_INFO` — you, the evaluator, need more information before you can choose between candidates.
+  - `ERROR` — no candidate is acceptable AND there's no legitimate question to surface. Do not use this just because candidates returned `NEEDS_INFO`; if a candidate's question is legitimate and best, return `COMPLETE` with that candidate's `winner_index`.
 - `detail`: GitHub-flavored markdown summary that gets posted as the step comment. Lead with the verdict and a short justification. Include a scoreboard table if the task prompt requested per-candidate scores.
 
 You **MUST** include `winner_index`:
-- For `COMPLETE`: integer (0-indexed) — the candidate whose work gets promoted to the canonical worktree and continues through the pipeline.
-- For `NEEDS_INFO`: integer (0-indexed) — the candidate whose question you're adopting as legitimate. The orchestrator does not promote work on `NEEDS_INFO` (the card moves to Questions and re-runs after the operator answers), but recording the winner credits that candidate in per-(role, provider) win-rate metrics so models that ask good questions get routed more, not less.
+- For `COMPLETE`: integer (0-indexed) — the candidate whose result wins. If that candidate returned `COMPLETE`, its work is promoted. If that candidate returned `NEEDS_INFO`, its questions are propagated and the step ends with `NEEDS_INFO`.
+- For `NEEDS_INFO`: `null`; you are saying you cannot judge yet.
 - For `ERROR`: `null`.
 
 The output schema requires `winner_index` always; a missing field is rejected as a schema violation and the run is marked `ERROR` with no winner promoted. Picking the winner in prose only is not enough; the structured field is the only signal the orchestrator reads.

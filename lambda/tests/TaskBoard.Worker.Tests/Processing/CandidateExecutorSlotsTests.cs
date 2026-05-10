@@ -76,7 +76,7 @@ public class CandidateExecutorSlotsTests : IDisposable
     }
 
     [Fact]
-    public async Task FirstSlotAllCandidatesFailed_ProducesSlotFailedOutcome()
+    public async Task FirstSlotAllCandidatesErrored_ProducesSlotFailedOutcome()
     {
         // Both candidates in slot 0 return ERROR. The slot returns Failed,
         // signalling AgentRunner to try slot 1. (This test exercises the slot
@@ -85,8 +85,8 @@ public class CandidateExecutorSlotsTests : IDisposable
         {
             ["fail-a"]   = new ScriptedExecutor(AgentOutcome.ERROR, "boom A"),
             ["fail-b"]   = new ScriptedExecutor(AgentOutcome.ERROR, "boom B"),
-            // evaluator never runs because all candidates failed
-            ["claude-cli"] = new SentinelExecutor("evaluator must not run when all candidates fail"),
+            // evaluator never runs because all candidates errored
+            ["claude-cli"] = new SentinelExecutor("evaluator must not run when all candidates error"),
         });
 
         var slot = new SlotConfig(
