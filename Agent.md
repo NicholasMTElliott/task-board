@@ -197,6 +197,7 @@ Most operators will only edit a small subset of keys. A complete annotated examp
       "MemoryLimit": null,                       // e.g. "4g"
       "CpuLimit": null,                          // e.g. "2.0"
       "ContainerUser": "",                       // empty = image default
+      "GroupAdd": [],                            // docker run --group-add entries
       "MountHostDockerSocket": false,            // true => -v /var/run/docker.sock:/var/run/docker.sock
       "HostDockerSocketPath": "/var/run/docker.sock",
       "ContainerDockerSocketPath": "/var/run/docker.sock",

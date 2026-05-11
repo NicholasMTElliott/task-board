@@ -390,6 +390,11 @@ public sealed class DockerClaudeQwenAgentExecutor(
             args.Add("--user");
             args.Add(_options.ContainerUser);
         }
+        foreach (var group in _options.GroupAdd.Where(g => !string.IsNullOrWhiteSpace(g)))
+        {
+            args.Add("--group-add");
+            args.Add(group);
+        }
 
         if (_options.MountHostDockerSocket)
         {

@@ -83,6 +83,7 @@ Example (in `appsettings.user.json`):
 | `MemoryLimit` | *(unset)* | Forwarded to `docker run --memory` when set. e.g. `4g` |
 | `CpuLimit` | *(unset)* | Forwarded to `docker run --cpus` when set. e.g. `2.0` |
 | `ContainerUser` | *(unset)* | Forwarded to `docker run --user` when set. e.g. `1000:1000` |
+| `GroupAdd` | `[]` | Forwarded to `docker run --group-add` once per entry. Use this to grant the default non-root `agent` user access to a mounted Docker socket group. |
 | `CredentialPath` | *(auto `~/.claude`)* | Source for the per-run staged RW copy mounted into the container (so the Claude CLI can create `session-env/` at runtime). Host `~/.claude/` is never written to by the agent. Large subdirs (`projects`, `shell-snapshots`, `todos`, `history`) are skipped during the copy. |
 | `CredentialMountPoint` | `/home/agent/.claude` | Container-side target for the staged credentials. Matches the `agent` user's home directory in the default sandbox image. |
 | `PromptMountPoint` | `/mnt/aiboard/prompts` | Read-only mount for system-prompt files. |
@@ -92,7 +93,7 @@ Example (in `appsettings.user.json`):
 
 `MountHostDockerSocket` only provides daemon access. The sandbox image still needs Docker client tooling installed. For project-specific needs, add Docker CLI / Compose in a project overlay image, then enable the socket mount in that project's `.aiboard/appsettings.json`.
 
-Socket permissions are host-dependent. If Docker commands inside the sandbox fail with "permission denied" on `/var/run/docker.sock`, either run that provider as a user/group that can access the socket or set `ContainerUser` to `root` for that provider. The socket already grants host-Docker control, so this is a convenience/security trade-off rather than a new boundary.
+Socket permissions are host-dependent. If Docker commands inside the sandbox fail with "permission denied" on `/var/run/docker.sock`, keep `ContainerUser` unset and add the socket group id with `GroupAdd`. Do not run agent CLIs as `root`: Claude CLI rejects bypass-permissions mode under root/sudo, and Codex/OpenCode credential lookup can drift to `/root`.
 
 ---
 

@@ -15,6 +15,7 @@ public class DockerClaudeAgentExecutorTests
         string? memoryLimit = null,
         string? cpuLimit = null,
         string containerUser = "",
+        List<string>? groupAdd = null,
         bool mountHostDockerSocket = false)
     {
         var opts = Options.Create(new DockerClaudeAgentOptions
@@ -28,6 +29,7 @@ public class DockerClaudeAgentExecutorTests
             MemoryLimit = memoryLimit,
             CpuLimit = cpuLimit,
             ContainerUser = containerUser,
+            GroupAdd = groupAdd ?? [],
             MountHostDockerSocket = mountHostDockerSocket,
         });
         return new DockerClaudeAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
@@ -409,6 +411,24 @@ public class DockerClaudeAgentExecutorTests
         var idx = Array.IndexOf(dockerArgs, "--user");
         Assert.True(idx >= 0, "Expected --user flag");
         Assert.Equal("1001:1001", dockerArgs[idx + 1]);
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_GroupAdd_PassesGroupAddFlags()
+    {
+        var executor = CreateExecutor(groupAdd: ["998", "docker"]);
+        var dockerArgs = executor.BuildDockerArgumentList(
+            "c1", "/host/prompts", ["--print"]);
+
+        var indexes = dockerArgs
+            .Select((value, index) => (value, index))
+            .Where(x => x.value == "--group-add")
+            .Select(x => x.index)
+            .ToArray();
+
+        Assert.Equal(2, indexes.Length);
+        Assert.Equal("998", dockerArgs[indexes[0] + 1]);
+        Assert.Equal("docker", dockerArgs[indexes[1] + 1]);
     }
 
     [Fact]

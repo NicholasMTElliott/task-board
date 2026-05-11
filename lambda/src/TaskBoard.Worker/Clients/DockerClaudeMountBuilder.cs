@@ -60,6 +60,11 @@ public sealed class DockerClaudeMountBuilder(ILogger<DockerClaudeMountBuilder> l
             // Prevents git from acquiring index locks on read-only operations.
             // Required because the base .git directory is mounted read-only.
             ["GIT_OPTIONAL_LOCKS"] = "0",
+            // Docker --user does not reliably update HOME. Keep Claude pointed
+            // at the credential mount's home directory when operators use a
+            // numeric/container user override.
+            ["HOME"] = ParentOfCredentialMount(
+                options.CredentialMountPoint ?? DefaultCredentialMountPoint),
         };
 
         return new DockerMountContext(mounts, envVars, pathMap, tempFiles, tempDirs);
@@ -212,6 +217,13 @@ public sealed class DockerClaudeMountBuilder(ILogger<DockerClaudeMountBuilder> l
         // and "/home/agent/.claude" both resolve to "/home/agent/.claude.json".
         var trimmed = credMountPoint.TrimEnd('/');
         return trimmed + ".json";
+    }
+
+    internal static string ParentOfCredentialMount(string credentialMountPoint)
+    {
+        var trimmed = credentialMountPoint.TrimEnd('/');
+        var slash = trimmed.LastIndexOf('/');
+        return slash <= 0 ? "/" : trimmed[..slash];
     }
 
     private static readonly HashSet<string> CredentialCopyExcludes = new(StringComparer.OrdinalIgnoreCase)

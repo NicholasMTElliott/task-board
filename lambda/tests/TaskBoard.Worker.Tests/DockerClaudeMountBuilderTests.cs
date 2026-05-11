@@ -560,6 +560,15 @@ public class DockerClaudeMountBuilderTests : IDisposable
         Assert.Equal(expected, DockerClaudeMountBuilder.DeriveClaudeJsonContainerPath(mount));
     }
 
+    [Theory]
+    [InlineData("/home/agent/.claude", "/home/agent")]
+    [InlineData("/home/agent/.claude/", "/home/agent")]
+    [InlineData("/claude", "/")]
+    public void ParentOfCredentialMount_ReturnsHomeParent(string mount, string expected)
+    {
+        Assert.Equal(expected, DockerClaudeMountBuilder.ParentOfCredentialMount(mount));
+    }
+
     private static string NormalizeForwardSlashes(string p) => p.Replace('\\', '/');
 
     // ── BuildAsync — environment variables ──────────────────────────────────
@@ -574,6 +583,22 @@ public class DockerClaudeMountBuilderTests : IDisposable
 
         Assert.True(ctx.EnvironmentVariables.TryGetValue("GIT_OPTIONAL_LOCKS", out var value));
         Assert.Equal("0", value);
+    }
+
+    [Fact]
+    public async Task BuildAsync_SetsHomeToCredentialMountParent()
+    {
+        await using var ctx = await Builder.BuildAsync(
+            _tempDir,
+            new DockerClaudeAgentOptions
+            {
+                CredentialPath = "nonexistent-path",
+                CredentialMountPoint = "/opt/claude-creds",
+            },
+            CancellationToken.None);
+
+        Assert.True(ctx.EnvironmentVariables.TryGetValue("HOME", out var home));
+        Assert.Equal("/opt", home);
     }
 
     // ── DockerMountContext.TranslatePath ─────────────────────────────────────

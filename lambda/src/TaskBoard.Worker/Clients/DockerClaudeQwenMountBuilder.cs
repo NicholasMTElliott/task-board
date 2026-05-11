@@ -82,6 +82,10 @@ public sealed class DockerClaudeQwenMountBuilder(ILogger<DockerClaudeQwenMountBu
         {
             // Lets git read commands proceed against the RO base .git mount.
             ["GIT_OPTIONAL_LOCKS"] = "0",
+            // Docker --user does not reliably update HOME. Keep Claude pointed
+            // at the synthetic config directory's parent when a numeric/user
+            // override is configured.
+            ["HOME"] = "/home/agent",
             // Redirect Claude CLI to the local proxy. Bare host:port; the
             // Anthropic Messages adapter inside the CLI appends /v1/messages.
             ["ANTHROPIC_BASE_URL"] = options.ProviderBaseUrl,

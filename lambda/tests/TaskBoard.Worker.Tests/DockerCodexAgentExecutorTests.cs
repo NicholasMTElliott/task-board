@@ -16,6 +16,7 @@ public class DockerCodexAgentExecutorTests
         string? memoryLimit = null,
         string? cpuLimit = null,
         string containerUser = "",
+        List<string>? groupAdd = null,
         bool mountHostDockerSocket = false)
     {
         var opts = Options.Create(new DockerCodexAgentOptions
@@ -30,6 +31,7 @@ public class DockerCodexAgentExecutorTests
             MemoryLimit = memoryLimit,
             CpuLimit = cpuLimit,
             ContainerUser = containerUser,
+            GroupAdd = groupAdd ?? [],
             MountHostDockerSocket = mountHostDockerSocket,
         });
         return new DockerCodexAgentExecutor(
@@ -274,6 +276,24 @@ public class DockerCodexAgentExecutorTests
 
         Assert.Contains("/var/run/docker.sock:/var/run/docker.sock", args);
         Assert.DoesNotContain("/var/run/docker.sock:/var/run/docker.sock:ro", args);
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_GroupAdd_PassesGroupAddFlags()
+    {
+        var executor = CreateExecutor(groupAdd: ["998", "docker"]);
+        var args = executor.BuildDockerArgumentList(
+            "n", "/tmp/host-schema.json", "/tmp/codex-schema.json", ["exec"]);
+
+        var indexes = args
+            .Select((value, index) => (value, index))
+            .Where(x => x.value == "--group-add")
+            .Select(x => x.index)
+            .ToArray();
+
+        Assert.Equal(2, indexes.Length);
+        Assert.Equal("998", args[indexes[0] + 1]);
+        Assert.Equal("docker", args[indexes[1] + 1]);
     }
 
     // ── IsRateLimited ────────────────────────────────────────────────────────

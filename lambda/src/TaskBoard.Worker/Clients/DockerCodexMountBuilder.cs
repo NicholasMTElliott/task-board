@@ -82,6 +82,11 @@ public sealed class DockerCodexMountBuilder(ILogger<DockerCodexMountBuilder> log
             // Required because the base .git directory is mounted read-only;
             // git read commands skip index lock acquisition.
             ["GIT_OPTIONAL_LOCKS"] = "0",
+            // Docker --user does not reliably update HOME. Keep Codex pointed
+            // at the credential mount so root/numeric-user overrides do not
+            // drift to /root/.codex and miss the staged auth files.
+            ["HOME"] = ParentOfCredentialMount(
+                options.CredentialMountPoint ?? DefaultCredentialMountPoint),
         };
 
         // Stable per-host installation_id passed via env var; the sandbox
@@ -152,6 +157,13 @@ public sealed class DockerCodexMountBuilder(ILogger<DockerCodexMountBuilder> log
         {
             return ProcessStableInstallationId.Value;
         }
+    }
+
+    internal static string ParentOfCredentialMount(string credentialMountPoint)
+    {
+        var trimmed = credentialMountPoint.TrimEnd('/');
+        var slash = trimmed.LastIndexOf('/');
+        return slash <= 0 ? "/" : trimmed[..slash];
     }
 
     private static class ProcessStableInstallationId

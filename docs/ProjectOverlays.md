@@ -25,7 +25,7 @@ If the project tooling itself runs Docker, split the work in two places:
 - Overlay image: install Docker CLI / Compose.
 - Runtime config: set `DockerAgents:<Provider>:MountHostDockerSocket = true` so the sandbox can reach the host daemon.
 
-A Dockerfile cannot grant daemon access by itself. The socket mount is a runtime `docker run -v /var/run/docker.sock:/var/run/docker.sock` decision and gives the agent host-Docker control. If the sandbox user cannot read/write the socket, set `ContainerUser` to `root` for that provider or run with a matching Docker group.
+A Dockerfile cannot grant daemon access by itself. The socket mount is a runtime `docker run -v /var/run/docker.sock:/var/run/docker.sock` decision and gives the agent host-Docker control. If the sandbox user cannot read/write the socket, keep the runtime user as `agent` and add the socket's group id with `DockerAgents:<Provider>:GroupAdd`. Do not set `ContainerUser` to `root`; Claude CLI rejects bypass-permissions mode under root/sudo, and other CLIs can drift to `/root` for credentials.
 
 ---
 

@@ -29,6 +29,7 @@ if [ -n "${CODEX_INSTALLATION_ID:-}" ]; then
     # obviously-malformed value here gives clearer logs than letting
     # codex silently rewrite it.
     if [[ "$CODEX_INSTALLATION_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+        mkdir -p "$HOME/.codex"
         printf '%s' "$CODEX_INSTALLATION_ID" > "$HOME/.codex/installation_id"
     else
         echo "aiboard-codex entrypoint: CODEX_INSTALLATION_ID is set but not a valid UUID; ignoring" >&2

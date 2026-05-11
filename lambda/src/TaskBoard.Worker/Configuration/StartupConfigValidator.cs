@@ -152,6 +152,15 @@ public static class StartupConfigValidator
                 "or remove the setting."));
         }
 
+        // ── Error 11: Docker agents must not run as root ────────────────────
+        // Claude CLI rejects bypass-permissions mode when run as root/sudo, and
+        // root also changes HOME for several CLIs. Use --group-add for Docker
+        // socket permissions instead of changing the runtime user.
+        AddRootContainerUserFindings(findings, config, DockerClaudeAgentOptions.SectionName);
+        AddRootContainerUserFindings(findings, config, DockerClaudeQwenAgentOptions.SectionName);
+        AddRootContainerUserFindings(findings, config, DockerCodexAgentOptions.SectionName);
+        AddRootContainerUserFindings(findings, config, DockerOpenCodeAgentOptions.SectionName);
+
         return findings;
     }
 
@@ -182,5 +191,29 @@ public static class StartupConfigValidator
             if (SectionHasValues(child)) return true;
         }
         return false;
+    }
+
+    private static void AddRootContainerUserFindings(
+        List<Finding> findings, IConfiguration config, string sectionName)
+    {
+        var key = $"{sectionName}:ContainerUser";
+        var value = config[key]?.Trim();
+        if (string.IsNullOrWhiteSpace(value)) return;
+
+        if (!IsRootUser(value)) return;
+
+        findings.Add(new Finding(Severity.Error, key,
+            $"{key} is set to '{value}', which runs the agent CLI as root. " +
+            "Claude CLI rejects bypass-permissions mode under root/sudo, and other CLIs may drift to /root for credentials. " +
+            "Leave ContainerUser unset and use MountHostDockerSocket=true plus GroupAdd=[\"<docker-socket-gid>\"] " +
+            "when the non-root agent user needs Docker socket access."));
+    }
+
+    private static bool IsRootUser(string value)
+    {
+        if (string.Equals(value, "root", StringComparison.OrdinalIgnoreCase)) return true;
+
+        var userPart = value.Split(':', 2)[0].Trim();
+        return userPart == "0";
     }
 }

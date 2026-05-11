@@ -17,6 +17,7 @@ public class DockerClaudeAgentOptionsTests
         Assert.Equal("", opts.ContainerUser);
         Assert.Null(opts.MemoryLimit);
         Assert.Null(opts.CpuLimit);
+        Assert.Empty(opts.GroupAdd);
         Assert.Null(opts.CredentialPath);
         Assert.True(opts.ReuseContainer);
         Assert.Equal("aiboard-run", opts.ContainerNamePrefix);
@@ -54,6 +55,8 @@ public class DockerClaudeAgentOptionsTests
             ["DockerAgents:Claude:MemoryLimit"] = "4g",
             ["DockerAgents:Claude:CpuLimit"] = "2.0",
             ["DockerAgents:Claude:ContainerUser"] = "agent",
+            ["DockerAgents:Claude:GroupAdd:0"] = "998",
+            ["DockerAgents:Claude:GroupAdd:1"] = "docker",
             ["DockerAgents:Claude:MountHostDockerSocket"] = "true",
             ["DockerAgents:Claude:HostDockerSocketPath"] = "/custom/docker.sock",
             ["DockerAgents:Claude:ContainerDockerSocketPath"] = "/run/docker.sock",
@@ -72,6 +75,7 @@ public class DockerClaudeAgentOptionsTests
         Assert.Equal("4g", opts.MemoryLimit);
         Assert.Equal("2.0", opts.CpuLimit);
         Assert.Equal("agent", opts.ContainerUser);
+        Assert.Equal(["998", "docker"], opts.GroupAdd);
         Assert.True(opts.MountHostDockerSocket);
         Assert.Equal("/custom/docker.sock", opts.HostDockerSocketPath);
         Assert.Equal("/run/docker.sock", opts.ContainerDockerSocketPath);

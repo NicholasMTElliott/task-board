@@ -45,6 +45,13 @@ public abstract class DockerAgentOptionsBase
     /// <summary>User to run as inside the container. Empty = use image default.</summary>
     public string ContainerUser { get; set; } = "";
 
+    /// <summary>
+    /// Supplementary groups to add to the container process. Forwarded to
+    /// <c>docker run --group-add</c>. Useful for granting the non-root agent
+    /// user access to a mounted Docker socket without running the agent as root.
+    /// </summary>
+    public List<string> GroupAdd { get; set; } = [];
+
     /// <summary>Optional container memory limit (e.g., "4g"). Null = no limit.</summary>
     public string? MemoryLimit { get; set; }
 

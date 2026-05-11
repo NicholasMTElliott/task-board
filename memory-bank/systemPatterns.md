@@ -198,7 +198,7 @@ Agent executors are registered via `AgentExecutorResolver` which resolves by pro
 - Rate-limit detection via `ClaudeAgentExecutor.IsRateLimited(stderr)` (same as host executor)
 - NDJSON parsing via shared `AgentOutputParser.ParseStreamOutput`
 - Workspace/credential mounts built by `DockerClaudeMountBuilder` (inherits from `DockerMountBuilderBase` for the shared worktree/`.git` mount construction; injected optionally); workspace mounts and env vars passed to `docker run` args and `SessionRequest`
-- Host Docker socket passthrough (`MountHostDockerSocket=true`) adds writable `-v {HostDockerSocketPath}:{ContainerDockerSocketPath}` before `AdditionalMounts`; default both paths `/var/run/docker.sock`. Requires Docker CLI/Compose inside the image. Grants host-Docker control. If socket permissions block UID 1000, operator sets `ContainerUser=root` or matches Docker group.
+- Host Docker socket passthrough (`MountHostDockerSocket=true`) adds writable `-v {HostDockerSocketPath}:{ContainerDockerSocketPath}` before `AdditionalMounts`; default both paths `/var/run/docker.sock`. Requires Docker CLI/Compose inside the image. Grants host-Docker control. If socket permissions block UID 1000, operator keeps `ContainerUser` unset and sets `GroupAdd` to the socket group id. `ContainerUser=root` is startup-invalid: Claude CLI rejects bypass-permissions under root/sudo; other CLIs can drift HOME/credential lookup to `/root`.
 - Extensible static mounts (`DockerClaudeAgentOptions.AdditionalMounts` dictionary — inherited from the base) — operator-supplied overrides beyond the standard workspace/credential set
 - Registered automatically when Docker daemon is detected at startup (`PrerequisiteValidator.IsDockerAvailableAsync` runs `docker info`)
 
@@ -227,9 +227,10 @@ To avoid per-step container startup overhead, executors that support Docker can 
 - `MaxBudgetUsd` (decimal, default: `10.00`) — max Claude CLI budget per invocation
 - `TimeoutSeconds` (int, default: `900`) — container kill timeout
 - `ContainerUser` (string, default: `""`) — user to run as inside container (empty = image default)
+- `GroupAdd` (`List<string>`, default `[]`) — forwarded as repeated `docker run --group-add`; preferred Docker-socket permission fix for the non-root `agent` user
 - `MemoryLimit` (string?, default: `null`) — optional memory limit, e.g. `"4g"`
 - `CpuLimit` (string?, default: `null`) — optional CPU limit, e.g. `"2.0"`
-- `NetworkMode` (string, default: `"host"`) — container network mode, forwarded as `--network` to `docker run`. `"host"` gives the sandbox access to host-published ports (e.g. the local `docker-compose` Postgres/Grafana stack on `localhost:5432`, `localhost:3000`). Use a compose network name (e.g. `"task-board_default"`) to reach support services by service name. Empty/null omits the `--network` flag (Docker default bridge). `MemoryLimit`, `CpuLimit`, and `ContainerUser` are likewise forwarded to `--memory`, `--cpus`, and `--user` respectively when set — all built in `DockerClaudeAgentExecutor.BuildDockerArgumentList`
+- `NetworkMode` (string, default: `"host"`) — container network mode, forwarded as `--network` to `docker run`. `"host"` gives the sandbox access to host-published ports (e.g. local `docker-compose` Postgres/Grafana on `localhost`). Use a compose network name to reach support services by service name. Empty/null omits `--network`. `MemoryLimit`, `CpuLimit`, `ContainerUser`, and `GroupAdd` forward to `--memory`, `--cpus`, `--user`, and repeated `--group-add`.
 - `MountHostDockerSocket` (bool, default: `false`) — when true, bind-mounts host Docker socket; paired paths `HostDockerSocketPath` / `ContainerDockerSocketPath` default `/var/run/docker.sock`
 - `CredentialPath` (string, default: `""`) — host path to Claude CLI credentials; auto-detected from `~/.claude` if empty; used by `DockerClaudeMountBuilder`
 - `CredentialMountPoint` (string?, default: `null`) — container path for credentials; defaults to `/home/agent/.claude` (matches `agent` user home in sandbox image)

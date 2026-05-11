@@ -435,6 +435,28 @@ public class DockerCodexMountBuilderTests : IDisposable
     }
 
     [Fact]
+    public async Task BuildAsync_SetsHomeToCredentialMountParent()
+    {
+        await using var ctx = await Builder.BuildAsync(_tempDir, new DockerCodexAgentOptions
+        {
+            CredentialPath = Path.Combine(_tempDir, "missing"),
+            CredentialMountPoint = "/opt/codex-creds",
+        });
+
+        Assert.True(ctx.EnvironmentVariables.TryGetValue("HOME", out var home));
+        Assert.Equal("/opt", home);
+    }
+
+    [Theory]
+    [InlineData("/home/agent/.codex", "/home/agent")]
+    [InlineData("/home/agent/.codex/", "/home/agent")]
+    [InlineData("/codex", "/")]
+    public void ParentOfCredentialMount_ReturnsHomeParent(string mountPoint, string expected)
+    {
+        Assert.Equal(expected, DockerCodexMountBuilder.ParentOfCredentialMount(mountPoint));
+    }
+
+    [Fact]
     public async Task BuildAsync_SetsCodexInstallationIdEnvVar()
     {
         // Phase 2: aiboard's per-host installation_id is passed to the

@@ -293,6 +293,34 @@ public class StartupConfigValidatorTests
         Assert.DoesNotContain(findings, f => f.Key == "CodexCli:MaxBudgetUsd");
     }
 
+    // ── Error 11: Docker ContainerUser root is unsupported ──────────────────
+
+    [Theory]
+    [InlineData("DockerAgents:Claude:ContainerUser", "root")]
+    [InlineData("DockerAgents:ClaudeQwen:ContainerUser", "0")]
+    [InlineData("DockerAgents:Codex:ContainerUser", "0:0")]
+    [InlineData("DockerAgents:OpenCode:ContainerUser", "ROOT")]
+    public void DockerContainerUserRoot_ProducesError(string key, string value)
+    {
+        var findings = StartupConfigValidator.Validate(Build((key, value)));
+
+        var error = Assert.Single(findings, f =>
+            f.Severity == StartupConfigValidator.Severity.Error
+            && f.Key == key);
+        Assert.Contains("GroupAdd", error.Message);
+        Assert.Contains("root", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("DockerAgents:Claude:ContainerUser", "agent")]
+    [InlineData("DockerAgents:Codex:ContainerUser", "1000:1000")]
+    public void DockerContainerUserNonRoot_NoFinding(string key, string value)
+    {
+        var findings = StartupConfigValidator.Validate(Build((key, value)));
+
+        Assert.DoesNotContain(findings, f => f.Key == key);
+    }
+
     // ── Cross-cutting: KvA exact reproduction ────────────────────────────────
 
     [Fact]
