@@ -77,6 +77,7 @@ The `AttributionHeader=off` and `NonessentialTraffic=off` lines confirm the cach
     "ClaudeQwen": {
       "ImageName": "aiboard-agent-sandbox:latest",
       "NetworkMode": "llm-net",
+      "MountHostDockerSocket": false,
       "ProviderBaseUrl": "http://llama-server:8080",
       "AuthToken": "local",
       "ModelName": "qwen3.6-35b-a3b",
@@ -93,6 +94,9 @@ The `AttributionHeader=off` and `NonessentialTraffic=off` lines confirm the cach
 |---|---|---|
 | `ImageName` | `aiboard-agent-sandbox:latest` | Reuses the existing Claude sandbox. |
 | `NetworkMode` | `llm-net` | Bridge network owned by `local-llm`. |
+| `MountHostDockerSocket` | `false` | When true, bind-mounts the host Docker daemon socket into the sandbox. Use with a project overlay that installs Docker CLI / Compose when this executor must run Docker-backed verification commands. Grants host-Docker control. |
+| `HostDockerSocketPath` | `/var/run/docker.sock` | Host socket path used when `MountHostDockerSocket=true`. |
+| `ContainerDockerSocketPath` | `/var/run/docker.sock` | Container socket path used when `MountHostDockerSocket=true`. |
 | `ProviderBaseUrl` | `http://llama-server:8080` | **No `/v1` suffix** — Claude CLI's Anthropic Messages adapter appends `/v1/messages` itself. (Compare with the OpenCode default which DOES include `/v1` because OpenAI-compat appends `/chat/completions`.) |
 | `AuthToken` | `local` | llama.cpp accepts any non-empty token; this is a local dummy. |
 | `ModelName` | `qwen3.6-35b-a3b` | **Default** model when the workflow role doesn't pin one. Per-role `model` overrides this. |

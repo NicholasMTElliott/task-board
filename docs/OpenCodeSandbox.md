@@ -77,6 +77,7 @@ Having the executor registered is not the same as using it — nothing routes to
     "OpenCode": {
       "ImageName": "aiboard-opencode-sandbox:latest",
       "NetworkMode": "llm-net",
+      "MountHostDockerSocket": false,
       "ProviderBaseUrl": "http://llama-server:8080/v1",
       "AuthToken": "local",
       "ModelName": "qwen3.6-35b-a3b",
@@ -91,6 +92,9 @@ Having the executor registered is not the same as using it — nothing routes to
 |---|---|---|
 | `ImageName` | `aiboard-opencode-sandbox:latest` | Image to run. |
 | `NetworkMode` | `llm-net` | Must match the bridge network owned by `local-llm`. Change only if you renamed that network. |
+| `MountHostDockerSocket` | `false` | When true, bind-mounts the host Docker daemon socket into the sandbox. Use with a project overlay that installs Docker CLI / Compose when OpenCode must run Docker-backed verification commands. Grants host-Docker control. |
+| `HostDockerSocketPath` | `/var/run/docker.sock` | Host socket path used when `MountHostDockerSocket=true`. |
+| `ContainerDockerSocketPath` | `/var/run/docker.sock` | Container socket path used when `MountHostDockerSocket=true`. |
 | `ProviderBaseUrl` | `http://llama-server:8080/v1` | OpenAI-compatible endpoint exposed by the local llama.cpp proxy. The `/v1` suffix is required — the OpenCode `@ai-sdk/openai-compatible` adapter appends `/chat/completions` to this prefix. |
 | `AuthToken` | `local` | Dummy token — llama.cpp validates nothing. Any non-empty string works. |
 | `ModelName` | `qwen3.6-35b-a3b` | **Default** model alias when a workflow role doesn't pin one. Both Qwen3.6 variants (`qwen3.6-35b-a3b` and `qwen3.6-35b-a3b-think`) are registered in the sandbox image; per-role `model` overrides this default. |

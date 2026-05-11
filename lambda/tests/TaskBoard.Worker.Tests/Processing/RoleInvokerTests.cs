@@ -10,10 +10,11 @@ namespace TaskBoard.Worker.Tests.Processing;
 ///   <item>Attempt 0 = primary; attempts 1..N = each <see cref="RoleFallback"/>.</item>
 ///   <item>Fallback Model defaults to role.Model when its own Model is null.</item>
 ///   <item>Fallback ProviderParams overlay the caller-supplied primary params.</item>
-///   <item>Default <c>FallbackOn</c> = <c>[RATE_LIMIT, INFRASTRUCTURE]</c>.</item>
+///   <item>Default <c>FallbackOn</c> = every non-cancellation executor failure
+///         category.</item>
 ///   <item>Cancellation is never a fallback trigger.</item>
-///   <item>AGENT_ERROR (the agent's in-band ERROR verdict, not an exception) is
-///         never a trigger — it's just an outcome the runtime returns.</item>
+///   <item>AGENT_ERROR as an exception category can trigger fallback; an
+///         in-band ERROR verdict is an AgentResult, not an exception.</item>
 /// </list>
 /// </summary>
 public class RoleInvokerTests
@@ -122,15 +123,17 @@ public class RoleInvokerTests
     // ── EffectiveFallbackOn ───────────────────────────────────────────────
 
     [Fact]
-    public void EffectiveFallbackOn_Null_UsesDefaultRateLimitAndInfrastructure()
+    public void EffectiveFallbackOn_Null_UsesEveryNonCancellationFailureCategory()
     {
         var role = MakeRole(fallbackOn: null);
 
         var set = RoleInvoker.EffectiveFallbackOn(role);
 
-        Assert.Equal(2, set.Count);
+        Assert.Equal(4, set.Count);
         Assert.Contains(FailureReason.RATE_LIMIT, set);
+        Assert.Contains(FailureReason.AGENT_ERROR, set);
         Assert.Contains(FailureReason.INFRASTRUCTURE, set);
+        Assert.Contains(FailureReason.TIMEOUT, set);
     }
 
     [Fact]
@@ -140,7 +143,7 @@ public class RoleInvokerTests
 
         var set = RoleInvoker.EffectiveFallbackOn(role);
 
-        Assert.Equal(2, set.Count);
+        Assert.Equal(4, set.Count);
     }
 
     [Fact]
@@ -185,15 +188,14 @@ public class RoleInvokerTests
     }
 
     [Fact]
-    public void ShouldFallback_Timeout_NotInDefaultSet_False()
+    public void ShouldFallback_Timeout_InDefaultSet_True()
     {
-        // TIMEOUT is opt-in (per user decision in the planning conversation).
         var ex = new TimeoutException();
 
         var result = RoleInvoker.ShouldFallback(ex,
-            new HashSet<FailureReason> { FailureReason.RATE_LIMIT, FailureReason.INFRASTRUCTURE });
+            RoleInvoker.EffectiveFallbackOn(MakeRole()));
 
-        Assert.False(result);
+        Assert.True(result);
     }
 
     [Fact]
@@ -228,11 +230,22 @@ public class RoleInvokerTests
     }
 
     [Fact]
-    public void ShouldFallback_GenericException_ClassifiesAgentError_NotInDefaultSet()
+    public void ShouldFallback_GenericException_ClassifiesAgentError_InDefaultSet()
     {
         // Agent.ExecuteAsync threw something unexpected (parser bug, JSON
-        // failure). Classified as AGENT_ERROR. Default fallback set excludes
-        // AGENT_ERROR so this propagates.
+        // failure). Classified as AGENT_ERROR. Default fallback set includes it
+        // because no valid AgentResult exists yet.
+        var ex = new InvalidOperationException("parser failed");
+
+        var result = RoleInvoker.ShouldFallback(ex,
+            RoleInvoker.EffectiveFallbackOn(MakeRole()));
+
+        Assert.True(result);
+    }
+
+    [Fact]
+    public void ShouldFallback_GenericException_CustomSetCanExcludeAgentError()
+    {
         var ex = new InvalidOperationException("parser failed");
 
         var result = RoleInvoker.ShouldFallback(ex,

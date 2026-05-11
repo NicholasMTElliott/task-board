@@ -13,9 +13,8 @@ public static class WorkflowConfigValidator
     ///         (per <see cref="StartupConfigValidator.KnownAgentExecutors"/>).
     ///         A typo here would surface as a runtime resolver miss when the
     ///         fallback fires — possibly hours into a polling run.</item>
-    ///   <item><c>fallbackOn</c> cannot contain <c>AGENT_ERROR</c>. The agent's
-    ///         in-band ERROR verdict is a quality signal handled by candidate
-    ///         evaluation, not a runtime failure that should swap providers.</item>
+    ///   <item><c>fallbackOn</c> without any fallbacks is invalid because it can
+    ///         never take effect.</item>
     /// </list>
     /// </summary>
     private static void ValidateRoleFallback(string roleId, WorkflowRole role, List<string> errors)
@@ -41,16 +40,8 @@ public static class WorkflowConfigValidator
             }
         }
 
-        if (role.FallbackOn is { Count: > 0 } fallbackOn)
+        if (role.FallbackOn is { Count: > 0 })
         {
-            if (fallbackOn.Contains(FailureReason.AGENT_ERROR))
-            {
-                errors.Add(
-                    $"Role '{roleId}' has fallbackOn containing AGENT_ERROR. AGENT_ERROR is the " +
-                    "agent's in-band quality verdict, not a runtime failure — fallback would mask " +
-                    "real issues. Use candidate evaluation if you want to compare agents on quality.");
-            }
-
             if ((role.Fallbacks is null or { Count: 0 }))
             {
                 errors.Add(

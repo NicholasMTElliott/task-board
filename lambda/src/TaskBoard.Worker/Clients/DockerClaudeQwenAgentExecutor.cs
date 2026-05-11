@@ -391,6 +391,19 @@ public sealed class DockerClaudeQwenAgentExecutor(
             args.Add(_options.ContainerUser);
         }
 
+        if (_options.MountHostDockerSocket)
+        {
+            AddVolumeMount(
+                args,
+                "host Docker socket",
+                new DockerMount
+                {
+                    HostPath = _options.HostDockerSocketPath,
+                    ContainerPath = _options.ContainerDockerSocketPath,
+                    ReadOnly = false,
+                });
+        }
+
         if (mountContext is not null)
         {
             foreach (var mount in mountContext.Mounts)
@@ -419,17 +432,7 @@ public sealed class DockerClaudeQwenAgentExecutor(
 
         foreach (var (label, mount) in _options.AdditionalMounts)
         {
-            if (string.IsNullOrEmpty(mount.HostPath) || string.IsNullOrEmpty(mount.ContainerPath))
-            {
-                logger.LogWarning(
-                    "Skipping incomplete additional mount '{Label}': HostPath or ContainerPath is empty",
-                    label);
-                continue;
-            }
-            args.Add("-v");
-            var spec = $"{mount.HostPath}:{mount.ContainerPath}";
-            if (mount.ReadOnly) spec += ":ro";
-            args.Add(spec);
+            AddVolumeMount(args, $"additional mount '{label}'", mount);
         }
 
         args.Add(_options.ImageName);
@@ -437,6 +440,22 @@ public sealed class DockerClaudeQwenAgentExecutor(
         args.AddRange(claudeArgs);
 
         return args.ToArray();
+    }
+
+    private void AddVolumeMount(List<string> args, string label, DockerMount mount)
+    {
+        if (string.IsNullOrEmpty(mount.HostPath) || string.IsNullOrEmpty(mount.ContainerPath))
+        {
+            logger.LogWarning(
+                "Skipping incomplete {Label}: HostPath or ContainerPath is empty",
+                label);
+            return;
+        }
+
+        args.Add("-v");
+        var spec = $"{mount.HostPath}:{mount.ContainerPath}";
+        if (mount.ReadOnly) spec += ":ro";
+        args.Add(spec);
     }
 
     /// <summary>

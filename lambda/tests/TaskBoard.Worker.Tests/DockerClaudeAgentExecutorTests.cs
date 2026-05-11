@@ -14,7 +14,8 @@ public class DockerClaudeAgentExecutorTests
         string networkMode = "host",
         string? memoryLimit = null,
         string? cpuLimit = null,
-        string containerUser = "")
+        string containerUser = "",
+        bool mountHostDockerSocket = false)
     {
         var opts = Options.Create(new DockerClaudeAgentOptions
         {
@@ -27,6 +28,7 @@ public class DockerClaudeAgentExecutorTests
             MemoryLimit = memoryLimit,
             CpuLimit = cpuLimit,
             ContainerUser = containerUser,
+            MountHostDockerSocket = mountHostDockerSocket,
         });
         return new DockerClaudeAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             NullLogger<DockerClaudeAgentExecutor>.Instance);
@@ -287,6 +289,17 @@ public class DockerClaudeAgentExecutorTests
         var vIdx = Array.IndexOf(dockerArgs, "-v");
         Assert.True(vIdx >= 0, "Expected -v flag");
         Assert.Equal("/host/creds:/run/creds:ro", dockerArgs[vIdx + 1]);
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_MountHostDockerSocket_AddsWritableSocketMount()
+    {
+        var executor = CreateExecutor(mountHostDockerSocket: true);
+        var dockerArgs = executor.BuildDockerArgumentList(
+            "container1", "", ["--print"]);
+
+        Assert.Contains("/var/run/docker.sock:/var/run/docker.sock", dockerArgs);
+        Assert.DoesNotContain("/var/run/docker.sock:/var/run/docker.sock:ro", dockerArgs);
     }
 
     [Fact]

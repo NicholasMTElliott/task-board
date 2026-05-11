@@ -17,8 +17,8 @@ namespace TaskBoard.Worker.Tests.Processing;
 ///         persisted <c>step_result</c> records the FALLBACK's provider/model,
 ///         not the role's primary.</item>
 ///   <item><c>CliInfrastructureException</c> from the primary triggers fallback.</item>
-///   <item>Generic exception (classifies AGENT_ERROR) does NOT trigger fallback —
-///         it propagates and the run fails.</item>
+///   <item>Generic exception (classifies AGENT_ERROR) triggers fallback because
+///         it happened before a valid AgentResult existed.</item>
 ///   <item>When all attempts hit RATE_LIMIT, the runner restores the card to the
 ///         trigger column (existing top-level handler).</item>
 ///   <item>Cancellation is never a fallback trigger — propagates immediately.</item>
@@ -250,16 +250,18 @@ public class AgentRunnerRoleFallbackTests : IDisposable
     }
 
     [Fact]
-    public async Task PrimaryGenericException_FallbackNotInvoked_RunFails()
+    public async Task PrimaryGenericException_FallbackSucceeds_RunCompletes()
     {
-        // A generic InvalidOperationException classifies as AGENT_ERROR which
-        // is NOT in the default fallback set. The exception propagates; the
-        // fallback never runs; the card moves to Error.
+        // A generic InvalidOperationException classifies as AGENT_ERROR, but it
+        // happened before the primary produced a valid AgentResult. Default
+        // role fallback now treats that as provider redundancy and tries Codex.
         var primary = Substitute.For<IAgentExecutor>();
         primary.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("parser blew up"));
 
         var fallback = Substitute.For<IAgentExecutor>();
+        fallback.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(CompleteResult("fallback recovered"));
 
         var config = BuildConfig(fallbacks: new List<RoleFallback>
         {
@@ -269,35 +271,34 @@ public class AgentRunnerRoleFallbackTests : IDisposable
         var runner = CreateRunner(primary, fallback, config);
         await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
 
-        await fallback.DidNotReceive().ExecuteAsync(
+        await fallback.Received(1).ExecuteAsync(
             Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>());
-        // Card landed in Error column — original behaviour preserved.
         await _boardClient.Received().MoveCardToColumnAsync(
-            CardId, "Error", Arg.Any<CancellationToken>());
+            CardId, CompletedColumn, Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task PrimaryTimeout_DefaultFallbackOn_NoFallback_TimeoutPropagates()
+    public async Task PrimaryTimeout_DefaultFallbackOn_FallbackRuns()
     {
-        // TIMEOUT is opt-in (per the planning conversation). Default
-        // fallbackOn = [RATE_LIMIT, INFRASTRUCTURE]; TIMEOUT propagates as
-        // a TIMEOUT failure to the run-level error handler.
+        // TIMEOUT is also a pre-result executor failure. Default fallbackOn
+        // covers every non-cancellation exception category.
         var primary = Substitute.For<IAgentExecutor>();
         primary.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
             .Throws(new TimeoutException("CLI inactivity timer fired"));
 
         var fallback = Substitute.For<IAgentExecutor>();
+        fallback.ExecuteAsync(Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(CompleteResult());
 
         var config = BuildConfig(fallbacks: new List<RoleFallback>
         {
             new("docker-codex", Model: "gpt-5.5"),
         });
-        // No FallbackOn override → uses default [RATE_LIMIT, INFRASTRUCTURE].
 
         var runner = CreateRunner(primary, fallback, config);
         await runner.ExecuteAsync(CardId, BoardId, _tempDir, CancellationToken.None);
 
-        await fallback.DidNotReceive().ExecuteAsync(
+        await fallback.Received(1).ExecuteAsync(
             Arg.Any<AgentExecutionContext>(), Arg.Any<CancellationToken>());
     }
 

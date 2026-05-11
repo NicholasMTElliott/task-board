@@ -61,6 +61,27 @@ public class DockerClaudeQwenAgentExecutorDiagnosticsTests
         $"{{\"type\":\"result\",\"structured_output\":{{\"outcome\":\"{outcome}\",\"detail\":\"{detail}\"}}}}";
 
     [Fact]
+    public void BuildDockerArgumentList_MountHostDockerSocket_AddsWritableSocketMount()
+    {
+        var executor = CreateExecutor(
+            (_, _, _, _, _, _, _, _, _) => Task.FromResult((0, "", "")),
+            new DockerClaudeQwenAgentOptions
+            {
+                ImageName = "aiboard-cq-test:latest",
+                MountHostDockerSocket = true,
+            });
+
+        var args = executor.BuildDockerArgumentList(
+            containerName: "test-container",
+            hostPromptDir: "",
+            claudeArgs: ["--print"],
+            mountContext: null);
+
+        Assert.Contains("/var/run/docker.sock:/var/run/docker.sock", args);
+        Assert.DoesNotContain("/var/run/docker.sock:/var/run/docker.sock:ro", args);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ContextModelOverride_PassedAsCliModelFlag()
     {
         // The role's Model wins over the configured default and surfaces on the

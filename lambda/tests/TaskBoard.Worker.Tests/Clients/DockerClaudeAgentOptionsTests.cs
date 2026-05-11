@@ -24,6 +24,9 @@ public class DockerClaudeAgentOptionsTests
         Assert.Equal(10.00m, opts.MaxBudgetUsd);
         Assert.Equal(7200, opts.TimeoutSeconds);
         Assert.Equal(1200, opts.InactivityTimeoutSeconds);
+        Assert.False(opts.MountHostDockerSocket);
+        Assert.Equal("/var/run/docker.sock", opts.HostDockerSocketPath);
+        Assert.Equal("/var/run/docker.sock", opts.ContainerDockerSocketPath);
         Assert.Empty(opts.AdditionalMounts);
     }
 
@@ -51,6 +54,9 @@ public class DockerClaudeAgentOptionsTests
             ["DockerAgents:Claude:MemoryLimit"] = "4g",
             ["DockerAgents:Claude:CpuLimit"] = "2.0",
             ["DockerAgents:Claude:ContainerUser"] = "agent",
+            ["DockerAgents:Claude:MountHostDockerSocket"] = "true",
+            ["DockerAgents:Claude:HostDockerSocketPath"] = "/custom/docker.sock",
+            ["DockerAgents:Claude:ContainerDockerSocketPath"] = "/run/docker.sock",
             ["DockerAgents:Claude:CredentialPath"] = "/home/user/.claude",
         };
 
@@ -66,6 +72,9 @@ public class DockerClaudeAgentOptionsTests
         Assert.Equal("4g", opts.MemoryLimit);
         Assert.Equal("2.0", opts.CpuLimit);
         Assert.Equal("agent", opts.ContainerUser);
+        Assert.True(opts.MountHostDockerSocket);
+        Assert.Equal("/custom/docker.sock", opts.HostDockerSocketPath);
+        Assert.Equal("/run/docker.sock", opts.ContainerDockerSocketPath);
         Assert.Equal("/home/user/.claude", opts.CredentialPath);
     }
 

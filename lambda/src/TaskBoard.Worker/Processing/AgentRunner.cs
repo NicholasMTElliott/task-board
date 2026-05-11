@@ -2439,7 +2439,11 @@ public sealed partial class AgentRunner(
     /// When the role's primary provider throws an exception classified to a
     /// <see cref="FailureReason"/> in the role's effective <c>FallbackOn</c>
     /// set, walks <see cref="WorkflowRole.Fallbacks"/> in order and tries each
-    /// fallback as a fresh direct (no-session) invocation.
+    /// fallback as a fresh direct (no-session) invocation. The default set
+    /// covers every non-cancellation exception category before a valid
+    /// <see cref="AgentResult"/> exists; an in-band
+    /// <see cref="AgentOutcome.ERROR"/> result returns normally and does not
+    /// invoke fallback.
     ///
     /// <para>
     /// Sessions are tied to the primary provider's image, so fallback attempts

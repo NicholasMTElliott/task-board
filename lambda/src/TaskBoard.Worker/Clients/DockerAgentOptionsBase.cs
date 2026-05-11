@@ -58,6 +58,26 @@ public abstract class DockerAgentOptionsBase
     public string NetworkMode { get; set; } = "host";
 
     /// <summary>
+    /// When true, bind-mounts the host Docker daemon socket into the agent
+    /// container so project commands such as <c>docker compose up</c> can run
+    /// from inside the sandbox. This intentionally grants host-Docker control
+    /// to the agent; leave false unless the project workflow requires Docker.
+    /// </summary>
+    public bool MountHostDockerSocket { get; set; }
+
+    /// <summary>
+    /// Host-side Docker socket path mounted when
+    /// <see cref="MountHostDockerSocket"/> is true.
+    /// </summary>
+    public string HostDockerSocketPath { get; set; } = "/var/run/docker.sock";
+
+    /// <summary>
+    /// Container-side Docker socket path mounted when
+    /// <see cref="MountHostDockerSocket"/> is true.
+    /// </summary>
+    public string ContainerDockerSocketPath { get; set; } = "/var/run/docker.sock";
+
+    /// <summary>
     /// Additional volume mounts passed to <c>docker run -v</c>.
     /// Key: a human-readable label for logging; value: mount details.
     /// </summary>

@@ -123,6 +123,7 @@ Both patterns above support per-step `providerParams` to override the executor's
     "Codex": {
       "ImageName": "aiboard-codex-sandbox:latest",
       "NetworkMode": "host",
+      "MountHostDockerSocket": false,
       "ContainerNamePrefix": "aiboard-cdx",
       "TimeoutSeconds": 7200,
       "InactivityTimeoutSeconds": 1200,
@@ -140,6 +141,9 @@ Both patterns above support per-step `providerParams` to override the executor's
 |---|---|---|
 | `ImageName` | `aiboard-codex-sandbox:latest` | Override to use a tag-pinned build |
 | `NetworkMode` | `host` | Codex needs outbound HTTPS to api.openai.com. Differs from `docker-opencode` / `docker-claude-qwen` which target `llm-net` |
+| `MountHostDockerSocket` | `false` | When true, bind-mounts the host Docker daemon socket into the sandbox. Use with a project overlay that installs Docker CLI / Compose when Codex must run Docker-backed verification commands. Grants host-Docker control. |
+| `HostDockerSocketPath` | `/var/run/docker.sock` | Host socket path used when `MountHostDockerSocket=true`. |
+| `ContainerDockerSocketPath` | `/var/run/docker.sock` | Container socket path used when `MountHostDockerSocket=true`. |
 | `ContainerNamePrefix` | `aiboard-cdx` | Per-run name prefix (`{prefix}-{tenant}-{cardId}-{rand}`) |
 | `TimeoutSeconds` | `7200` | Hard wall-clock cap |
 | `InactivityTimeoutSeconds` | `1200` | "Stuck" detection threshold; null disables |

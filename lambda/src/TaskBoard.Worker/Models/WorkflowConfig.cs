@@ -479,8 +479,8 @@ public enum EvaluatorScoring
 /// Optional fallback provider for a <see cref="WorkflowRole"/>. When the role's
 /// primary <see cref="WorkflowRole.Provider"/> throws an executor-side exception
 /// classified to a <see cref="FailureReason"/> in the role's
-/// <see cref="WorkflowRole.FallbackOn"/> list (defaults: <c>RATE_LIMIT</c> +
-/// <c>INFRASTRUCTURE</c>), the runtime walks the role's <see cref="WorkflowRole.Fallbacks"/>
+/// <see cref="WorkflowRole.FallbackOn"/> list (default: every non-cancellation
+/// executor failure category), the runtime walks the role's <see cref="WorkflowRole.Fallbacks"/>
 /// in order and tries each one before propagating the failure.
 /// <para>
 /// Fallback applies to single-agent invocation sites only — gates, evaluators,
@@ -490,6 +490,8 @@ public enum EvaluatorScoring
 /// Evaluators use the same fallback list, but treat any executor/parse failure
 /// before a valid evaluator verdict as fallback-eligible; an in-band evaluator
 /// <c>outcome=ERROR</c> is a valid no-winner verdict and does not fallback.
+/// Likewise, a normal role returning <c>outcome=ERROR</c> is a workflow result,
+/// not an exception, so it transitions normally instead of invoking fallback.
 /// </para>
 /// <para>
 /// <see cref="Model"/> is optional and defaults to the role's
@@ -513,14 +515,14 @@ public sealed record WorkflowRole(
     /// <summary>
     /// Ordered fallback chain. Tried in order when the primary provider throws
     /// an exception classified to a <see cref="FailureReason"/> listed in
-    /// <see cref="FallbackOn"/>. Empty/null = no fallback (pre-feature behaviour).
+    /// <see cref="FallbackOn"/>. Empty/null = no fallback.
     /// </summary>
     List<RoleFallback>? Fallbacks = null,
     /// <summary>
-    /// Failure categories that trigger fallback. <c>null</c> = the default set
-    /// <c>[RATE_LIMIT, INFRASTRUCTURE]</c>. <c>AGENT_ERROR</c> is rejected by
-    /// the validator (an agent's in-band ERROR verdict is a quality signal,
-    /// not a runtime failure — different mechanism).
+    /// Exception categories that trigger fallback. <c>null</c> or empty = every
+    /// non-cancellation executor failure category. This applies to thrown
+    /// exceptions only; an agent's in-band ERROR verdict is an
+    /// <see cref="AgentResult"/> and does not use this mechanism.
     /// </summary>
     List<FailureReason>? FallbackOn = null);
 

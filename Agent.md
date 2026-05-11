@@ -197,6 +197,9 @@ Most operators will only edit a small subset of keys. A complete annotated examp
       "MemoryLimit": null,                       // e.g. "4g"
       "CpuLimit": null,                          // e.g. "2.0"
       "ContainerUser": "",                       // empty = image default
+      "MountHostDockerSocket": false,            // true => -v /var/run/docker.sock:/var/run/docker.sock
+      "HostDockerSocketPath": "/var/run/docker.sock",
+      "ContainerDockerSocketPath": "/var/run/docker.sock",
       "PromptMountPoint": "/mnt/aiboard/prompts",
       "CredentialPath": null,                    // auto-detect ~/.claude when null
       "CredentialMountPoint": null,
@@ -207,6 +210,7 @@ Most operators will only edit a small subset of keys. A complete annotated examp
     "OpenCode": {                                // section: DockerAgents:OpenCode
       "ImageName": "aiboard-opencode-sandbox:latest",
       "NetworkMode": "llm-net",                  // must attach to local-llm's bridge network
+      "MountHostDockerSocket": false,
       "ContainerNamePrefix": "aiboard-oc",
       "ProviderBaseUrl": "http://llama-server:8080/v1",  // /v1 suffix REQUIRED
       "AuthToken": "local",                      // dummy; llama.cpp validates nothing
@@ -225,6 +229,7 @@ Most operators will only edit a small subset of keys. A complete annotated examp
     "ClaudeQwen": {                              // section: DockerAgents:ClaudeQwen
       "ImageName": "aiboard-agent-sandbox:latest",   // reuses the Claude sandbox
       "NetworkMode": "llm-net",
+      "MountHostDockerSocket": false,
       "ContainerNamePrefix": "aiboard-cq",
       "ProviderBaseUrl": "http://llama-server:8080", // NO /v1 suffix (Anthropic adapter appends it)
       "AuthToken": "local",
@@ -557,6 +562,8 @@ The full unsafe-gate logic lives in `UnsafeGate.Evaluate`; the source repo's `Un
   "evaluator":      { "model": "qwen3.6-35b-a3b-think", "provider": "docker-claude-qwen",... }
 }
 ```
+
+**Role fallbacks:** any role may declare a `fallbacks` chain, for example Claude primary with Codex backup. The chain is tried when the primary throws before producing a valid agent result: CLI/auth failures, parse failures, timeouts, infrastructure errors, and generic executor exceptions. By default all non-cancellation exception categories are fallback-eligible: `RATE_LIMIT`, `AGENT_ERROR`, `INFRASTRUCTURE`, and `TIMEOUT`. A role can narrow that with `fallbackOn`. This does not apply to an agent returning `outcome: ERROR`; that is a valid workflow result and follows the state's `ERROR` transition.
 
 ---
 

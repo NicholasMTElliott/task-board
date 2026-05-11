@@ -15,7 +15,8 @@ public class DockerCodexAgentExecutorTests
         string networkMode = "host",
         string? memoryLimit = null,
         string? cpuLimit = null,
-        string containerUser = "")
+        string containerUser = "",
+        bool mountHostDockerSocket = false)
     {
         var opts = Options.Create(new DockerCodexAgentOptions
         {
@@ -29,6 +30,7 @@ public class DockerCodexAgentExecutorTests
             MemoryLimit = memoryLimit,
             CpuLimit = cpuLimit,
             ContainerUser = containerUser,
+            MountHostDockerSocket = mountHostDockerSocket,
         });
         return new DockerCodexAgentExecutor(
             opts,
@@ -261,6 +263,17 @@ public class DockerCodexAgentExecutorTests
             "n", "/tmp/host-schema.json", "/tmp/codex-schema.json", ["exec"]);
 
         Assert.Contains(args, a => a == "/var/cache/aiboard:/cache");
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_MountHostDockerSocket_AddsWritableSocketMount()
+    {
+        var executor = CreateExecutor(mountHostDockerSocket: true);
+        var args = executor.BuildDockerArgumentList(
+            "n", "/tmp/host-schema.json", "/tmp/codex-schema.json", ["exec"]);
+
+        Assert.Contains("/var/run/docker.sock:/var/run/docker.sock", args);
+        Assert.DoesNotContain("/var/run/docker.sock:/var/run/docker.sock:ro", args);
     }
 
     // ── IsRateLimited ────────────────────────────────────────────────────────

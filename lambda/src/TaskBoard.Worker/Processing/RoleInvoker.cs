@@ -11,9 +11,9 @@ namespace TaskBoard.Worker.Processing;
 /// Schema-driven: each <see cref="WorkflowRole"/> may declare a
 /// <see cref="WorkflowRole.Fallbacks"/> chain. When the primary provider throws
 /// an executor-side exception classified to a <see cref="FailureReason"/>
-/// listed in the role's <see cref="WorkflowRole.FallbackOn"/> (default
-/// <c>[RATE_LIMIT, INFRASTRUCTURE]</c>), the runtime walks the chain until
-/// a fallback succeeds or all attempts are exhausted.
+/// listed in the role's <see cref="WorkflowRole.FallbackOn"/> (default: every
+/// non-cancellation executor failure category), the runtime walks the chain
+/// until a fallback succeeds or all attempts are exhausted.
 /// </para>
 ///
 /// <para>
@@ -21,8 +21,9 @@ namespace TaskBoard.Worker.Processing;
 /// <see cref="CliInfrastructureException"/>, or <see cref="TimeoutException"/>
 /// classifies to the corresponding <see cref="FailureReason"/>; everything
 /// else classifies to <see cref="FailureReason.AGENT_ERROR"/>. The agent's own
-/// in-band <c>outcome=ERROR</c> verdict is NOT a fallback trigger — that's a
-/// quality signal handled by candidate evaluation, not provider redundancy.
+/// in-band <c>outcome=ERROR</c> verdict is NOT a fallback trigger because it
+/// returns an <see cref="AgentResult"/> instead of throwing — that's a quality
+/// signal handled by workflow transitions, not provider redundancy.
 /// </para>
 ///
 /// <para>
@@ -33,7 +34,13 @@ namespace TaskBoard.Worker.Processing;
 internal static class RoleInvoker
 {
     private static readonly IReadOnlySet<FailureReason> DefaultFallbackOn =
-        new HashSet<FailureReason> { FailureReason.RATE_LIMIT, FailureReason.INFRASTRUCTURE };
+        new HashSet<FailureReason>
+        {
+            FailureReason.RATE_LIMIT,
+            FailureReason.AGENT_ERROR,
+            FailureReason.INFRASTRUCTURE,
+            FailureReason.TIMEOUT,
+        };
 
     /// <summary>
     /// One attempt in the fallback chain. Index 0 is the primary; index 1+ are
@@ -76,7 +83,8 @@ internal static class RoleInvoker
 
     /// <summary>
     /// Returns the role's effective fallback-on set, or the default
-    /// <c>[RATE_LIMIT, INFRASTRUCTURE]</c> when the role didn't declare one.
+    /// every non-cancellation executor failure category when the role didn't
+    /// declare one.
     /// </summary>
     internal static IReadOnlySet<FailureReason> EffectiveFallbackOn(WorkflowRole role)
     {

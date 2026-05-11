@@ -64,6 +64,7 @@ Example (in `appsettings.user.json`):
       "ImageName": "aiboard-agent-sandbox:latest",
       "ReuseContainer": true,
       "NetworkMode": "host",
+      "MountHostDockerSocket": false,
       "TimeoutSeconds": 900,
       "MaxBudgetUsd": 10.00
     }
@@ -76,6 +77,9 @@ Example (in `appsettings.user.json`):
 | `ImageName` | `aiboard-agent-sandbox:latest` | Image to run |
 | `ReuseContainer` | `true` | Session reuse across steps (one container per run). Set `false` for per-step `docker run`. |
 | `NetworkMode` | `host` | Forwarded to `docker run --network`. `host` lets the agent reach host-published ports from your local `docker-compose` support stack (Postgres `localhost:5432`, Grafana `localhost:3000`, etc.). Use a compose network name (e.g. `task-board_default` — see `docker network ls`) to reach services by service name instead. `none` for full isolation. Empty value omits the flag (Docker default bridge). **Note:** host networking on Docker Desktop for Windows/Mac requires 4.34+ with *Enable host networking* turned on in Settings → Resources → Network; on older versions it silently falls back to bridge. |
+| `MountHostDockerSocket` | `false` | When true, adds `-v {HostDockerSocketPath}:{ContainerDockerSocketPath}` so commands inside the agent can talk to the host Docker daemon. Use only for projects whose verification workflow runs Docker or Docker Compose. This grants the agent host-Docker control. |
+| `HostDockerSocketPath` | `/var/run/docker.sock` | Host socket path used when `MountHostDockerSocket=true`. |
+| `ContainerDockerSocketPath` | `/var/run/docker.sock` | Container socket path used when `MountHostDockerSocket=true`. |
 | `MemoryLimit` | *(unset)* | Forwarded to `docker run --memory` when set. e.g. `4g` |
 | `CpuLimit` | *(unset)* | Forwarded to `docker run --cpus` when set. e.g. `2.0` |
 | `ContainerUser` | *(unset)* | Forwarded to `docker run --user` when set. e.g. `1000:1000` |
@@ -85,6 +89,10 @@ Example (in `appsettings.user.json`):
 | `TimeoutSeconds` | `900` | Kill container after N seconds |
 | `MaxBudgetUsd` | `10.00` | Per-invocation Claude CLI budget |
 | `AdditionalMounts` | `{}` | Extra `-v host:container[:ro]` mounts |
+
+`MountHostDockerSocket` only provides daemon access. The sandbox image still needs Docker client tooling installed. For project-specific needs, add Docker CLI / Compose in a project overlay image, then enable the socket mount in that project's `.aiboard/appsettings.json`.
+
+Socket permissions are host-dependent. If Docker commands inside the sandbox fail with "permission denied" on `/var/run/docker.sock`, either run that provider as a user/group that can access the socket or set `ContainerUser` to `root` for that provider. The socket already grants host-Docker control, so this is a convenience/security trade-off rather than a new boundary.
 
 ---
 

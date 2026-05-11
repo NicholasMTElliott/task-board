@@ -139,4 +139,27 @@ public class DockerOpenCodeAgentExecutorEnvVarTests
 
         Assert.Contains("/host/cache:/cache", mountPairs);
     }
+
+    [Fact]
+    public void BuildDockerArgumentList_MountHostDockerSocket_AddsWritableSocketMount()
+    {
+        var options = new DockerOpenCodeAgentOptions
+        {
+            ImageName = "test:latest",
+            MountHostDockerSocket = true,
+        };
+        var executor = new DockerOpenCodeAgentExecutor(
+            Options.Create(options),
+            Helpers.TestTenant.Instance,
+            NullLogger<DockerOpenCodeAgentExecutor>.Instance);
+
+        var args = executor.BuildDockerArgumentList(
+            containerName: "test-container",
+            hostPromptDir: "",
+            openCodeArgs: new[] { "run" },
+            mountContext: null);
+
+        Assert.Contains("/var/run/docker.sock:/var/run/docker.sock", args);
+        Assert.DoesNotContain("/var/run/docker.sock:/var/run/docker.sock:ro", args);
+    }
 }

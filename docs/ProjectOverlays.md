@@ -20,6 +20,13 @@ Your project ships a tiny `Dockerfile` that does `FROM aiboard-X-sandbox:latest`
 
 aiboard's executors don't care what's in the image as long as the agent CLI is on PATH and the `agent` user (UID 1000) is the runtime user — both inherited from the upstream base. Everything else you add is yours.
 
+If the project tooling itself runs Docker, split the work in two places:
+
+- Overlay image: install Docker CLI / Compose.
+- Runtime config: set `DockerAgents:<Provider>:MountHostDockerSocket = true` so the sandbox can reach the host daemon.
+
+A Dockerfile cannot grant daemon access by itself. The socket mount is a runtime `docker run -v /var/run/docker.sock:/var/run/docker.sock` decision and gives the agent host-Docker control. If the sandbox user cannot read/write the socket, set `ContainerUser` to `root` for that provider or run with a matching Docker group.
+
 ---
 
 ## 2. Layout

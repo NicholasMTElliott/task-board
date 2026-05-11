@@ -593,8 +593,8 @@ public class WorkflowConfigValidatorTests
     }
 
     // ── Role fallback validation (v0.0.25+) ────────────────────────────────
-    // Roles can declare an ordered Fallbacks chain that fires on RATE_LIMIT
-    // or INFRASTRUCTURE (default) failures from the primary provider.
+    // Roles can declare an ordered Fallbacks chain that fires on configured
+    // exception categories from the primary provider.
 
     private static WorkflowConfig MakeConfigWithRole(WorkflowRole role)
     {
@@ -662,10 +662,11 @@ public class WorkflowConfigValidatorTests
     }
 
     [Fact]
-    public void Role_FallbackOnContainsAgentError_ReportsError()
+    public void Role_FallbackOnContainsAgentError_PassesValidation()
     {
-        // AGENT_ERROR is the agent's in-band quality verdict, not a runtime
-        // failure. Fallback would mask quality issues; validator rejects.
+        // AGENT_ERROR here is an exception category: the executor threw before
+        // a valid AgentResult existed. It does not apply to in-band
+        // outcome=ERROR results, so the validator allows it.
         var role = new WorkflowRole(
             "claude-opus-4-6", "prompt", new List<string> { "Design" },
             Provider: "docker-claude-cli",
@@ -674,8 +675,7 @@ public class WorkflowConfigValidatorTests
 
         var errors = WorkflowConfigValidator.Validate(MakeConfigWithRole(role));
 
-        Assert.Contains(errors, e =>
-            e.Contains("AGENT_ERROR") && e.Contains("not a runtime failure"));
+        Assert.DoesNotContain(errors, e => e.Contains("AGENT_ERROR"));
     }
 
     [Fact]
@@ -695,18 +695,17 @@ public class WorkflowConfigValidatorTests
     }
 
     [Fact]
-    public void Role_FallbackOnTimeout_PassesValidation()
+    public void Role_FallbackOnCustomCategories_PassesValidation()
     {
-        // Operator opt-in to TIMEOUT triggering fallback is allowed.
+        // Operators can narrow fallback to a subset of exception categories.
         var role = new WorkflowRole(
             "claude-opus-4-6", "prompt", new List<string> { "Design" },
             Provider: "docker-claude-cli",
             Fallbacks: new List<RoleFallback> { new("docker-codex", "gpt-5.5") },
             FallbackOn: new List<FailureReason>
             {
-                FailureReason.RATE_LIMIT,
-                FailureReason.INFRASTRUCTURE,
                 FailureReason.TIMEOUT,
+                FailureReason.AGENT_ERROR,
             });
 
         var errors = WorkflowConfigValidator.Validate(MakeConfigWithRole(role));

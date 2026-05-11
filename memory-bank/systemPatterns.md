@@ -189,7 +189,7 @@ Agent executors are registered via `AgentExecutorResolver` which resolves by pro
 
 **DockerClaudeAgentExecutor** (`IAgentExecutor`, provider key `docker-claude-cli`) wraps Claude CLI invocation inside `docker run -i --rm`. Key design:
 - Standalone class (no inheritance from `ClaudeAgentExecutor`) — differences in process surface are too large
-- Options bound to `DockerClaudeAgentOptions` (derives from `DockerAgentOptionsBase`); shared Docker-runtime settings (network/CPU/memory limits, reuse, additional mounts) live on the base so a future `DockerCodexAgentExecutor` can share them
+- Options bound to `DockerClaudeAgentOptions` (derives from `DockerAgentOptionsBase`); shared Docker-runtime settings (network/CPU/memory limits, reuse, host Docker socket mount, additional mounts) live on the base so Docker executors share them
 - System prompt file translated: host directory mounted read-only at `DockerClaudeAgentOptions.PromptMountPoint` (`/mnt/aiboard/prompts`); container path computed from `Path.GetFileName`
 - Container named `{prefix}-{tenantHash}-{cardId}-{random8}` (prefix: `aiboard-run`); random suffix prevents collisions, `--rm` cleans up on normal exit
 - On timeout (`TimeoutException`) or cancellation (`OperationCanceledException`), `ExecuteAsync` issues explicit `docker stop -t 30` (30s SIGTERM grace, then SIGKILL) followed by `docker rm -f` fallback; cleanup is best-effort (never throws, never masks original exception); uses `CancellationToken.None` since caller token may already be cancelled
@@ -198,6 +198,7 @@ Agent executors are registered via `AgentExecutorResolver` which resolves by pro
 - Rate-limit detection via `ClaudeAgentExecutor.IsRateLimited(stderr)` (same as host executor)
 - NDJSON parsing via shared `AgentOutputParser.ParseStreamOutput`
 - Workspace/credential mounts built by `DockerClaudeMountBuilder` (inherits from `DockerMountBuilderBase` for the shared worktree/`.git` mount construction; injected optionally); workspace mounts and env vars passed to `docker run` args and `SessionRequest`
+- Host Docker socket passthrough (`MountHostDockerSocket=true`) adds writable `-v {HostDockerSocketPath}:{ContainerDockerSocketPath}` before `AdditionalMounts`; default both paths `/var/run/docker.sock`. Requires Docker CLI/Compose inside the image. Grants host-Docker control. If socket permissions block UID 1000, operator sets `ContainerUser=root` or matches Docker group.
 - Extensible static mounts (`DockerClaudeAgentOptions.AdditionalMounts` dictionary — inherited from the base) — operator-supplied overrides beyond the standard workspace/credential set
 - Registered automatically when Docker daemon is detected at startup (`PrerequisiteValidator.IsDockerAvailableAsync` runs `docker info`)
 
@@ -229,6 +230,7 @@ To avoid per-step container startup overhead, executors that support Docker can 
 - `MemoryLimit` (string?, default: `null`) — optional memory limit, e.g. `"4g"`
 - `CpuLimit` (string?, default: `null`) — optional CPU limit, e.g. `"2.0"`
 - `NetworkMode` (string, default: `"host"`) — container network mode, forwarded as `--network` to `docker run`. `"host"` gives the sandbox access to host-published ports (e.g. the local `docker-compose` Postgres/Grafana stack on `localhost:5432`, `localhost:3000`). Use a compose network name (e.g. `"task-board_default"`) to reach support services by service name. Empty/null omits the `--network` flag (Docker default bridge). `MemoryLimit`, `CpuLimit`, and `ContainerUser` are likewise forwarded to `--memory`, `--cpus`, and `--user` respectively when set — all built in `DockerClaudeAgentExecutor.BuildDockerArgumentList`
+- `MountHostDockerSocket` (bool, default: `false`) — when true, bind-mounts host Docker socket; paired paths `HostDockerSocketPath` / `ContainerDockerSocketPath` default `/var/run/docker.sock`
 - `CredentialPath` (string, default: `""`) — host path to Claude CLI credentials; auto-detected from `~/.claude` if empty; used by `DockerClaudeMountBuilder`
 - `CredentialMountPoint` (string?, default: `null`) — container path for credentials; defaults to `/home/agent/.claude` (matches `agent` user home in sandbox image)
 - `AdditionalMounts` (Dictionary, default: `{}`) — operator-supplied static volume mounts (beyond standard workspace/credential set)
@@ -587,7 +589,7 @@ Schema:
 
 ### Role-level fallback (v0.0.25+)
 
-A `WorkflowRole` may declare an ordered `Fallbacks` chain — list of `RoleFallback(Provider, Model?, ProviderParams?)` — that the runtime walks when the role's primary provider throws an exception classified to a `FailureReason` in the role's `FallbackOn` set. Default `FallbackOn` = `[RATE_LIMIT, INFRASTRUCTURE]`; `TIMEOUT` is operator opt-in; `AGENT_ERROR` is rejected by the validator (the agent's in-band ERROR verdict is a quality signal handled by candidate evaluation, not a runtime failure that should swap providers). Cancellation (`OperationCanceledException`) is never a fallback trigger.
+A `WorkflowRole` may declare an ordered `Fallbacks` chain — list of `RoleFallback(Provider, Model?, ProviderParams?)` — that the runtime walks when the role's primary provider throws an exception classified to a `FailureReason` in the role's `FallbackOn` set. Default `FallbackOn` = `[RATE_LIMIT, AGENT_ERROR, INFRASTRUCTURE, TIMEOUT]`: every non-cancellation executor failure category before a valid `AgentResult` exists. An in-band `AgentResult{Outcome=ERROR}` is not an exception and never triggers role fallback; it follows workflow transitions. Cancellation (`OperationCanceledException`) is never a fallback trigger. Operators may set `FallbackOn` to a narrower exception-category subset.
 
 Wired into the **single-agent invocation sites only**: gate check, optional reviewer, simple-step main path (no slots/candidates), and the evaluator role inside `CandidateExecutor`. **NOT wired** into `CandidateExecutor.ExecuteSingleCandidateAsync` — candidates already have per-candidate `Retries` / `RetryOn` and slot-level chain mechanisms, and adding role-level fallback there would overlap.
 
@@ -597,7 +599,7 @@ Wired into the **single-agent invocation sites only**: gate check, optional revi
 
 A fallback's `Model` defaults to the role's primary `Model` when omitted, and its `ProviderParams` overlay (rather than replace) the caller's primary params on key collision. Cross-provider fallbacks should pin a model that the fallback's executor accepts (Codex doesn't accept `claude-opus-4-6`); the existing `AuditCrossProviderCandidateModels` warning surfaces this case for candidates, and operators are expected to follow the same guidance for fallbacks.
 
-Validator (`WorkflowConfigValidator.ValidateRoleFallback`) errors on: empty fallback provider; unknown fallback provider (cross-checked against `StartupConfigValidator.KnownAgentExecutors`); `FallbackOn` containing `AGENT_ERROR`; `FallbackOn` set without any `Fallbacks` declared. `WorkflowConfig.GetRequiredProviders` and `GetAllReferencedProviders` both include fallback providers, so `--mode validation`'s Docker-image probe pass tests fallback images even when no role uses the fallback as its primary.
+Validator (`WorkflowConfigValidator.ValidateRoleFallback`) errors on: empty fallback provider; unknown fallback provider (cross-checked against `StartupConfigValidator.KnownAgentExecutors`); `FallbackOn` set without any `Fallbacks` declared. `AGENT_ERROR` is allowed in `FallbackOn` because it means an executor-thrown exception category, not an in-band agent verdict. `WorkflowConfig.GetRequiredProviders` and `GetAllReferencedProviders` both include fallback providers, so `--mode validation`'s Docker-image probe pass tests fallback images even when no role uses the fallback as its primary.
 
 Schema (additions to `WorkflowRole` JSON):
 ```json
@@ -609,7 +611,7 @@ Schema (additions to `WorkflowRole` JSON):
     "fallbacks": [
       { "provider": "docker-codex", "model": "gpt-5.4-mini" }
     ],
-    "fallbackOn": ["RATE_LIMIT", "INFRASTRUCTURE"]
+    "fallbackOn": ["RATE_LIMIT", "AGENT_ERROR", "INFRASTRUCTURE", "TIMEOUT"]
   }
 }
 ```
