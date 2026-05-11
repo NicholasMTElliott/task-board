@@ -479,6 +479,9 @@ public class CandidateExecutorFlowTests : IDisposable
 
         Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
         Assert.Equal(1, fallbackEvaluator.Calls);
+        Assert.Equal(
+            AgentSchemas.EvaluatorOutcomeSchemaOpenAI,
+            fallbackEvaluator.LastContext?.SchemaOverride);
         Assert.Single(_runStore.RecordedVerdicts, v => v.CandidateIndex == 1 && v.Selected);
 
         var evaluatorRow = _runStore.SavedSteps.Single(r => r.StepName.EndsWith(":evaluator"));
@@ -1346,11 +1349,13 @@ public class CandidateExecutorFlowTests : IDisposable
         private readonly ScriptedExecutor _inner = new(outcome, detail, aiboardWrites, section);
         private int _calls;
         public int Calls => _calls;
+        public AgentExecutionContext? LastContext { get; private set; }
 
         public Task<AgentResult> ExecuteAsync(
             AgentExecutionContext context, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _calls);
+            LastContext = context;
             return _inner.ExecuteAsync(context, cancellationToken);
         }
     }

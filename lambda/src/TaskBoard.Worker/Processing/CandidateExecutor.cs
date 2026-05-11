@@ -503,15 +503,19 @@ public sealed class CandidateExecutor(
         => totalSlots > 1 ? $":slot-{slotIndex}" : string.Empty;
 
     /// <summary>
-    /// Picks the evaluator schema variant for a given provider key. Codex needs
-    /// the OpenAI shape (object-of-string-arrays for <c>required</c>);
-    /// everything else uses the JSON-Schema-2020-12 if/then form. Recomputed
-    /// per attempt so a Claude→Codex fallback chain swaps schemas correctly.
+    /// Picks the evaluator schema variant for a given provider key. Codex CLI
+    /// providers need the OpenAI structured-output shape; everything else uses
+    /// the generic JSON Schema shape. Recomputed per attempt so a
+    /// Claude→Codex fallback chain swaps schemas correctly.
     /// </summary>
     private static string SchemaForProvider(string providerKey)
-        => string.Equals(providerKey, "codex", StringComparison.OrdinalIgnoreCase)
+        => IsCodexCliProvider(providerKey)
             ? AgentSchemas.EvaluatorOutcomeSchemaOpenAI
             : AgentSchemas.EvaluatorOutcomeSchema;
+
+    private static bool IsCodexCliProvider(string providerKey)
+        => string.Equals(providerKey, "codex", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(providerKey, "docker-codex", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Default failure categories that are retried in-place when the candidate

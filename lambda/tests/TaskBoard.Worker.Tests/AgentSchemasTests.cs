@@ -66,6 +66,13 @@ public class AgentSchemasTests
             "Schema must define a 'requestedSteps' property");
     }
 
+    [Fact]
+    public void OutcomeSchemaOpenAI_AllObjectSchemasDisallowAdditionalProperties()
+    {
+        using var doc = JsonDocument.Parse(AgentSchemas.OutcomeSchemaOpenAI);
+        AssertObjectSchemasDisallowAdditionalProperties(doc.RootElement, "$");
+    }
+
     // ── Evaluator schema (Claude / generic) ──────────────────────────────────
 
     [Fact]
@@ -156,6 +163,45 @@ public class AgentSchemasTests
     {
         // OpenAI structured outputs require additionalProperties:false on every object.
         using var doc = JsonDocument.Parse(AgentSchemas.EvaluatorOutcomeSchemaOpenAI);
-        Assert.False(doc.RootElement.GetProperty("additionalProperties").GetBoolean());
+        AssertObjectSchemasDisallowAdditionalProperties(doc.RootElement, "$");
+    }
+
+    private static void AssertObjectSchemasDisallowAdditionalProperties(JsonElement schema, string path)
+    {
+        if (SchemaTypeIncludesObject(schema))
+        {
+            Assert.True(
+                schema.TryGetProperty("additionalProperties", out var additionalProperties),
+                $"{path} is an object schema and must declare additionalProperties:false.");
+            Assert.Equal(JsonValueKind.False, additionalProperties.ValueKind);
+        }
+
+        if (schema.TryGetProperty("properties", out var properties)
+            && properties.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in properties.EnumerateObject())
+                AssertObjectSchemasDisallowAdditionalProperties(
+                    property.Value, $"{path}.properties.{property.Name}");
+        }
+
+        if (schema.TryGetProperty("items", out var items)
+            && items.ValueKind == JsonValueKind.Object)
+        {
+            AssertObjectSchemasDisallowAdditionalProperties(items, $"{path}.items");
+        }
+    }
+
+    private static bool SchemaTypeIncludesObject(JsonElement schema)
+    {
+        if (!schema.TryGetProperty("type", out var type))
+            return false;
+
+        if (type.ValueKind == JsonValueKind.String)
+            return string.Equals(type.GetString(), "object", StringComparison.Ordinal);
+
+        return type.ValueKind == JsonValueKind.Array
+               && type.EnumerateArray().Any(t =>
+                   t.ValueKind == JsonValueKind.String
+                   && string.Equals(t.GetString(), "object", StringComparison.Ordinal));
     }
 }

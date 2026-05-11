@@ -288,6 +288,44 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
     }
 
     [Fact]
+    public async Task DockerCodexEvaluatorContext_CarriesOpenAiEvaluatorSchemaOverride()
+    {
+        var capturingEvaluator = new CapturingExecutor(AgentOutcome.COMPLETE,
+            """
+            ```json
+            {"outcome":"COMPLETE","winner_index":0,"scores":[
+              {"index":0,"score":7,"reasoning":"ok"},
+              {"index":1,"score":6,"reasoning":"meh"}
+            ]}
+            ```
+            """);
+
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = new ScriptedWriter(AgentOutcome.COMPLETE, "A",
+                new Dictionary<string, string> { [TestTaskWriteKey] = "A body" }),
+            ["docker-opencode"]   = new ScriptedWriter(AgentOutcome.COMPLETE, "B",
+                new Dictionary<string, string> { [TestTaskWriteKey] = "B body" }),
+            ["docker-codex"]      = capturingEvaluator,
+        };
+
+        var executor = BuildExecutor(byProvider);
+        var request = BuildRequest(
+            "create_design",
+            ["docker-claude-cli", "docker-opencode"],
+            "discard",
+            TestCardTitle,
+            evaluatorProvider: "docker-codex");
+
+        await executor.ExecuteCandidateGroupAsync(request, CancellationToken.None);
+
+        var ctx = capturingEvaluator.LastContext
+            ?? throw new InvalidOperationException("Evaluator was not invoked.");
+        Assert.NotNull(ctx.SchemaOverride);
+        Assert.Equal(AgentSchemas.EvaluatorOutcomeSchemaOpenAI, ctx.SchemaOverride);
+    }
+
+    [Fact]
     public async Task EvaluatorReturnsCompleteWithoutWinnerAnywhere_OverridesToError()
     {
         // Schema-violation defense: if the LLM bypasses the schema AND wrote no
@@ -552,7 +590,8 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         string stepName,
         string[] providers,
         string gitBehavior,
-        string cardTitle)
+        string cardTitle,
+        string evaluatorProvider = "claude-cli")
     {
         var systemPromptFile = Path.Combine(_repoRoot, "system.md");
         File.WriteAllText(systemPromptFile, "# evaluator system prompt");
@@ -579,7 +618,7 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
             WorkflowRoles: new Dictionary<string, WorkflowRole>
             {
                 ["designer"]  = new("claude-opus-4-6", "sys", []),
-                ["evaluator"] = new("claude-opus-4-6", "you are an evaluator", []),
+                ["evaluator"] = new("claude-opus-4-6", "you are an evaluator", [], Provider: evaluatorProvider),
             },
             StateProviderParams: null,
             TaskPrompt: "Design the thing.",
