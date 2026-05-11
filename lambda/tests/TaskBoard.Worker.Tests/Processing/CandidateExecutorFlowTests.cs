@@ -437,6 +437,149 @@ public class CandidateExecutorFlowTests : IDisposable
         Assert.Single(_runStore.RecordedVerdicts, v => v.CandidateIndex == 1 && v.Selected);
     }
 
+    [Fact]
+    public async Task EvaluatorExecutorThrows_FallsBackToConfiguredEvaluator()
+    {
+        // Evaluator fallback is different from candidate fallback: once the
+        // candidate work exists, a primary evaluator CLI/auth/parser crash
+        // should not strand the whole slot if a configured evaluator fallback
+        // can still judge the candidates.
+        var fallbackEvaluator = new TrackingScriptedExecutor(
+            AgentOutcome.COMPLETE,
+            """
+            Candidate 1 wins.
+            ```json
+            {"outcome":"COMPLETE","winner_index":1,"scores":[
+              {"index":0,"score":6,"reasoning":"ok"},
+              {"index":1,"score":8,"reasoning":"better"}
+            ]}
+            ```
+            """);
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = new ScriptedExecutor(AgentOutcome.COMPLETE, "Claude implementation"),
+            ["docker-opencode"] = new ScriptedExecutor(AgentOutcome.COMPLETE, "Qwen implementation"),
+            ["claude-cli"] = new ThrowingExecutor(new InvalidOperationException(
+                "Claude CLI exited with code 1. Stdout: init only")),
+            ["docker-codex"] = fallbackEvaluator,
+        };
+        var candidateExecutor = new CandidateExecutor(
+            _git,
+            new MapResolver(byProvider),
+            _runStore,
+            _boardClient,
+            NullLogger<CandidateExecutor>.Instance);
+        var request = NewRequest(
+            stepName: "implement",
+            providers: ["docker-claude-cli", "docker-opencode"],
+            evaluatorRole: EvaluatorRoleWithCodexFallback());
+
+        var result = await candidateExecutor.ExecuteCandidateGroupAsync(
+            request, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+        Assert.Equal(1, fallbackEvaluator.Calls);
+        Assert.Single(_runStore.RecordedVerdicts, v => v.CandidateIndex == 1 && v.Selected);
+
+        var evaluatorRow = _runStore.SavedSteps.Single(r => r.StepName.EndsWith(":evaluator"));
+        Assert.Equal("docker-codex", evaluatorRow.Provider);
+        Assert.Equal("gpt-5.5", evaluatorRow.Model);
+    }
+
+    [Fact]
+    public async Task EvaluatorCompleteWithoutWinner_FallsBackToConfiguredEvaluator()
+    {
+        // outcome=COMPLETE without a usable winner_index is not a valid
+        // evaluator verdict. If a fallback evaluator is configured, try it
+        // before failing the slot.
+        var primaryEvaluator = new TrackingScriptedExecutor(
+            AgentOutcome.COMPLETE,
+            "Candidate 1 seems best, but I forgot the structured field.");
+        var fallbackEvaluator = new TrackingScriptedExecutor(
+            AgentOutcome.COMPLETE,
+            """
+            Candidate 1 wins.
+            ```json
+            {"outcome":"COMPLETE","winner_index":1,"scores":[
+              {"index":0,"score":6,"reasoning":"ok"},
+              {"index":1,"score":8,"reasoning":"better"}
+            ]}
+            ```
+            """);
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = new ScriptedExecutor(AgentOutcome.COMPLETE, "Claude implementation"),
+            ["docker-opencode"] = new ScriptedExecutor(AgentOutcome.COMPLETE, "Qwen implementation"),
+            ["claude-cli"] = primaryEvaluator,
+            ["docker-codex"] = fallbackEvaluator,
+        };
+        var candidateExecutor = new CandidateExecutor(
+            _git,
+            new MapResolver(byProvider),
+            _runStore,
+            _boardClient,
+            NullLogger<CandidateExecutor>.Instance);
+        var request = NewRequest(
+            stepName: "implement",
+            providers: ["docker-claude-cli", "docker-opencode"],
+            evaluatorRole: EvaluatorRoleWithCodexFallback());
+
+        var result = await candidateExecutor.ExecuteCandidateGroupAsync(
+            request, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.COMPLETE, result.Outcome);
+        Assert.Equal(1, primaryEvaluator.Calls);
+        Assert.Equal(1, fallbackEvaluator.Calls);
+        Assert.Single(_runStore.RecordedVerdicts, v => v.CandidateIndex == 1 && v.Selected);
+
+        var evaluatorRow = _runStore.SavedSteps.Single(r => r.StepName.EndsWith(":evaluator"));
+        Assert.Equal("docker-codex", evaluatorRow.Provider);
+    }
+
+    [Fact]
+    public async Task EvaluatorInBandError_DoesNotFallback()
+    {
+        // A structured evaluator ERROR is a valid verdict ("no candidate is
+        // acceptable"), not an executor failure. Do not evaluator-shop by
+        // asking the fallback for a different answer.
+        var primaryEvaluator = new TrackingScriptedExecutor(
+            AgentOutcome.ERROR,
+            "All candidates are unacceptable.");
+        var fallbackEvaluator = new TrackingScriptedExecutor(
+            AgentOutcome.COMPLETE,
+            """
+            Candidate 1 wins.
+            ```json
+            {"outcome":"COMPLETE","winner_index":1,"scores":[]}
+            ```
+            """);
+        var byProvider = new Dictionary<string, IAgentExecutor>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["docker-claude-cli"] = new ScriptedExecutor(AgentOutcome.COMPLETE, "Claude implementation"),
+            ["docker-opencode"] = new ScriptedExecutor(AgentOutcome.COMPLETE, "Qwen implementation"),
+            ["claude-cli"] = primaryEvaluator,
+            ["docker-codex"] = fallbackEvaluator,
+        };
+        var candidateExecutor = new CandidateExecutor(
+            _git,
+            new MapResolver(byProvider),
+            _runStore,
+            _boardClient,
+            NullLogger<CandidateExecutor>.Instance);
+        var request = NewRequest(
+            stepName: "implement",
+            providers: ["docker-claude-cli", "docker-opencode"],
+            evaluatorRole: EvaluatorRoleWithCodexFallback());
+
+        var result = await candidateExecutor.ExecuteCandidateGroupAsync(
+            request, CancellationToken.None);
+
+        Assert.Equal(AgentOutcome.ERROR, result.Outcome);
+        Assert.Equal(1, primaryEvaluator.Calls);
+        Assert.Equal(0, fallbackEvaluator.Calls);
+        Assert.All(_runStore.RecordedVerdicts, v => Assert.False(v.Selected));
+    }
+
     // ── Evaluator returns NEEDS_INFO ────────────────────────────────────────
 
     [Fact]
@@ -1096,7 +1239,8 @@ public class CandidateExecutorFlowTests : IDisposable
     private CandidateGroupRequest NewRequest(
         string stepName,
         string[] providers,
-        string gitBehavior = "commit_and_push")
+        string gitBehavior = "commit_and_push",
+        WorkflowRole? evaluatorRole = null)
     {
         var systemPromptFile = Path.Combine(_repoRoot, "system.md");
         File.WriteAllText(systemPromptFile, "# evaluator system prompt");
@@ -1123,7 +1267,7 @@ public class CandidateExecutorFlowTests : IDisposable
             WorkflowRoles: new Dictionary<string, WorkflowRole>
             {
                 ["implementer"] = new("claude-sonnet-4-6", "sys", []),
-                ["evaluator"]   = new("claude-opus-4-6", "you are an evaluator", []),
+                ["evaluator"]   = evaluatorRole ?? new("claude-opus-4-6", "you are an evaluator", []),
             },
             StateProviderParams: null,
             TaskPrompt: "Implement the thing.",
@@ -1134,6 +1278,20 @@ public class CandidateExecutorFlowTests : IDisposable
             CommentsFilePath: null,
             PromptBaseDirectory: null);
     }
+
+    private static WorkflowRole EvaluatorRoleWithCodexFallback() =>
+        new(
+            Model: "claude-opus-4-6",
+            SystemPrompt: "you are an evaluator",
+            Sections: [],
+            Provider: "claude-cli",
+            Fallbacks:
+            [
+                new RoleFallback(
+                    Provider: "docker-codex",
+                    Model: "gpt-5.5",
+                    ProviderParams: new Dictionary<string, string> { ["fullAuto"] = "true" }),
+            ]);
 
     private bool BranchExists(string branchName)
     {
@@ -1177,6 +1335,31 @@ public class CandidateExecutorFlowTests : IDisposable
 
             return Task.FromResult(new AgentResult(outcome, detail, Section: section));
         }
+    }
+
+    private sealed class TrackingScriptedExecutor(
+        AgentOutcome outcome,
+        string detail,
+        IReadOnlyDictionary<string, string>? aiboardWrites = null,
+        SectionUpdate? section = null) : IAgentExecutor
+    {
+        private readonly ScriptedExecutor _inner = new(outcome, detail, aiboardWrites, section);
+        private int _calls;
+        public int Calls => _calls;
+
+        public Task<AgentResult> ExecuteAsync(
+            AgentExecutionContext context, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _calls);
+            return _inner.ExecuteAsync(context, cancellationToken);
+        }
+    }
+
+    private sealed class ThrowingExecutor(Exception exception) : IAgentExecutor
+    {
+        public Task<AgentResult> ExecuteAsync(
+            AgentExecutionContext context, CancellationToken cancellationToken)
+            => Task.FromException<AgentResult>(exception);
     }
 
     private sealed class MapResolver(IReadOnlyDictionary<string, IAgentExecutor> map)

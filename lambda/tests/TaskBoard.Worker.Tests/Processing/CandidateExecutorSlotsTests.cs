@@ -139,7 +139,7 @@ public class CandidateExecutorSlotsTests : IDisposable
     [Fact]
     public async Task EvaluatorReturnsCompleteWithoutWinnerIndex_SlotFails()
     {
-        // Schema-violation defense: outcome=COMPLETE without winner_index → ERROR
+        // Schema-violation defense: outcome=COMPLETE without usable winner_index → ERROR
         // override → SlotResult.Failed (so AgentRunner tries the next slot).
         var brokenEvaluator = new ScriptedExecutor(AgentOutcome.COMPLETE,
             """
@@ -165,7 +165,7 @@ public class CandidateExecutorSlotsTests : IDisposable
         var result = await executor.ExecuteSlotAsync(slot, slotIndex: 0, totalSlots: 2, request, CancellationToken.None);
 
         Assert.Equal(SlotOutcome.Failed, result.Outcome);
-        Assert.Contains("did not include a winner_index", result.AgentResult.Detail);
+        Assert.Contains("did not include a usable winner_index", result.AgentResult.Detail);
     }
 
     // ── Single-candidate slot, no evaluator ─────────────────────────────────

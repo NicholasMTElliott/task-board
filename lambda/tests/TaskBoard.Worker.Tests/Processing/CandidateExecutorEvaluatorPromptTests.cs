@@ -322,7 +322,7 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         var result = await executor.ExecuteCandidateGroupAsync(request, CancellationToken.None);
 
         Assert.Equal(AgentOutcome.ERROR, result.Outcome);
-        Assert.Contains("did not include a winner_index", result.Detail);
+        Assert.Contains("did not include a usable winner_index", result.Detail);
 
         // Canonical worktree's task body should NOT have been promoted from
         // either candidate (no winner picked).

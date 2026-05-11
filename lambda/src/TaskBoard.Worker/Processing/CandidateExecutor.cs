@@ -351,27 +351,11 @@ public sealed class CandidateExecutor(
             var verdict = ParseEvaluatorVerdict(
                 evaluatorResult, executions.Count, evaluatorCfg!.Scoring);
 
-            // Schema-violation defense: outcome=COMPLETE without a winner_index
-            // is the failure mode KvA hit on v0.0.15. The evaluator schema
-            // (EvaluatorOutcomeSchema) makes winner_index required when
-            // outcome=COMPLETE, but we still defend in code for two reasons:
-            //   (1) The OpenAI variant types winner_index as ["integer", "null"]
-            //       because OpenAI structured outputs don't support if/then —
-            //       so a null can still slip through on the codex path.
-            //   (2) Some CLI versions / models may drift on schema enforcement.
-            // Surface this as ERROR with a clear message instead of silently
-            // discarding all candidates. Slot-level: this is Failed → fallback.
-            if (evaluatorResult.Outcome == AgentOutcome.COMPLETE && verdict.WinnerIndex is null)
-            {
-                logger.LogWarning(
-                    "Evaluator returned outcome=COMPLETE but winner_index was missing or null for step '{StepName}' slot {SlotIndex} — overriding to ERROR (schema violation).",
-                    request.Step.Name, slotIndex);
-                evaluatorResult = new AgentResult(
-                    AgentOutcome.ERROR,
-                    "Evaluator returned outcome=COMPLETE but did not include a winner_index. " +
-                    "The evaluator schema requires winner_index when outcome=COMPLETE; the response violated this contract. " +
-                    "Original detail:\n\n" + (evaluatorResult.Detail ?? "(empty)"));
-            }
+            // Defensive backstop: RunEvaluatorAsync normally handles this
+            // before returning so it can try evaluator role fallbacks. Keep the
+            // guard here for direct-call invariants and future refactors.
+            if (IsInvalidCompleteEvaluatorVerdict(evaluatorResult, verdict))
+                evaluatorResult = BuildInvalidCompleteEvaluatorResult(evaluatorResult);
 
             await PersistEvaluatorVerdictAsync(
                 request.RunId, groupId, executions, verdict, cancellationToken);
@@ -1127,11 +1111,13 @@ public sealed class CandidateExecutor(
             CommentsFilePath: request.CommentsFilePath,
             SchemaOverride: SchemaForProvider(evaluatorRole.Provider));
 
-        // Walk the role's fallback chain. Like the AgentRunner wrapper, this
-        // goes direct (no session) per attempt — evaluator never had session
-        // reuse to begin with.
+        // Walk the evaluator role's fallback chain. Like the AgentRunner
+        // wrapper, this goes direct (no session) per attempt — evaluator never
+        // had session reuse to begin with. Evaluator attempts are stricter than
+        // generic role fallback: any executor/parse failure before a valid
+        // verdict exists may fall back. A returned outcome=ERROR is not caught
+        // here; it is a valid no-winner verdict.
         var attempts = RoleInvoker.BuildAttempts(evaluatorRole, primaryContext.ProviderParams);
-        var fallbackOn = RoleInvoker.EffectiveFallbackOn(evaluatorRole);
         AgentResult evaluatorResult = null!;
         var actualProvider = evaluatorRole.Provider;
         var actualModel = evaluatorRole.Model;
@@ -1146,6 +1132,8 @@ public sealed class CandidateExecutor(
                 SchemaOverride = SchemaForProvider(attempt.Provider),
             };
 
+            var executor = executorResolver.Resolve(attempt.Provider);
+
             // Mirror CLAUDE.md ↔ AGENTS.md per attempt so each provider has
             // the project init file regardless of which name the repo
             // committed. Cleanup in finally so it doesn't leak between
@@ -1155,7 +1143,6 @@ public sealed class CandidateExecutor(
 
             try
             {
-                var executor = executorResolver.Resolve(attempt.Provider);
                 if (resourcePool is not null)
                 {
                     await using var lease = await resourcePool.AcquireAsync(
@@ -1168,6 +1155,30 @@ public sealed class CandidateExecutor(
                 }
                 actualProvider = attempt.Provider;
                 actualModel = attempt.Model;
+
+                var attemptVerdict = ParseEvaluatorVerdict(
+                    evaluatorResult, executions.Count, evaluatorCfg.Scoring);
+                if (IsInvalidCompleteEvaluatorVerdict(evaluatorResult, attemptVerdict))
+                {
+                    if (i < attempts.Count - 1)
+                    {
+                        var nextAttempt = attempts[i + 1];
+                        logger.LogWarning(
+                            "Evaluator primary {Provider}/{Model} returned outcome=COMPLETE without a usable winner_index for step '{StepName}'; falling back to {NextProvider}/{NextModel}",
+                            attempt.Provider, attempt.Model, request.Step.Name,
+                            nextAttempt.Provider, nextAttempt.Model);
+                        lastException = new InvalidOperationException(
+                            "Evaluator returned outcome=COMPLETE without a usable winner_index.");
+                        continue;
+                    }
+
+                    logger.LogWarning(
+                        "Evaluator returned outcome=COMPLETE but winner_index was missing, null, or invalid for step '{StepName}' — overriding to ERROR (schema violation).",
+                        request.Step.Name);
+                    evaluatorResult = BuildInvalidCompleteEvaluatorResult(evaluatorResult);
+                    break;
+                }
+
                 if (i > 0)
                 {
                     logger.LogWarning(
@@ -1179,12 +1190,12 @@ public sealed class CandidateExecutor(
             catch (Exception ex) when (
                 ex is not OperationCanceledException
                 && i < attempts.Count - 1
-                && RoleInvoker.ShouldFallback(ex, fallbackOn))
+                && ShouldFallbackEvaluatorAttempt(ex))
             {
                 var nextAttempt = attempts[i + 1];
                 logger.LogWarning(ex,
-                    "Evaluator primary {Provider}/{Model} hit {Reason} for step '{StepName}'; falling back to {NextProvider}/{NextModel}",
-                    attempt.Provider, attempt.Model, RoleInvoker.Classify(ex), request.Step.Name,
+                    "Evaluator primary {Provider}/{Model} threw before returning a valid verdict for step '{StepName}'; falling back to {NextProvider}/{NextModel}",
+                    attempt.Provider, attempt.Model, request.Step.Name,
                     nextAttempt.Provider, nextAttempt.Model);
                 lastException = ex;
             }
@@ -1192,11 +1203,9 @@ public sealed class CandidateExecutor(
                 ex is not OperationCanceledException
                 && ex is not RateLimitException)
             {
-                // Last attempt threw a non-fallback (or non-rate-limit if final attempt
-                // is rate-limited and FallbackOn says no — preserve original
-                // "convert to ERROR result" semantics for everything except cancellation
-                // and unhandled rate-limit). RateLimitException still propagates so the
-                // orchestrator's top-level handler restores the card.
+                // Last attempt threw before returning a valid verdict. Preserve
+                // original "convert to ERROR result" semantics for everything
+                // except cancellation and unhandled rate-limit.
                 logger.LogError(ex, "Evaluator threw for step '{StepName}'", request.Step.Name);
                 evaluatorResult = new AgentResult(
                     AgentOutcome.ERROR,
@@ -1211,13 +1220,10 @@ public sealed class CandidateExecutor(
             }
         }
 
-        // If the loop ended without setting a result (all attempts in the
-        // fallback chain threw fallback-eligible exceptions and the final
-        // one's exception was a fallback-eligible RateLimitException, which
-        // the catch block doesn't intercept), propagate the last exception so
-        // the orchestrator's outer handler restores the card to the trigger
-        // column. Reproduces the pre-fallback behaviour for the all-rate-limit
-        // case.
+        // If the loop ended without setting a result (for example the final
+        // attempt threw RateLimitException, which intentionally bypasses the
+        // ERROR conversion), propagate the last captured exception so the
+        // orchestrator's outer handler restores the card to the trigger column.
         if (evaluatorResult is null)
         {
             throw lastException
@@ -1279,6 +1285,21 @@ public sealed class CandidateExecutor(
 
         return (evaluatorResult, tempPromptPath);
     }
+
+    private static bool ShouldFallbackEvaluatorAttempt(Exception ex)
+        => ex is not OperationCanceledException;
+
+    private static bool IsInvalidCompleteEvaluatorVerdict(
+        AgentResult evaluatorResult, EvaluatorVerdict verdict)
+        => evaluatorResult.Outcome == AgentOutcome.COMPLETE
+            && verdict.WinnerIndex is null;
+
+    private static AgentResult BuildInvalidCompleteEvaluatorResult(AgentResult evaluatorResult)
+        => new(
+            AgentOutcome.ERROR,
+            "Evaluator returned outcome=COMPLETE but did not include a usable winner_index. " +
+            "The evaluator schema requires a valid winner_index when outcome=COMPLETE; the response violated this contract. " +
+            "Original detail:\n\n" + (evaluatorResult.Detail ?? "(empty)"));
 
     private async Task<string> BuildEvaluatorTaskPromptAsync(
         CandidateGroupRequest request,
@@ -1374,7 +1395,7 @@ public sealed class CandidateExecutor(
         sb.AppendLine();
         sb.AppendLine("When `outcome = COMPLETE`, you **MUST** include:");
         sb.AppendLine("- `winner_index`: integer (0-indexed) selecting the best candidate.");
-        sb.AppendLine("  The schema enforces this — a COMPLETE response without `winner_index` is rejected as a schema violation, the run is marked ERROR, and no winner is promoted. Picking the winner in prose only is not enough; the structured field is the only signal the orchestrator reads.");
+        sb.AppendLine("  The schema enforces this — a COMPLETE response without a usable `winner_index` is rejected as a schema violation. The orchestrator will try a configured evaluator fallback if one exists; otherwise the slot is marked ERROR and no winner is promoted. Picking the winner in prose only is not enough; the structured field is the only signal the orchestrator reads.");
 
         if (evaluatorCfg.Scoring == EvaluatorScoring.WinnerWithScores)
         {

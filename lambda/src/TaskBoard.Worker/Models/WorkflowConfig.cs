@@ -487,6 +487,9 @@ public enum EvaluatorScoring
 /// optional reviewers, and simple steps without slots/candidates. Candidate
 /// invocations inside a slot already have their own per-candidate
 /// <see cref="CandidateOverride.Retries"/> and slot-level chain mechanisms.
+/// Evaluators use the same fallback list, but treat any executor/parse failure
+/// before a valid evaluator verdict as fallback-eligible; an in-band evaluator
+/// <c>outcome=ERROR</c> is a valid no-winner verdict and does not fallback.
 /// </para>
 /// <para>
 /// <see cref="Model"/> is optional and defaults to the role's
