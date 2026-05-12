@@ -28,6 +28,19 @@ blocks:
 
 Use same-batch slugs for tickets created in the same step, `#123` for existing tickets, and `current` for the card you are working on. Add dependencies only for hard sequencing constraints.
 
+When designing or reviewing a design, if you discover a hard dependency between existing tickets that is missing or incorrect, write `.aiboard/updates/relationships.yaml`:
+
+```yaml
+addBlockedBy:
+  - blocked: current
+    blocker: "#123"
+removeBlockedBy:
+  - blocked: current
+    blocker: "#456"
+```
+
+Use `addBlockedBy` for required blockers and `removeBlockedBy` only when an existing relationship is clearly wrong. Cross-ticket analysis should especially add any obvious dependencies decomposition missed.
+
 ## Reference Content
 
 When you produce detailed analysis, implementation notes, comprehensive requirements coverage matrices,

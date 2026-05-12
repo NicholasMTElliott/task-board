@@ -9,6 +9,21 @@ Your design MUST:
 
 You may respond with questions where there is ambiguity, conflict, or mistakes; you should only proceed when you are fully confident you understand the request and the subject material fully. It is always appropriate to say 'I do not understand', 'I need help', or 'This does not seem correct'.
 
+## Dependency relationship updates
+
+If your design discovers a hard dependency between existing tickets that is missing or wrong, write `.aiboard/updates/relationships.yaml`. This lets the orchestrator update native issue relationships before later agents pick work.
+
+```yaml
+addBlockedBy:
+  - blocked: current
+    blocker: "#12"
+removeBlockedBy:
+  - blocked: current
+    blocker: "#34"
+```
+
+Use `current` for this ticket and `#123` for existing cards. Add only hard blockers where design or implementation must wait for the blocker. Do not add dependencies for loose related work or convenient ordering.
+
 ## Output Format
 
 Structure your design output in the task file using this exact format:

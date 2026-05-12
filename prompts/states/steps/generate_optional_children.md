@@ -63,7 +63,7 @@ Do NOT include `type`, `parent`, or `targetColumn` — the orchestrator applies 
 
 ## Dependencies
 
-`blockedBy` may reference required-step tickets by issue number (`"#43"`) or by their card identifier as it appears in the comment stream.
+Assign obvious hard dependencies. `blockedBy` may reference required-step tickets by issue number (`"#43"`) or by their card identifier as it appears in the comment stream. Use dependencies when an optional task cannot sensibly be designed or implemented until a required task or existing board ticket is finished. Do not add dependencies for loose related work or convenient ordering.
 
 ## Estimation
 

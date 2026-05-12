@@ -34,7 +34,7 @@ public sealed class GitHubIssueDependencyClient(
             [
                 "api", "--method", "POST",
                 $"repos/{_options.Repo}/issues/{blockedCardId}/dependencies/blocked_by",
-                "-f", $"issue_id={blockerIssueId}"
+                "-F", $"issue_id={blockerIssueId}"
             ],
             cancellationToken);
         logger.LogInformation("Added dependency: #{Blocked} is blocked by #{Blocker}", blockedCardId, blockerCardId);

@@ -15,7 +15,7 @@ If a conversation history file exists for this task, read it first. It may conta
 - **Run tests, builds, linters, formatters, or type-checkers.** None of that is needed to scan ticket text.
 - **Run the application or any subprocess** (Godot engine, Docker containers, dev servers, etc.). The orchestrator's container already gave you the necessary read-only access.
 - Open files outside `/.aiboard/` and the small set of top-level project docs above.
-- Edit files other than the current ticket's task file.
+- Edit files other than the current ticket's task file, except `.aiboard/updates/relationships.yaml` when recording hard dependency relationships.
 
 If you find yourself wanting to look at code or run something, **stop**: the answer to "is this a board-relationship question?" is no, and the analysis belongs in the next step. Your output is the input to a downstream design agent that *will* do that work.
 
@@ -32,6 +32,23 @@ If no related tickets exist, say so plainly in one line. Do not invent relations
 ## Cross-references
 
 When the current ticket genuinely depends on or is significantly affected by another card, add a reference using the card number (e.g. `#5`, `#12`). This creates a tracked relationship the orchestrator's cross-reference resolver will use to pull that card's context into later phases. Only reference cards where the relationship is meaningful — every reference adds context cost downstream.
+
+## Native Dependency Updates
+
+When ticket text reveals a hard sequencing constraint, write `.aiboard/updates/relationships.yaml` so the orchestrator updates native issue relationships. This is required when the current ticket is blocked by another ticket, blocks another ticket, or when you find an obvious missed dependency from decomposition.
+
+Use this format:
+
+```yaml
+addBlockedBy:
+  - blocked: "#21"
+    blocker: "#18"
+removeBlockedBy:
+  - blocked: "#21"
+    blocker: "#18"
+```
+
+Use `current` for the card you are working on. Use `#123` for existing cards. Add only hard blockers where one card cannot sensibly be designed or implemented until the blocker is finished. Do not add dependencies for loose related work, shared vocabulary, or mere preference.
 
 ## Section Update Contract
 

@@ -57,7 +57,7 @@ Do NOT include `type`, `parent`, or `targetColumn` in the front matter — the o
 
 ## Dependencies
 
-If tasks have a real sequencing constraint, encode it in front matter:
+Assign obvious hard dependencies during decomposition. If task B needs task A's schema, API, data contract, migration, configuration, or design decision before B can be sensibly designed or implemented, encode that relationship immediately in front matter:
 
 ```yaml
 blockedBy:
@@ -70,6 +70,7 @@ blocks:
 - Use same-batch slugs for tasks you are creating in this step.
 - Use `#123` for existing tickets.
 - Use `current` only if the generated task truly depends on the parent card being complete.
+- Include dependencies between sibling tasks and dependencies on existing board tickets when the parent/body makes them clear.
 - Do not add dependencies for mere conceptual relationship, shared context, or preferred ordering.
 
 ## Estimation

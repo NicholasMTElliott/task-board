@@ -62,6 +62,7 @@ public class GitHubIssueDependencyClientTests
         Assert.Contains("--method", calls[1]);
         Assert.Contains("POST", calls[1]);
         Assert.Contains("repos/octo/repo/issues/10/dependencies/blocked_by", calls[1]);
+        Assert.Contains("-F", calls[1]);
         Assert.Contains("issue_id=12345", calls[1]);
     }
 

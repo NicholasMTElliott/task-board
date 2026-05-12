@@ -8,9 +8,10 @@ namespace TaskBoard.Worker.Processing;
 
 /// <summary>
 /// Processes update files written by agents to .aiboard/updates/.
-/// Handles two file types:
+/// Handles these file types:
 ///   new-{slug}.md      — creates a new ticket via ITaskBoardClient.CreateCardAsync
 ///   {cardId}-comment.md — posts a cross-card comment via ITaskBoardClient.UpsertAgentCommentAsync
+///   relationships.yaml — adds/removes native dependency links between existing cards
 ///
 /// For structured generation steps (generationConfig on a WorkflowStep),
 /// the orchestrator applies type/parent/column metadata from the step config.
@@ -44,6 +45,9 @@ public sealed class UpdateFileProcessor(
     private static readonly Regex ReferencePattern =
         new(@"^(\d+)-reference\.md$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private static readonly Regex RelationshipsPattern =
+        new(@"^relationships\.ya?ml$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     /// <summary>
     /// Scans the updates directory in the workspace, processes all recognized .md files,
     /// and returns a summary of actions taken.
@@ -65,15 +69,20 @@ public sealed class UpdateFileProcessor(
         // is processed first "winning" the directional edge. Sort alphabetically
         // so the outcome is deterministic across filesystems (NTFS happens to
         // return name-ordered; ext4 with dir_index does not).
-        var files = Directory.GetFiles(updatesDir, "*.md");
+        var files = Directory.GetFiles(updatesDir)
+            .Where(f => IsSupportedUpdateFileExtension(Path.GetExtension(f)))
+            .ToArray();
         if (files.Length == 0)
             return UpdateProcessingResult.Empty;
         Array.Sort(files, StringComparer.OrdinalIgnoreCase);
 
         var newTicketFiles = new List<(string FilePath, string Slug)>();
+        var relationshipFiles = new List<string>();
         var createdTickets = new List<CreatedTicketInfo>();
         var postedComments = new List<CrossCardCommentInfo>();
         var unrecognizedFiles = new List<UnrecognizedUpdateFile>();
+        var appliedDependencyLinks = new List<DependencyLinkInfo>();
+        var failedDependencyLinks = new List<DependencyLinkFailure>();
         string? referenceContent = null;
 
         foreach (var filePath in files)
@@ -86,6 +95,12 @@ public sealed class UpdateFileProcessor(
                 if (newTicketMatch.Success)
                 {
                     newTicketFiles.Add((filePath, newTicketMatch.Groups[1].Value));
+                    continue;
+                }
+
+                if (RelationshipsPattern.IsMatch(fileName))
+                {
+                    relationshipFiles.Add(filePath);
                     continue;
                 }
 
@@ -129,7 +144,7 @@ public sealed class UpdateFileProcessor(
                 else
                 {
                     logger.LogWarning(
-                        "Unrecognized update file (does not match new-{{slug}}.md, {{cardId}}-comment.md, or {{cardId}}-reference.md): {FileName}",
+                        "Unrecognized update file (does not match new-{{slug}}.md, {{cardId}}-comment.md, {{cardId}}-reference.md, or relationships.yaml): {FileName}",
                         fileName);
                 }
                 unrecognizedFiles.Add(new UnrecognizedUpdateFile(fileName, likelyMissingNewPrefix));
@@ -144,7 +159,19 @@ public sealed class UpdateFileProcessor(
         {
             var results = await ProcessNewTicketFilesAsync(
                 newTicketFiles, sourceCardId, currentSourceComments, generationConfig, cancellationToken);
-            createdTickets.AddRange(results);
+            createdTickets.AddRange(results.CreatedTickets);
+            appliedDependencyLinks.AddRange(results.AppliedDependencyLinks);
+            failedDependencyLinks.AddRange(results.FailedDependencyLinks);
+        }
+
+        if (relationshipFiles.Count > 0)
+        {
+            var slugToId = createdTickets.ToDictionary(
+                c => c.Slug, c => c.NewCardId, StringComparer.OrdinalIgnoreCase);
+            var results = await ProcessRelationshipFilesAsync(
+                relationshipFiles, sourceCardId, slugToId, cancellationToken);
+            appliedDependencyLinks.AddRange(results.AppliedDependencyLinks);
+            failedDependencyLinks.AddRange(results.FailedDependencyLinks);
         }
 
         // End-of-loop summary: a single Warning that surfaces the count
@@ -173,8 +200,16 @@ public sealed class UpdateFileProcessor(
             }
         }
 
-        return new UpdateProcessingResult(createdTickets, postedComments, referenceContent, unrecognizedFiles);
+        return new UpdateProcessingResult(
+            createdTickets, postedComments, referenceContent, unrecognizedFiles,
+            appliedDependencyLinks, failedDependencyLinks);
     }
+
+    private static bool IsSupportedUpdateFileExtension(string? extension)
+        => extension is not null
+           && (extension.Equals(".md", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".yaml", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".yml", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Heuristic: a filename "looks like" a new-ticket file with the missing `new-` prefix when
@@ -203,7 +238,7 @@ public sealed class UpdateFileProcessor(
         return fileName.IndexOf('-') > 0;
     }
 
-    private async Task<IReadOnlyList<CreatedTicketInfo>> ProcessNewTicketFilesAsync(
+    private async Task<NewTicketProcessingResult> ProcessNewTicketFilesAsync(
         IReadOnlyList<(string FilePath, string Slug)> files,
         string sourceCardId,
         IReadOnlyList<CardComment> currentComments,
@@ -271,8 +306,11 @@ public sealed class UpdateFileProcessor(
             }
         }
 
-        await ApplyDependencyLinksAsync(sourceCardId, created, ct);
-        return created.Select(c => c.Info).ToList();
+        var dependencyResult = await ApplyDependencyLinksAsync(sourceCardId, created, ct);
+        return new NewTicketProcessingResult(
+            created.Select(c => c.Info).ToList(),
+            dependencyResult.AppliedDependencyLinks,
+            dependencyResult.FailedDependencyLinks);
     }
 
     private async Task<PendingTicketCreation?> PrepareNewTicketFileAsync(
@@ -433,16 +471,84 @@ public sealed class UpdateFileProcessor(
         return new CrossCardCommentInfo(targetCardId, Path.GetFileName(filePath));
     }
 
-    private async Task ApplyDependencyLinksAsync(
+    private async Task<DependencyLinkProcessingResult> ProcessRelationshipFilesAsync(
+        IReadOnlyList<string> files,
+        string sourceCardId,
+        IReadOnlyDictionary<string, string> slugToId,
+        CancellationToken ct)
+    {
+        var applied = new List<DependencyLinkInfo>();
+        var failed = new List<DependencyLinkFailure>();
+        var plannedEdges = new HashSet<(string Blocked, string Blocker)>();
+
+        foreach (var filePath in files)
+        {
+            var fileName = Path.GetFileName(filePath);
+            IReadOnlyList<RelationshipDirective> directives;
+            try
+            {
+                var content = await File.ReadAllTextAsync(filePath, ct);
+                directives = ParseRelationshipUpdateFile(content);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Could not parse relationship update file '{File}'", fileName);
+                failed.Add(new DependencyLinkFailure(
+                    "parse", "", "", fileName, ex.Message));
+                continue;
+            }
+
+            foreach (var directive in directives)
+            {
+                var blockedId = ResolveDependencyRef(directive.Blocked, sourceCardId, slugToId);
+                var blockerId = ResolveDependencyRef(directive.Blocker, sourceCardId, slugToId);
+                if (blockedId is null || blockerId is null)
+                {
+                    logger.LogWarning(
+                        "Skipping relationship update from {File}: could not resolve blocked='{Blocked}' blocker='{Blocker}'",
+                        fileName, directive.Blocked, directive.Blocker);
+                    failed.Add(new DependencyLinkFailure(
+                        directive.Operation, directive.Blocked, directive.Blocker, fileName,
+                        "Could not resolve blocked or blocker reference."));
+                    continue;
+                }
+
+                if (string.Equals(directive.Operation, "addBlockedBy", StringComparison.OrdinalIgnoreCase))
+                {
+                    var outcome = await TryAddDependencyAsync(blockedId, blockerId, plannedEdges, fileName, ct);
+                    if (outcome.Applied is not null)
+                        applied.Add(outcome.Applied);
+                    if (outcome.Failure is not null)
+                        failed.Add(outcome.Failure);
+                }
+                else if (string.Equals(directive.Operation, "removeBlockedBy", StringComparison.OrdinalIgnoreCase))
+                {
+                    var outcome = await TryRemoveDependencyAsync(blockedId, blockerId, fileName, ct);
+                    if (outcome.Applied is not null)
+                        applied.Add(outcome.Applied);
+                    if (outcome.Failure is not null)
+                        failed.Add(outcome.Failure);
+                }
+            }
+
+            File.Delete(filePath);
+        }
+
+        return new DependencyLinkProcessingResult(applied, failed);
+    }
+
+    private async Task<DependencyLinkProcessingResult> ApplyDependencyLinksAsync(
         string sourceCardId,
         IReadOnlyList<CreatedTicketWithDependencies> created,
         CancellationToken ct)
     {
         if (created.Count == 0)
-            return;
+            return new DependencyLinkProcessingResult([], []);
 
         var slugToId = created.ToDictionary(c => c.Info.Slug, c => c.Info.NewCardId, StringComparer.OrdinalIgnoreCase);
         var plannedEdges = new HashSet<(string Blocked, string Blocker)>();
+        var applied = new List<DependencyLinkInfo>();
+        var failed = new List<DependencyLinkFailure>();
 
         foreach (var item in created)
         {
@@ -457,7 +563,13 @@ public sealed class UpdateFileProcessor(
                     continue;
                 }
 
-                await TryAddDependencyAsync(item.Info.NewCardId, blockerId, plannedEdges, ct);
+                var outcome = await TryAddDependencyAsync(
+                    item.Info.NewCardId, blockerId, plannedEdges,
+                    $"new-{item.Info.Slug}.md blockedBy", ct);
+                if (outcome.Applied is not null)
+                    applied.Add(outcome.Applied);
+                if (outcome.Failure is not null)
+                    failed.Add(outcome.Failure);
             }
 
             foreach (var depRef in item.Blocks)
@@ -471,21 +583,30 @@ public sealed class UpdateFileProcessor(
                     continue;
                 }
 
-                await TryAddDependencyAsync(blockedId, item.Info.NewCardId, plannedEdges, ct);
+                var outcome = await TryAddDependencyAsync(
+                    blockedId, item.Info.NewCardId, plannedEdges,
+                    $"new-{item.Info.Slug}.md blocks", ct);
+                if (outcome.Applied is not null)
+                    applied.Add(outcome.Applied);
+                if (outcome.Failure is not null)
+                    failed.Add(outcome.Failure);
             }
         }
+
+        return new DependencyLinkProcessingResult(applied, failed);
     }
 
-    private async Task TryAddDependencyAsync(
+    private async Task<DependencyLinkApplyOutcome> TryAddDependencyAsync(
         string blockedCardId,
         string blockerCardId,
         HashSet<(string Blocked, string Blocker)> plannedEdges,
+        string source,
         CancellationToken ct)
     {
         if (string.Equals(blockedCardId, blockerCardId, StringComparison.OrdinalIgnoreCase))
         {
             logger.LogWarning("Skipping self-dependency on card #{CardId}", blockedCardId);
-            return;
+            return DependencyLinkApplyOutcome.Empty;
         }
 
         var edge = (blockedCardId, blockerCardId);
@@ -497,15 +618,17 @@ public sealed class UpdateFileProcessor(
             logger.LogWarning(
                 "Skipping dependency #{Blocked} blocked by #{Blocker}: would create a direct cycle",
                 blockedCardId, blockerCardId);
-            return;
+            return DependencyLinkApplyOutcome.Empty;
         }
 
         if (!plannedEdges.Add(edge))
-            return;
+            return DependencyLinkApplyOutcome.Empty;
 
         try
         {
             await _dependencyClient.AddBlockedByAsync(blockedCardId, blockerCardId, ct);
+            return new DependencyLinkApplyOutcome(
+                new DependencyLinkInfo("addBlockedBy", blockedCardId, blockerCardId, source), null);
         }
         catch (Exception ex)
         {
@@ -513,6 +636,39 @@ public sealed class UpdateFileProcessor(
                 ex,
                 "Failed to add dependency #{Blocked} blocked by #{Blocker}",
                 blockedCardId, blockerCardId);
+            return new DependencyLinkApplyOutcome(
+                null,
+                new DependencyLinkFailure("addBlockedBy", blockedCardId, blockerCardId, source, ex.Message));
+        }
+    }
+
+    private async Task<DependencyLinkApplyOutcome> TryRemoveDependencyAsync(
+        string blockedCardId,
+        string blockerCardId,
+        string source,
+        CancellationToken ct)
+    {
+        if (string.Equals(blockedCardId, blockerCardId, StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogWarning("Skipping self-dependency removal on card #{CardId}", blockedCardId);
+            return DependencyLinkApplyOutcome.Empty;
+        }
+
+        try
+        {
+            await _dependencyClient.RemoveBlockedByAsync(blockedCardId, blockerCardId, ct);
+            return new DependencyLinkApplyOutcome(
+                new DependencyLinkInfo("removeBlockedBy", blockedCardId, blockerCardId, source), null);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Failed to remove dependency #{Blocked} blocked by #{Blocker}",
+                blockedCardId, blockerCardId);
+            return new DependencyLinkApplyOutcome(
+                null,
+                new DependencyLinkFailure("removeBlockedBy", blockedCardId, blockerCardId, source, ex.Message));
         }
     }
 
@@ -740,6 +896,87 @@ public sealed class UpdateFileProcessor(
             : new ParsedNewTicket(title, body, type, parent, targetColumn, estimate, blockedBy, blocks);
     }
 
+    internal static IReadOnlyList<RelationshipDirective> ParseRelationshipUpdateFile(string content)
+    {
+        var directives = new List<RelationshipDirective>();
+        string? operation = null;
+        string? blocked = null;
+        string? blocker = null;
+        var inItem = false;
+
+        void FlushItem()
+        {
+            if (!inItem)
+                return;
+
+            if (string.IsNullOrWhiteSpace(operation)
+                || string.IsNullOrWhiteSpace(blocked)
+                || string.IsNullOrWhiteSpace(blocker))
+            {
+                throw new InvalidOperationException(
+                    "Each relationship item must include blocked and blocker under addBlockedBy or removeBlockedBy.");
+            }
+
+            directives.Add(new RelationshipDirective(operation!, blocked!, blocker!));
+            blocked = null;
+            blocker = null;
+            inItem = false;
+        }
+
+        foreach (var rawLine in content.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0 || line.StartsWith('#') || line == "---")
+                continue;
+
+            if (line.Equals("addBlockedBy:", StringComparison.OrdinalIgnoreCase)
+                || line.Equals("removeBlockedBy:", StringComparison.OrdinalIgnoreCase))
+            {
+                FlushItem();
+                operation = line[..^1];
+                continue;
+            }
+
+            if (operation is null)
+                throw new InvalidOperationException("Relationship update file must start with addBlockedBy or removeBlockedBy.");
+
+            if (line.StartsWith("- ", StringComparison.Ordinal))
+            {
+                FlushItem();
+                inItem = true;
+                var remainder = line[2..].Trim();
+                if (remainder.Length > 0)
+                    AssignRelationshipField(remainder, ref blocked, ref blocker);
+                continue;
+            }
+
+            if (!inItem)
+                throw new InvalidOperationException("Relationship field appeared before a list item.");
+
+            AssignRelationshipField(line, ref blocked, ref blocker);
+        }
+
+        FlushItem();
+        return directives;
+    }
+
+    private static void AssignRelationshipField(string line, ref string? blocked, ref string? blocker)
+    {
+        if (line.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase))
+        {
+            blocked = line["blocked:".Length..].Trim().Trim('"', '\'');
+            return;
+        }
+
+        if (line.StartsWith("blocker:", StringComparison.OrdinalIgnoreCase))
+        {
+            blocker = line["blocker:".Length..].Trim().Trim('"', '\'');
+            return;
+        }
+
+        throw new InvalidOperationException($"Unsupported relationship field: {line}");
+    }
+
     private static void AddInlineListValues(string raw, List<string> target)
     {
         var value = raw.Trim();
@@ -799,12 +1036,22 @@ public sealed record UpdateProcessingResult(
     IReadOnlyList<CreatedTicketInfo> CreatedTickets,
     IReadOnlyList<CrossCardCommentInfo> PostedComments,
     string? ReferenceContent = null,
-    IReadOnlyList<UnrecognizedUpdateFile>? UnrecognizedFiles = null)
+    IReadOnlyList<UnrecognizedUpdateFile>? UnrecognizedFiles = null,
+    IReadOnlyList<DependencyLinkInfo>? AppliedDependencyLinks = null,
+    IReadOnlyList<DependencyLinkFailure>? FailedDependencyLinks = null)
 {
     public static readonly UpdateProcessingResult Empty = new([], []);
-    public bool HasUpdates => CreatedTickets.Count > 0 || PostedComments.Count > 0;
+    public bool HasUpdates =>
+        CreatedTickets.Count > 0
+        || PostedComments.Count > 0
+        || AppliedDependencyLinksList.Count > 0
+        || FailedDependencyLinksList.Count > 0;
     public IReadOnlyList<UnrecognizedUpdateFile> UnrecognizedFilesList =>
         UnrecognizedFiles ?? Array.Empty<UnrecognizedUpdateFile>();
+    public IReadOnlyList<DependencyLinkInfo> AppliedDependencyLinksList =>
+        AppliedDependencyLinks ?? Array.Empty<DependencyLinkInfo>();
+    public IReadOnlyList<DependencyLinkFailure> FailedDependencyLinksList =>
+        FailedDependencyLinks ?? Array.Empty<DependencyLinkFailure>();
 
     /// <summary>
     /// Sum of all created ticket estimates (from front matter). Null if no estimates were provided.
@@ -830,6 +1077,8 @@ public sealed record UpdateProcessingResult(
 
 public sealed record CreatedTicketInfo(string NewCardId, string Title, string Slug, double? Estimate = null);
 public sealed record CrossCardCommentInfo(string TargetCardId, string SourceFileName);
+public sealed record DependencyLinkInfo(string Operation, string BlockedCardId, string BlockerCardId, string Source);
+public sealed record DependencyLinkFailure(string Operation, string BlockedCardId, string BlockerCardId, string Source, string Error);
 
 /// <summary>
 /// A `.md` file in `.aiboard/updates/` that did not match any of the recognized
@@ -844,6 +1093,8 @@ public sealed record CrossCardCommentInfo(string TargetCardId, string SourceFile
 /// dominant agent-error mode).
 /// </param>
 public sealed record UnrecognizedUpdateFile(string FileName, bool LikelyMissingNewPrefix);
+
+internal sealed record RelationshipDirective(string Operation, string Blocked, string Blocker);
 
 /// <summary>
 /// Represents a parsed new-ticket update file.
@@ -868,3 +1119,19 @@ internal sealed record CreatedTicketWithDependencies(
     CreatedTicketInfo Info,
     IReadOnlyList<string> BlockedBy,
     IReadOnlyList<string> Blocks);
+
+internal sealed record NewTicketProcessingResult(
+    IReadOnlyList<CreatedTicketInfo> CreatedTickets,
+    IReadOnlyList<DependencyLinkInfo> AppliedDependencyLinks,
+    IReadOnlyList<DependencyLinkFailure> FailedDependencyLinks);
+
+internal sealed record DependencyLinkProcessingResult(
+    IReadOnlyList<DependencyLinkInfo> AppliedDependencyLinks,
+    IReadOnlyList<DependencyLinkFailure> FailedDependencyLinks);
+
+internal sealed record DependencyLinkApplyOutcome(
+    DependencyLinkInfo? Applied,
+    DependencyLinkFailure? Failure)
+{
+    public static readonly DependencyLinkApplyOutcome Empty = new(null, null);
+}

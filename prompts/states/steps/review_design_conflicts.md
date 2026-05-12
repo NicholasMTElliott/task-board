@@ -17,6 +17,20 @@ If a conversation history file exists for this task, read it first.
    - Which other ticket(s) are involved.
    - The severity (blocking, needs attention, informational).
    - A recommended resolution or mitigation if applicable.
+5. If the review finds a strict dependency that is missing or wrong, write `.aiboard/updates/relationships.yaml` so the orchestrator updates native relationships.
+
+Use this format:
+
+```yaml
+addBlockedBy:
+  - blocked: current
+    blocker: "#12"
+removeBlockedBy:
+  - blocked: current
+    blocker: "#34"
+```
+
+Add dependencies only for hard sequencing constraints. Do not encode overlap, shared context, or merge-conflict risk as a dependency unless one ticket really must finish first.
 
 If no conflicts are found, still write the section confirming the review was performed and no issues were identified.
 

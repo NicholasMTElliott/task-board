@@ -443,6 +443,8 @@ public sealed partial class AgentRunner(
             // ERROR when the agent says "I made tickets" but actually wrote
             // unparseable filenames.
             var allUnrecognizedFiles = new List<UnrecognizedUpdateFile>();
+            var allAppliedDependencyLinks = new List<DependencyLinkInfo>();
+            var allFailedDependencyLinks = new List<DependencyLinkFailure>();
 
             for (var stepIndex = 0; stepIndex < state.Steps.Count; stepIndex++)
             {
@@ -962,6 +964,16 @@ public sealed partial class AgentRunner(
                     allUnrecognizedFiles.AddRange(updateResult.UnrecognizedFilesList);
                 }
 
+                if (updateResult.AppliedDependencyLinksList.Count > 0)
+                {
+                    allAppliedDependencyLinks.AddRange(updateResult.AppliedDependencyLinksList);
+                }
+
+                if (updateResult.FailedDependencyLinksList.Count > 0)
+                {
+                    allFailedDependencyLinks.AddRange(updateResult.FailedDependencyLinksList);
+                }
+
                 // 6d-iii. Resolve attempt count BEFORE the step row is persisted
                 // so the COUNT predicate excludes the current attempt. The
                 // canonical step name (slot/candidate/evaluator suffixes are
@@ -1155,7 +1167,8 @@ public sealed partial class AgentRunner(
             var gateDiffBase = stateEntrySha ?? runStartCanonicalSha;
             var gateCheckResult = await RunGateCheckAsync(
                 session, state, lastResult!, worktreePath, targetCard, currentBody, cardId, runId,
-                gateDiffBase, allCreatedTickets, allUnrecognizedFiles, cancellationToken);
+                gateDiffBase, allCreatedTickets, allUnrecognizedFiles,
+                allAppliedDependencyLinks, allFailedDependencyLinks, cancellationToken);
 
             if (gateCheckResult.BlockingResult is not null)
             {
@@ -1552,6 +1565,8 @@ public sealed partial class AgentRunner(
         string? runStartCanonicalSha,
         IReadOnlyList<CreatedTicketInfo> createdTickets,
         IReadOnlyList<UnrecognizedUpdateFile> unrecognizedFiles,
+        IReadOnlyList<DependencyLinkInfo> appliedDependencyLinks,
+        IReadOnlyList<DependencyLinkFailure> failedDependencyLinks,
         CancellationToken cancellationToken)
     {
         if (state.GateCheck is null)
@@ -1627,7 +1642,9 @@ public sealed partial class AgentRunner(
         // and the unrecognizedFiles list.
         if (string.IsNullOrWhiteSpace(changes)
             && createdTickets.Count == 0
-            && unrecognizedFiles.Count == 0)
+            && unrecognizedFiles.Count == 0
+            && appliedDependencyLinks.Count == 0
+            && failedDependencyLinks.Count == 0)
         {
             logger.LogWarning("Gate check skipped: no changes detected for card {CardId}", cardId);
             return new GateCheckResult(null, null);
@@ -1685,6 +1702,39 @@ public sealed partial class AgentRunner(
             unrecognizedFilesBlock = sb.ToString().TrimEnd();
         }
 
+        string dependencyUpdatesBlock;
+        if (appliedDependencyLinks.Count == 0 && failedDependencyLinks.Count == 0)
+        {
+            dependencyUpdatesBlock = "_(no dependency relationship updates requested during this run)_";
+        }
+        else
+        {
+            var sb = new StringBuilder();
+            foreach (var link in appliedDependencyLinks)
+            {
+                sb.Append("- ").Append(link.Operation)
+                    .Append(": #").Append(link.BlockedCardId)
+                    .Append(" blocked by #").Append(link.BlockerCardId)
+                    .Append(" (`").Append(link.Source).AppendLine("`)");
+            }
+            if (failedDependencyLinks.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("**FAILURE SIGNAL**: requested dependency relationship update(s) failed:");
+                foreach (var failure in failedDependencyLinks)
+                {
+                    sb.Append("- ").Append(failure.Operation)
+                        .Append(": #").Append(failure.BlockedCardId)
+                        .Append(" blocked by #").Append(failure.BlockerCardId)
+                        .Append(" (`").Append(failure.Source).Append("`) — ")
+                        .AppendLine(failure.Error);
+                }
+                sb.AppendLine();
+                sb.AppendLine("Return `outcome=ERROR` unless the failed relationship is clearly invalid and intentionally ignored.");
+            }
+            dependencyUpdatesBlock = sb.ToString().TrimEnd();
+        }
+
         // Build gate prompt
         string gatePromptTemplate;
         if (gateCheck.TaskPromptFile is not null)
@@ -1728,6 +1778,7 @@ public sealed partial class AgentRunner(
                 .Replace("{AgentReport}", agentReport)
                 .Replace("{CreatedTickets}", createdTicketsBlock)
                 .Replace("{UnrecognizedFiles}", unrecognizedFilesBlock)
+                .Replace("{DependencyUpdates}", dependencyUpdatesBlock)
                 .Replace("{StepHistory}", historyBlock);
 
             // Append the step history at the end of the prompt when the template
@@ -3430,6 +3481,12 @@ public sealed partial class AgentRunner(
 
         foreach (var comment in result.PostedComments)
             sb.AppendLine($"- Posted cross-card comment on #{comment.TargetCardId}");
+
+        foreach (var link in result.AppliedDependencyLinksList)
+            sb.AppendLine($"- Dependency {link.Operation}: #{link.BlockedCardId} blocked by #{link.BlockerCardId}");
+
+        foreach (var failure in result.FailedDependencyLinksList)
+            sb.AppendLine($"- Dependency {failure.Operation} failed: #{failure.BlockedCardId} blocked by #{failure.BlockerCardId} — {failure.Error}");
 
         return sb.ToString();
     }

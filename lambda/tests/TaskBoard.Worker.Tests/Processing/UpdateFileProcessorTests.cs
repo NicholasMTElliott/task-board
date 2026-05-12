@@ -183,6 +183,71 @@ public class UpdateFileProcessorTests : IDisposable
         Assert.Equal(2, result.CreatedTickets.Count);
         await dependencyClient.Received(1).AddBlockedByAsync("102", "101", Arg.Any<CancellationToken>());
         await dependencyClient.Received(1).AddBlockedByAsync(SourceCardId, "102", Arg.Any<CancellationToken>());
+        Assert.Equal(2, result.AppliedDependencyLinksList.Count);
+        Assert.Empty(result.FailedDependencyLinksList);
+    }
+
+    [Fact]
+    public async Task ProcessUpdates_RelationshipFile_AppliesAddAndRemove()
+    {
+        var updatesDir = CreateUpdatesDir();
+        var relationshipsPath = Path.Combine(updatesDir, "relationships.yaml");
+        File.WriteAllText(relationshipsPath,
+            """
+            addBlockedBy:
+              - blocked: "#21"
+                blocker: "#18"
+              - blocked: current
+                blocker: "#11"
+            removeBlockedBy:
+              - blocked: "#22"
+                blocker: "#20"
+            """);
+
+        var dependencyClient = Substitute.For<ICardDependencyClient>();
+        var processor = new UpdateFileProcessor(
+            _boardClient, _config, _identity, NullLogger<UpdateFileProcessor>.Instance, dependencyClient);
+
+        var result = await processor.ProcessUpdatesAsync(
+            _tempDir, SourceCardId, StepName, [], CancellationToken.None);
+
+        await dependencyClient.Received(1).AddBlockedByAsync("21", "18", Arg.Any<CancellationToken>());
+        await dependencyClient.Received(1).AddBlockedByAsync(SourceCardId, "11", Arg.Any<CancellationToken>());
+        await dependencyClient.Received(1).RemoveBlockedByAsync("22", "20", Arg.Any<CancellationToken>());
+        Assert.Equal(3, result.AppliedDependencyLinksList.Count);
+        Assert.Empty(result.FailedDependencyLinksList);
+        Assert.True(result.HasUpdates);
+        Assert.False(File.Exists(relationshipsPath));
+    }
+
+    [Fact]
+    public async Task ProcessUpdates_DependencyWriteFailure_IsSurfaced()
+    {
+        var updatesDir = CreateUpdatesDir();
+        File.WriteAllText(Path.Combine(updatesDir, "new-add-api.md"),
+            "---\ntitle: Add API\nblockedBy:\n  - current\n---\n\nBody.");
+
+        _boardClient.CreateCardAsync(
+                Arg.Is<CreateCardRequest>(r => r.Title == "Add API"),
+                Arg.Any<CancellationToken>())
+            .Returns("102");
+
+        var dependencyClient = Substitute.For<ICardDependencyClient>();
+        dependencyClient.AddBlockedByAsync("102", SourceCardId, Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("dependency API unavailable")));
+        var processor = new UpdateFileProcessor(
+            _boardClient, _config, _identity, NullLogger<UpdateFileProcessor>.Instance, dependencyClient);
+
+        var result = await processor.ProcessUpdatesAsync(
+            _tempDir, SourceCardId, StepName, [], CancellationToken.None);
+
+        Assert.Single(result.CreatedTickets);
+        var failure = Assert.Single(result.FailedDependencyLinksList);
+        Assert.Equal("addBlockedBy", failure.Operation);
+        Assert.Equal("102", failure.BlockedCardId);
+        Assert.Equal(SourceCardId, failure.BlockerCardId);
+        Assert.Contains("dependency API unavailable", failure.Error);
+        Assert.True(result.HasUpdates);
     }
 
     [Fact]

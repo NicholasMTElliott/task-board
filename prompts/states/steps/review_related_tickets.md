@@ -19,6 +19,7 @@ If you can't identify the relationship from the OTHER ticket's text alone — wi
 2. Read every other task file in `.aiboard/tasks/` (and any subdirectories of related-card folders if cross-references already exist).
 3. For each candidate related ticket, ask: does this ticket's TEXT name something this one's text also names (component, system area, API, data model, file path, ticket number)? If yes, document the relationship. If no, skip it.
 4. Write findings into this ticket's task file under a `## Related Ticket Analysis` section. For each related ticket: card number + title, nature of the relationship, specific impact area as named in the other ticket's text, risk or constraint for the upcoming design.
+5. If you find a hard blocker relationship that is missing from the ticket relationships, write `.aiboard/updates/relationships.yaml` to add it. This includes obvious dependencies decomposition should have created but missed.
 
 ## What this step is NOT
 
@@ -32,6 +33,20 @@ A typical run of this step takes **under a minute** for a small board and a few 
 ## Cross-references
 
 When this ticket genuinely depends on or is significantly affected by another card, add a reference using the card number (e.g. `#5`, `#12`) so the orchestrator pulls that card's context into later phases. Only reference cards where the relationship is meaningful.
+
+## Native dependency updates
+
+When one card cannot sensibly be designed or implemented until another card is finished, create or update `.aiboard/updates/relationships.yaml`:
+
+```yaml
+addBlockedBy:
+  - blocked: current
+    blocker: "#12"
+  - blocked: "#18"
+    blocker: current
+```
+
+Use `current` for this ticket and `#123` for existing cards. Add only strict blockers. Do not encode loose relationships, overlap, shared context, or preferred ordering as dependencies.
 
 ## Outcome
 
