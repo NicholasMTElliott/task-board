@@ -111,7 +111,7 @@ public sealed class QueueDrivenRunner(
         string boardId, string workspacePath,
         SemaphoreSlim? semaphore, CancellationToken cancellationToken)
     {
-        var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalColumnNames());
+        var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetPollingExcludedColumnNames());
         var selection = CardSelector.SelectAll(cards, workflowConfig, executorResolver.AvailableProviders);
 
         foreach (var skipped in selection.SkippedDueToProviders)

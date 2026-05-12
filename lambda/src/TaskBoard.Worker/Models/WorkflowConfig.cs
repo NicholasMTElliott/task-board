@@ -176,6 +176,26 @@ public sealed record WorkflowConfig(
             .ToList();
 
     /// <summary>
+    /// Returns terminal columns that cannot contain runnable cards.
+    /// Polling uses this to reduce board query volume without hiding shared-column
+    /// runnable states such as "Done + needs-user-summary".
+    /// </summary>
+    public IReadOnlyList<string> GetPollingExcludedColumnNames()
+    {
+        var runnableColumns = States
+            .Where(kvp => kvp.Value.GateType is GateTypes.AgentRun or GateTypes.SystemMerge or GateTypes.ChildrenComplete)
+            .Select(kvp => GetEffectiveColumn(kvp.Key))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return States
+            .Where(kvp => string.Equals(kvp.Value.GateType, GateTypes.Terminal, StringComparison.OrdinalIgnoreCase))
+            .Select(kvp => GetEffectiveColumn(kvp.Key))
+            .Where(column => !runnableColumns.Contains(column))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>
     /// Resolves the workflow state for a card by matching the card's column ID against
     /// state effective columns and evaluating state filters.
     ///

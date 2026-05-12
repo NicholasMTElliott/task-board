@@ -32,7 +32,7 @@ public sealed class MergeRunner(
         logger.LogInformation("Starting merge run {RunId} for card {CardId}", runId, cardId);
 
         // 1. Fetch card and validate state
-        var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalColumnNames());
+        var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetPollingExcludedColumnNames());
         var card = cards.FirstOrDefault(c => c.Id == cardId);
         if (card is null)
         {

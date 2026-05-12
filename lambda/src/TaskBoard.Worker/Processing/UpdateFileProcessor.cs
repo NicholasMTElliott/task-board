@@ -366,7 +366,7 @@ public sealed class UpdateFileProcessor(
                 {
                     foreach (var field in generationConfig.CopyFields)
                     {
-                        if (parentCard.Metadata.TryGetValue(field, out var value) && !string.IsNullOrEmpty(value))
+                        if (TryGetMetadataValue(parentCard.Metadata, field, out var value) && !string.IsNullOrEmpty(value))
                         {
                             fieldValues ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                             fieldValues[field] = value;
@@ -720,7 +720,7 @@ public sealed class UpdateFileProcessor(
 
         if (!string.IsNullOrWhiteSpace(workflowConfig.CardTypeField)
             && parentCard.Metadata is not null
-            && parentCard.Metadata.TryGetValue(workflowConfig.CardTypeField!, out var fieldValue)
+            && TryGetMetadataValue(parentCard.Metadata, workflowConfig.CardTypeField!, out var fieldValue)
             && !string.IsNullOrWhiteSpace(fieldValue))
         {
             foreach (var (typeName, typeDef) in workflowConfig.CardTypes)
@@ -766,6 +766,24 @@ public sealed class UpdateFileProcessor(
             "which does not allow child type '{TargetType}'. AllowedChildren: [{Allowed}]",
             parentCardId, parentTypeKey, targetType,
             string.Join(", ", parentTypeDef.AllowedChildren));
+        return false;
+    }
+
+    private static bool TryGetMetadataValue(
+        IReadOnlyDictionary<string, string> metadata,
+        string fieldName,
+        out string value)
+    {
+        foreach (var (key, candidate) in metadata)
+        {
+            if (string.Equals(key, fieldName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = candidate;
+                return true;
+            }
+        }
+
+        value = "";
         return false;
     }
 

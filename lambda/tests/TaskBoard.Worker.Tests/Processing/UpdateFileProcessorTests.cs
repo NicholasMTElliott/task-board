@@ -1104,6 +1104,33 @@ public class UpdateFileProcessorTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessUpdatesAsync_CopyFields_MatchesParentMetadataCaseInsensitively()
+    {
+        var updatesDir = CreateUpdatesDir();
+        await File.WriteAllTextAsync(
+            Path.Combine(updatesDir, "new-copy-task.md"),
+            "---\ntitle: Copy Task\n---\n\nBody.");
+
+        _boardClient.GetCardAsync("20", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BoardCard("20", "Parent Story", "", "Backlog",
+                Metadata: new Dictionary<string, string> { ["priority"] = "Critical" },
+                Labels: ["type:story"])));
+
+        var genConfig = new GenerationConfig("task", "Backlog", true,
+            CopyFields: ["Priority"]);
+
+        await _processor.ProcessUpdatesAsync(
+            _tempDir, "20", "generate_tasks", [], CancellationToken.None, genConfig);
+
+        await _boardClient.Received(1).CreateCardAsync(
+            Arg.Is<CreateCardRequest>(r =>
+                r.FieldValues != null
+                && r.FieldValues.ContainsKey("Priority")
+                && r.FieldValues["Priority"] == "Critical"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task ProcessUpdatesAsync_CopyFields_ParentMissingField_SkipsField()
     {
         var updatesDir = CreateUpdatesDir();

@@ -186,6 +186,43 @@ public class WorkflowStateResolutionTests
         Assert.Contains("Done", names);
     }
 
+    [Fact]
+    public void GetPollingExcludedColumnNames_ExcludesTerminalOnlyColumns()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["ready"] = MakeState("Ready", "agent_run", column: "Ready"),
+                ["done"] = MakeState("Done", "terminal", column: "Done"),
+            },
+            Roles: new Dictionary<string, WorkflowRole>());
+
+        var names = config.GetPollingExcludedColumnNames();
+
+        Assert.Single(names);
+        Assert.Contains("Done", names);
+    }
+
+    [Fact]
+    public void GetPollingExcludedColumnNames_DoesNotExcludeTerminalColumnSharedWithRunnableState()
+    {
+        var config = new WorkflowConfig(
+            States: new Dictionary<string, WorkflowState>
+            {
+                ["final_user_summary"] = MakeState("Final User Summary", "agent_run",
+                    [new CardFilter(FilterTypes.Label, FilterOperators.Exists, "needs-user-summary")],
+                    column: "Done"),
+                ["done"] = MakeState("Done", "terminal",
+                    [new CardFilter(FilterTypes.Label, FilterOperators.NotExists, "needs-user-summary")],
+                    column: "Done"),
+            },
+            Roles: new Dictionary<string, WorkflowRole>());
+
+        var names = config.GetPollingExcludedColumnNames();
+
+        Assert.Empty(names);
+    }
+
     // ── ResolveState tests ────────────────────────────────────────────────
 
     [Fact]

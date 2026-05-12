@@ -50,7 +50,7 @@ public sealed class PollingRunner(
             totalCycles++;
             try
             {
-                var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetTerminalColumnNames());
+                var cards = await boardClient.GetBoardCardsAsync(boardId, cancellationToken, workflowConfig.GetPollingExcludedColumnNames());
                 var selectionResult = CardSelector.SelectAll(cards, workflowConfig, executorResolver.AvailableProviders);
 
                 foreach (var skipped in selectionResult.SkippedDueToProviders)
