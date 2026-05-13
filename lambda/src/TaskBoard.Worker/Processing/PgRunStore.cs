@@ -598,4 +598,30 @@ public sealed class PgRunStore(
         cmd.Parameters.AddWithValue(sha);
         await cmd.ExecuteNonQueryAsync(ct);
     }
+
+    public async Task UpdateStateEntryShaForCardStateAsync(
+        string cardId, string stateName, string sha, CancellationToken ct)
+    {
+        // Approach D: a mainline merge advanced the gate-check diff base
+        // (= the merge-base between the card branch and mainline). Broadcast
+        // the new SHA to every run row for this (tenant, card, state) so the
+        // "earliest" lookup that later re-runs use tracks the current
+        // merge-base, not the stale pre-merge SHA the first run captured.
+        // Unconditional overwrite (unlike SetStateEntryShaAsync): the merged
+        // mainline SHA strictly supersedes any earlier value.
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE agent_run
+            SET state_entry_canonical_sha = $4
+            WHERE tenant_id = $1
+              AND card_id = $2
+              AND state_name = $3
+            """;
+        cmd.Parameters.AddWithValue(tenant.Value);
+        cmd.Parameters.AddWithValue(cardId);
+        cmd.Parameters.AddWithValue(stateName);
+        cmd.Parameters.AddWithValue(sha);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
 }

@@ -462,6 +462,66 @@ public class GitWorkspaceManagerTests : IDisposable
         Assert.Contains("line two", stdout);
     }
 
+    // ── Merge step tests (Approach D: gate diff base advances on merge) ──
+
+    [Fact]
+    public async Task MergeMainBranchAsync_BranchBehindMainline_ReportsMergedMainSha()
+    {
+        // origin (bare) ← _tempDir publishes the default branch
+        var originDir = Path.Combine(_worktreeBase, "origin-behind.git");
+        Directory.CreateDirectory(originDir);
+        RunGitSync(originDir, "init", "--bare");
+        RunGitSync(_tempDir, "remote", "add", "origin", originDir);
+        RunGitSync(_tempDir, "push", "origin", _defaultBranch);
+
+        // Card branch off the current default-branch tip, with its own commit
+        RunGitSync(_tempDir, "checkout", "-b", "aiboard/card");
+        await File.WriteAllTextAsync(Path.Combine(_tempDir, "card-work.txt"), "card change\n");
+        RunGitSync(_tempDir, "add", ".");
+        RunGitSync(_tempDir, "commit", "-m", "card work");
+
+        // Mainline moves forward; the card branch fetches the new tip
+        RunGitSync(_tempDir, "checkout", _defaultBranch);
+        await File.WriteAllTextAsync(Path.Combine(_tempDir, "mainline-change.txt"), "mainline change\n");
+        RunGitSync(_tempDir, "add", ".");
+        RunGitSync(_tempDir, "commit", "-m", "mainline work");
+        RunGitSync(_tempDir, "push", "origin", _defaultBranch);
+        var mainlineSha = RunGitSyncWithOutput(_tempDir, "rev-parse", $"origin/{_defaultBranch}");
+        RunGitSync(_tempDir, "checkout", "aiboard/card");
+        RunGitSync(_tempDir, "fetch", "origin");
+
+        var result = await _manager.MergeMainBranchAsync(_tempDir, _defaultBranch, CancellationToken.None);
+
+        Assert.NotEqual(MergeMainStatus.UpToDate, result.Status);
+        // The merged mainline SHA is the new merge-base — and therefore the
+        // gate-check diff base under Approach D.
+        Assert.Equal(mainlineSha, result.MergedMainSha);
+
+        // Leave the temp repo clean for Dispose (the merge is --no-commit).
+        try { RunGitSync(_tempDir, "merge", "--abort"); } catch { /* nothing to abort */ }
+    }
+
+    [Fact]
+    public async Task MergeMainBranchAsync_BranchUpToDate_StillReportsMergedMainSha()
+    {
+        var originDir = Path.Combine(_worktreeBase, "origin-uptodate.git");
+        Directory.CreateDirectory(originDir);
+        RunGitSync(originDir, "init", "--bare");
+        RunGitSync(_tempDir, "remote", "add", "origin", originDir);
+        RunGitSync(_tempDir, "push", "origin", _defaultBranch);
+
+        RunGitSync(_tempDir, "checkout", "-b", "aiboard/uptodate");
+        RunGitSync(_tempDir, "fetch", "origin");
+        var mainlineSha = RunGitSyncWithOutput(_tempDir, "rev-parse", $"origin/{_defaultBranch}");
+
+        var result = await _manager.MergeMainBranchAsync(_tempDir, _defaultBranch, CancellationToken.None);
+
+        Assert.Equal(MergeMainStatus.UpToDate, result.Status);
+        // Even with nothing to merge, origin/{default} IS the merge-base, so a
+        // re-run can advance a stale gate diff base to it.
+        Assert.Equal(mainlineSha, result.MergedMainSha);
+    }
+
     // ── Test infrastructure ───────────────────────────────────────────
 
     private static void InitGitRepo(string path)

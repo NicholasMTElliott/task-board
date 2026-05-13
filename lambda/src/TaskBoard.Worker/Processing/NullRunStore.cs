@@ -69,4 +69,8 @@ public sealed class NullRunStore : IRunStore
 
     public Task SetStateEntryShaAsync(string runId, string sha, CancellationToken ct)
         => Task.CompletedTask;
+
+    public Task UpdateStateEntryShaForCardStateAsync(
+        string cardId, string stateName, string sha, CancellationToken ct)
+        => Task.CompletedTask;
 }

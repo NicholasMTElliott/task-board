@@ -419,5 +419,6 @@ public class RerunCacheGateTests
         public Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct) => Task.FromResult(0);
         public Task<string?> GetEarliestStateEntryShaAsync(string cardId, string stateName, CancellationToken ct) => Task.FromResult<string?>(null);
         public Task SetStateEntryShaAsync(string runId, string sha, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateStateEntryShaForCardStateAsync(string cardId, string stateName, string sha, CancellationToken ct) => Task.CompletedTask;
     }
 }
