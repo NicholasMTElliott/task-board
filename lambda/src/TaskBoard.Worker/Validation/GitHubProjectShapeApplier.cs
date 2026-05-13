@@ -180,6 +180,7 @@ public sealed class GitHubProjectShapeApplier : IBoardShapeApplier
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        TaskBoard.Worker.Clients.ProcessRunner.ConfigureUtf8Io(psi);
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         using var proc = new Process { StartInfo = psi };

@@ -103,6 +103,7 @@ public sealed class GitHubProjectShapeProbe(
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        ProcessRunner.ConfigureUtf8Io(psi);
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         logger.LogDebug("Running: gh {Args}", string.Join(" ", args));

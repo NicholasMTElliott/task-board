@@ -66,7 +66,8 @@ Example (in `appsettings.user.json`):
       "NetworkMode": "host",
       "MountHostDockerSocket": false,
       "TimeoutSeconds": 900,
-      "MaxBudgetUsd": 10.00
+      "MaxBudgetUsd": 10.00,
+      "PerformanceVolumes": []
     }
   }
 }
@@ -90,6 +91,16 @@ Example (in `appsettings.user.json`):
 | `TimeoutSeconds` | `900` | Kill container after N seconds |
 | `MaxBudgetUsd` | `10.00` | Per-invocation Claude CLI budget |
 | `AdditionalMounts` | `{}` | Extra `-v host:container[:ro]` mounts |
+| `PerformanceVolumes` | `[]` | Workspace-relative dependency/cache directories to shadow with Docker named volumes. Use for reproducible hot paths such as `node_modules`, `.pnpm-store`, `.gradle`, `target`, or `.godot/imported`. Do not use for source or generated artifacts that must be committed. |
+| `PerformanceVolumeOwner` | `agent:agent` | Owner applied the first time a performance volume is initialized. Set to the image's non-root user/group, or empty to skip ownership initialization. |
+
+Performance volumes are opt-in. Each configured path becomes a named Docker volume mounted at `/workspace/{path}` after the worktree bind mount, so it shadows the slower host-backed path. Volume names are deterministic per worktree and path; repeated Design/Implementation/Review/Test passes on the same worktree reuse the warm cache, while different worktrees get distinct volumes. The worker creates each volume with label `aiboard-perf=1` before launching the agent.
+
+Example for Node/Vitest projects on Docker Desktop Windows:
+
+```json
+"PerformanceVolumes": ["node_modules", ".pnpm-store"]
+```
 
 `MountHostDockerSocket` only provides daemon access. The sandbox image still needs Docker client tooling installed. For project-specific needs, add Docker CLI / Compose in a project overlay image, then enable the socket mount in that project's `.aiboard/appsettings.json`.
 

@@ -52,6 +52,20 @@ public class DockerClaudeQwenAgentExecutorDiagnosticsTests
             SystemPromptFilePath: promptFile,
             Model: model ?? "qwen3.6-35b-a3b");
 
+    private static DockerMountContext MountContext(string worktreePath = "/tmp/workspace") =>
+        new(
+            [
+                new DockerMount
+                {
+                    HostPath = worktreePath,
+                    ContainerPath = DockerMountBuilderBase.WorkspaceMountPoint,
+                    ReadOnly = false,
+                },
+            ],
+            new Dictionary<string, string>(),
+            [(worktreePath, DockerMountBuilderBase.WorkspaceMountPoint)],
+            []);
+
     /// <summary>
     /// Stream-json result envelope with a structured_output block — the same
     /// shape the real Claude CLI emits, so the parser path is unchanged
@@ -79,6 +93,39 @@ public class DockerClaudeQwenAgentExecutorDiagnosticsTests
 
         Assert.Contains("/var/run/docker.sock:/var/run/docker.sock", args);
         Assert.DoesNotContain("/var/run/docker.sock:/var/run/docker.sock:ro", args);
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_PerformanceVolumes_ShadowWorkspaceMount()
+    {
+        const string worktree = "/tmp/aiboard/worktrees/53";
+        var executor = CreateExecutor(
+            (_, _, _, _, _, _, _, _, _) => Task.FromResult((0, "", "")),
+            new DockerClaudeQwenAgentOptions
+            {
+                ImageName = "aiboard-cq-test:latest",
+                PerformanceVolumes = ["node_modules", ".pnpm-store"],
+            });
+
+        var args = executor.BuildDockerArgumentList(
+            containerName: "test-container",
+            hostPromptDir: "",
+            claudeArgs: ["--print"],
+            mountContext: MountContext(worktree));
+
+        var volumeSpecs = args
+            .Select((arg, idx) => (arg, idx))
+            .Where(x => x.arg == "-v")
+            .Select(x => args[x.idx + 1])
+            .ToArray();
+        var workspaceIdx = Array.IndexOf(volumeSpecs, $"{worktree}:{DockerMountBuilderBase.WorkspaceMountPoint}");
+        var nodeVolume = $"{DockerMountBuilderBase.PerformanceVolumeName(worktree, "node_modules")}:/workspace/node_modules";
+        var storeVolume = $"{DockerMountBuilderBase.PerformanceVolumeName(worktree, ".pnpm-store")}:/workspace/.pnpm-store";
+
+        Assert.Contains(nodeVolume, volumeSpecs);
+        Assert.Contains(storeVolume, volumeSpecs);
+        Assert.True(Array.IndexOf(volumeSpecs, nodeVolume) > workspaceIdx);
+        Assert.True(Array.IndexOf(volumeSpecs, storeVolume) > workspaceIdx);
     }
 
     [Fact]

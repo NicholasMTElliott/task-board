@@ -16,7 +16,8 @@ public class DockerClaudeAgentExecutorTests
         string? cpuLimit = null,
         string containerUser = "",
         List<string>? groupAdd = null,
-        bool mountHostDockerSocket = false)
+        bool mountHostDockerSocket = false,
+        List<string>? performanceVolumes = null)
     {
         var opts = Options.Create(new DockerClaudeAgentOptions
         {
@@ -31,6 +32,7 @@ public class DockerClaudeAgentExecutorTests
             ContainerUser = containerUser,
             GroupAdd = groupAdd ?? [],
             MountHostDockerSocket = mountHostDockerSocket,
+            PerformanceVolumes = performanceVolumes ?? [],
         });
         return new DockerClaudeAgentExecutor(opts, TaskBoard.Worker.Tests.Helpers.TestTenant.Instance,
             NullLogger<DockerClaudeAgentExecutor>.Instance);
@@ -50,6 +52,20 @@ public class DockerClaudeAgentExecutorTests
             Model: model,
             ProviderParams: providerParams);
     }
+
+    private static DockerMountContext MountContext(string worktreePath = "/tmp/workspace") =>
+        new(
+            [
+                new DockerMount
+                {
+                    HostPath = worktreePath,
+                    ContainerPath = DockerMountBuilderBase.WorkspaceMountPoint,
+                    ReadOnly = false,
+                },
+            ],
+            new Dictionary<string, string>(),
+            [(worktreePath, DockerMountBuilderBase.WorkspaceMountPoint)],
+            []);
 
     // ── BuildClaudeArgumentList ──────────────────────────────────────────────
 
@@ -291,6 +307,39 @@ public class DockerClaudeAgentExecutorTests
         var vIdx = Array.IndexOf(dockerArgs, "-v");
         Assert.True(vIdx >= 0, "Expected -v flag");
         Assert.Equal("/host/creds:/run/creds:ro", dockerArgs[vIdx + 1]);
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_PerformanceVolumesEmpty_NoExtraWorkspaceVolume()
+    {
+        var executor = CreateExecutor();
+        var dockerArgs = executor.BuildDockerArgumentList(
+            "container1", "", ["--print"], MountContext());
+
+        Assert.DoesNotContain(dockerArgs, a => a.Contains("aiboard-perf-"));
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_PerformanceVolumes_ShadowWorkspaceMount()
+    {
+        const string worktree = "/tmp/aiboard/worktrees/50";
+        var executor = CreateExecutor(performanceVolumes: ["node_modules", ".pnpm-store"]);
+        var dockerArgs = executor.BuildDockerArgumentList(
+            "container1", "", ["--print"], MountContext(worktree));
+
+        var volumeSpecs = dockerArgs
+            .Select((arg, idx) => (arg, idx))
+            .Where(x => x.arg == "-v")
+            .Select(x => dockerArgs[x.idx + 1])
+            .ToArray();
+        var workspaceIdx = Array.IndexOf(volumeSpecs, $"{worktree}:{DockerMountBuilderBase.WorkspaceMountPoint}");
+        var nodeVolume = $"{DockerMountBuilderBase.PerformanceVolumeName(worktree, "node_modules")}:/workspace/node_modules";
+        var storeVolume = $"{DockerMountBuilderBase.PerformanceVolumeName(worktree, ".pnpm-store")}:/workspace/.pnpm-store";
+
+        Assert.Contains(nodeVolume, volumeSpecs);
+        Assert.Contains(storeVolume, volumeSpecs);
+        Assert.True(Array.IndexOf(volumeSpecs, nodeVolume) > workspaceIdx);
+        Assert.True(Array.IndexOf(volumeSpecs, storeVolume) > workspaceIdx);
     }
 
     [Fact]

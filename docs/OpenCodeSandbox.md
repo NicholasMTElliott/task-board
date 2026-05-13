@@ -82,7 +82,8 @@ Having the executor registered is not the same as using it — nothing routes to
       "AuthToken": "local",
       "ModelName": "qwen3.6-35b-a3b",
       "TimeoutSeconds": 600,
-      "MaxRetriesOnMalformedOutput": 2
+      "MaxRetriesOnMalformedOutput": 2,
+      "PerformanceVolumes": []
     }
   }
 }
@@ -105,6 +106,10 @@ Having the executor registered is not the same as using it — nothing routes to
 | `StructurerTimeoutSeconds` | `180` | Hard wall-clock cap for the structurer subprocess. Tight by design: extraction over a few-KB narrative should take seconds on a warm llama-server. |
 | `ContainerNamePrefix` | `aiboard-oc` | Prefix for generated container names (shape: `aiboard-oc-{tenantHash}-{cardId}-{rand}`). Keep the `aiboard-` prefix so orphaned-container detection still matches. |
 | `RateLimitPatterns` | `[]` | Additional stderr substrings that should be treated as rate-limit signals, merged with the built-in Anthropic patterns. |
+| `PerformanceVolumes` | `[]` | Workspace-relative dependency/cache directories to shadow with Docker named volumes. Use only for reproducible folders such as `node_modules`, `.pnpm-store`, `.gradle`, `target`, or `.godot/imported`. |
+| `PerformanceVolumeOwner` | `agent:agent` | Owner applied the first time a performance volume is initialized. Empty skips ownership initialization. |
+
+Performance volumes are opt-in and deterministic per worktree/path. They are intended for slow host-backed dependency trees on Docker Desktop Windows; source files and generated artifacts that must be committed should stay on the normal worktree bind mount.
 
 ### How the dual-model setup works
 

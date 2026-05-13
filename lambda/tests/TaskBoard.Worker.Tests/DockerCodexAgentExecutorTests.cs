@@ -17,7 +17,8 @@ public class DockerCodexAgentExecutorTests
         string? cpuLimit = null,
         string containerUser = "",
         List<string>? groupAdd = null,
-        bool mountHostDockerSocket = false)
+        bool mountHostDockerSocket = false,
+        List<string>? performanceVolumes = null)
     {
         var opts = Options.Create(new DockerCodexAgentOptions
         {
@@ -33,6 +34,7 @@ public class DockerCodexAgentExecutorTests
             ContainerUser = containerUser,
             GroupAdd = groupAdd ?? [],
             MountHostDockerSocket = mountHostDockerSocket,
+            PerformanceVolumes = performanceVolumes ?? [],
         });
         return new DockerCodexAgentExecutor(
             opts,
@@ -53,6 +55,20 @@ public class DockerCodexAgentExecutorTests
             Model: model,
             ProviderParams: providerParams);
     }
+
+    private static DockerMountContext MountContext(string worktreePath = "/tmp/workspace") =>
+        new(
+            [
+                new DockerMount
+                {
+                    HostPath = worktreePath,
+                    ContainerPath = DockerMountBuilderBase.WorkspaceMountPoint,
+                    ReadOnly = false,
+                },
+            ],
+            new Dictionary<string, string>(),
+            [(worktreePath, DockerMountBuilderBase.WorkspaceMountPoint)],
+            []);
 
     // ── BuildCodexArgumentList ───────────────────────────────────────────────
 
@@ -265,6 +281,29 @@ public class DockerCodexAgentExecutorTests
             "n", "/tmp/host-schema.json", "/tmp/codex-schema.json", ["exec"]);
 
         Assert.Contains(args, a => a == "/var/cache/aiboard:/cache");
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_PerformanceVolumes_ShadowWorkspaceMount()
+    {
+        const string worktree = "/tmp/aiboard/worktrees/52";
+        var executor = CreateExecutor(performanceVolumes: ["node_modules", ".pnpm-store"]);
+        var args = executor.BuildDockerArgumentList(
+            "n", "/tmp/host-schema.json", "/tmp/codex-schema.json", ["exec"], MountContext(worktree));
+
+        var volumeSpecs = args
+            .Select((arg, idx) => (arg, idx))
+            .Where(x => x.arg == "-v")
+            .Select(x => args[x.idx + 1])
+            .ToArray();
+        var workspaceIdx = Array.IndexOf(volumeSpecs, $"{worktree}:{DockerMountBuilderBase.WorkspaceMountPoint}");
+        var nodeVolume = $"{DockerMountBuilderBase.PerformanceVolumeName(worktree, "node_modules")}:/workspace/node_modules";
+        var storeVolume = $"{DockerMountBuilderBase.PerformanceVolumeName(worktree, ".pnpm-store")}:/workspace/.pnpm-store";
+
+        Assert.Contains(nodeVolume, volumeSpecs);
+        Assert.Contains(storeVolume, volumeSpecs);
+        Assert.True(Array.IndexOf(volumeSpecs, nodeVolume) > workspaceIdx);
+        Assert.True(Array.IndexOf(volumeSpecs, storeVolume) > workspaceIdx);
     }
 
     [Fact]

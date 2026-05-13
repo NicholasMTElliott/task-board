@@ -321,6 +321,33 @@ public class StartupConfigValidatorTests
         Assert.DoesNotContain(findings, f => f.Key == key);
     }
 
+    // ── Error 12: Docker PerformanceVolumes paths are workspace-local ───────
+
+    [Theory]
+    [InlineData("DockerAgents:Claude:PerformanceVolumes:0", "../node_modules")]
+    [InlineData("DockerAgents:Codex:PerformanceVolumes:0", "/absolute")]
+    [InlineData("DockerAgents:OpenCode:PerformanceVolumes:0", ".git")]
+    [InlineData("DockerAgents:ClaudeQwen:PerformanceVolumes:0", "C:/cache")]
+    public void DockerPerformanceVolumesUnsafePath_ProducesError(string key, string value)
+    {
+        var findings = StartupConfigValidator.Validate(Build((key, value)));
+
+        var error = Assert.Single(findings, f =>
+            f.Severity == StartupConfigValidator.Severity.Error
+            && f.Key == key);
+        Assert.Contains("Invalid Docker performance volume path", error.Message);
+    }
+
+    [Fact]
+    public void DockerPerformanceVolumesSafePaths_NoFinding()
+    {
+        var findings = StartupConfigValidator.Validate(Build(
+            ("DockerAgents:Claude:PerformanceVolumes:0", "node_modules"),
+            ("DockerAgents:Claude:PerformanceVolumes:1", ".pnpm-store")));
+
+        Assert.DoesNotContain(findings, f => f.Key.StartsWith("DockerAgents:Claude:PerformanceVolumes"));
+    }
+
     // ── Cross-cutting: KvA exact reproduction ────────────────────────────────
 
     [Fact]

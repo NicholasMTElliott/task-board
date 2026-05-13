@@ -322,6 +322,16 @@ Build args: `-BaseImage`, `-AgentUid`, `-AgentGid`, `-ClaudeCliVersion`, `-Tag`,
 
 To enable the sandbox at runtime, set `AGENT_EXECUTOR=docker-claude-cli`. It is off by default.
 
+For dependency-heavy projects on Docker Desktop Windows, opt into Docker named-volume overlays for hot cache directories so test runners do not traverse thousands of small files through the host bind mount:
+
+```json
+"DockerAgents": {
+  "Claude": { "PerformanceVolumes": ["node_modules", ".pnpm-store"] }
+}
+```
+
+`PerformanceVolumes` is available on all Docker agents. Use it only for reproducible dependency/cache paths, not source or commit-required build outputs.
+
 ### Build the Codex sandbox image (recommended, for sandboxed Codex)
 
 A separate sandbox wraps the OpenAI Codex CLI for sandboxed use against a real codebase. Filesystem isolation is provided by Docker, so the agent runs with `--yolo` by default — fast, autonomous, and contained. See [docs/CodexSandbox.md](docs/CodexSandbox.md) for the full setup.

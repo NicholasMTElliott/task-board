@@ -181,7 +181,7 @@ public sealed class GitHubProjectsClient(
         var tempFile = Path.GetTempFileName();
         try
         {
-            await File.WriteAllTextAsync(tempFile, body, cancellationToken);
+            await File.WriteAllTextAsync(tempFile, body, ProcessRunner.Utf8NoBom, cancellationToken);
             await RunGhAsync(
                 ["issue", "edit", cardId, "--repo", _options.Repo, "--body-file", tempFile],
                 cancellationToken);
@@ -269,12 +269,20 @@ public sealed class GitHubProjectsClient(
                 // Use the REST API to edit the comment
                 var editEndpoint = $"repos/{_options.Repo}/issues/comments/{commentId}";
                 var bodyJson = JsonSerializer.Serialize(new { body = markedBody });
-                await RunGhAsync(
-                    ["api", editEndpoint, "--method", "PATCH", "--input", "-"],
-                    cancellationToken,
-                    stdinData: bodyJson);
-                logger.LogInformation("Updated agent comment {CommentId} on issue {IssueNumber}", commentId, cardId);
-                return;
+                var tempJson = Path.GetTempFileName();
+                try
+                {
+                    await File.WriteAllTextAsync(tempJson, bodyJson, ProcessRunner.Utf8NoBom, cancellationToken);
+                    await RunGhAsync(
+                        ["api", editEndpoint, "--method", "PATCH", "--input", tempJson],
+                        cancellationToken);
+                    logger.LogInformation("Updated agent comment {CommentId} on issue {IssueNumber}", commentId, cardId);
+                    return;
+                }
+                finally
+                {
+                    File.Delete(tempJson);
+                }
             }
         }
 
@@ -282,7 +290,7 @@ public sealed class GitHubProjectsClient(
         var tempFile = Path.GetTempFileName();
         try
         {
-            await File.WriteAllTextAsync(tempFile, markedBody, cancellationToken);
+            await File.WriteAllTextAsync(tempFile, markedBody, ProcessRunner.Utf8NoBom, cancellationToken);
             await RunGhAsync(
                 ["issue", "comment", cardId, "--repo", _options.Repo, "--body-file", tempFile],
                 cancellationToken);
@@ -301,7 +309,7 @@ public sealed class GitHubProjectsClient(
         var tempFile = Path.GetTempFileName();
         try
         {
-            await File.WriteAllTextAsync(tempFile, commentBody, cancellationToken);
+            await File.WriteAllTextAsync(tempFile, commentBody, ProcessRunner.Utf8NoBom, cancellationToken);
             await RunGhAsync(
                 ["issue", "comment", cardId, "--repo", _options.Repo, "--body-file", tempFile],
                 cancellationToken);
@@ -855,7 +863,7 @@ public sealed class GitHubProjectsClient(
         string issueNumber;
         try
         {
-            await File.WriteAllTextAsync(tmpFile, request.Body, ct);
+            await File.WriteAllTextAsync(tmpFile, request.Body, ProcessRunner.Utf8NoBom, ct);
             var result = await RunGhAsync(
                 ["issue", "create", "--repo", _options.Repo,
                  "--title", request.Title, "--body-file", tmpFile],
@@ -1006,7 +1014,7 @@ public sealed class GitHubProjectsClient(
         var tmpFile = Path.GetTempFileName();
         try
         {
-            await File.WriteAllTextAsync(tmpFile, newBody, ct);
+            await File.WriteAllTextAsync(tmpFile, newBody, ProcessRunner.Utf8NoBom, ct);
             await RunGhAsync(
                 ["issue", "edit", parentCardId, "--repo", _options.Repo, "--body-file", tmpFile], ct);
             logger.LogInformation("Linked #{ChildCardId} to parent #{ParentCardId}", childCardId, parentCardId);
@@ -1047,11 +1055,11 @@ public sealed class GitHubProjectsClient(
     }
 
     private async Task<string> RunGhAsync(
-        string[] args, CancellationToken cancellationToken, string? stdinData = null)
+        string[] args, CancellationToken cancellationToken)
     {
         var opName = $"gh {string.Join(" ", args.Take(3))}";
         return await RetryHelper.ExecuteWithRetryAsync(
-            () => RunGhCoreAsync(args, stdinData, cancellationToken),
+            () => RunGhCoreAsync(args, cancellationToken),
             IsTransientGhError,
             maxRetries: 2,
             logger,
@@ -1060,17 +1068,17 @@ public sealed class GitHubProjectsClient(
     }
 
     private async Task<string> RunGhCoreAsync(
-        string[] args, string? stdinData, CancellationToken cancellationToken)
+        string[] args, CancellationToken cancellationToken)
     {
         var psi = new ProcessStartInfo
         {
             FileName = "gh",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            RedirectStandardInput = stdinData is not null,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        ProcessRunner.ConfigureUtf8Io(psi);
 
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
@@ -1079,12 +1087,6 @@ public sealed class GitHubProjectsClient(
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start gh process");
-
-        if (stdinData is not null)
-        {
-            await process.StandardInput.WriteAsync(stdinData);
-            process.StandardInput.Close();
-        }
 
         var stdout = await process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderr = await process.StandardError.ReadToEndAsync(cancellationToken);

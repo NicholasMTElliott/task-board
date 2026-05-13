@@ -21,6 +21,55 @@ public class ProcessRunnerInactivityTests
     private const int SilentSleepSeconds = 6;
 
     [Fact]
+    public async Task RunProcessAsync_StdinUsesUtf8Bytes()
+    {
+        if (!OperatingSystem.IsWindows()) return; // see remarks
+
+        const string payload = "arrows → dash — check ✓ han 你好";
+
+        var (exitCode, stdout, stderr) = await ProcessRunner.RunProcessAsync(
+            "powershell.exe",
+            [
+                "-NoProfile",
+                "-Command",
+                "$ms=New-Object System.IO.MemoryStream; " +
+                "[Console]::OpenStandardInput().CopyTo($ms); " +
+                "[Console]::Out.Write([Convert]::ToBase64String($ms.ToArray()))"
+            ],
+            Directory.GetCurrentDirectory(),
+            timeoutSeconds: 10,
+            CancellationToken.None,
+            stdinData: payload);
+
+        Assert.Equal(0, exitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+        Assert.Equal(
+            Convert.ToBase64String(ProcessRunner.Utf8NoBom.GetBytes(payload)),
+            stdout.Trim());
+    }
+
+    [Fact]
+    public async Task RunProcessAsync_SetsUtf8EnvironmentForChild()
+    {
+        if (!OperatingSystem.IsWindows()) return; // see remarks
+
+        var (exitCode, stdout, stderr) = await ProcessRunner.RunProcessAsync(
+            "powershell.exe",
+            [
+                "-NoProfile",
+                "-Command",
+                "[Console]::Out.Write($env:PYTHONIOENCODING + '|' + $env:DOTNET_SYSTEM_CONSOLE_UTF8IO)"
+            ],
+            Directory.GetCurrentDirectory(),
+            timeoutSeconds: 10,
+            CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+        Assert.Equal("utf-8|1", stdout.Trim());
+    }
+
+    [Fact]
     public async Task RunProcessAsync_SilentProcessExceedsInactivityThreshold_ThrowsInactivityTimeoutException()
     {
         if (!OperatingSystem.IsWindows()) return; // see remarks

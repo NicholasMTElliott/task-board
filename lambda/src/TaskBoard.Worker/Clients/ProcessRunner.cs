@@ -9,6 +9,21 @@ namespace TaskBoard.Worker.Clients;
 /// </summary>
 internal static class ProcessRunner
 {
+    internal static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
+
+    internal static void ConfigureUtf8Io(ProcessStartInfo startInfo)
+    {
+        if (startInfo.RedirectStandardInput)
+            startInfo.StandardInputEncoding = Utf8NoBom;
+        if (startInfo.RedirectStandardOutput)
+            startInfo.StandardOutputEncoding = Utf8NoBom;
+        if (startInfo.RedirectStandardError)
+            startInfo.StandardErrorEncoding = Utf8NoBom;
+
+        startInfo.Environment["PYTHONIOENCODING"] = "utf-8";
+        startInfo.Environment["DOTNET_SYSTEM_CONSOLE_UTF8IO"] = "1";
+    }
+
     /// <summary>
     /// Formats an argument list for diagnostic logging, truncating long args and quoting args with spaces.
     /// </summary>
@@ -60,6 +75,7 @@ internal static class ProcessRunner
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        ConfigureUtf8Io(startInfo);
 
         startInfo.FileName = executable;
         foreach (var arg in argumentList)

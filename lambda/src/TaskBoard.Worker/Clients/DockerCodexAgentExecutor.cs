@@ -129,6 +129,12 @@ public sealed class DockerCodexAgentExecutor(
             var dockerArgs = BuildDockerArgumentList(
                 containerName, hostSchemaFile, ContainerSchemaPath, codexArgs, mountContext);
 
+            if (mountContext is not null)
+            {
+                await DockerPerformanceVolumeManager.EnsureAsync(
+                    _options, context.WorkspacePath, _runProcess, logger, cancellationToken);
+            }
+
             logger.LogDebug("Docker command: {Executable} {Args}",
                 DockerExecutable, ProcessRunner.FormatArgsForLogging(dockerArgs));
 
@@ -616,6 +622,12 @@ public sealed class DockerCodexAgentExecutor(
                 var spec = $"{mount.HostPath}:{mount.ContainerPath}";
                 if (mount.ReadOnly) spec += ":ro";
                 args.Add(spec);
+            }
+
+            foreach (var mount in DockerPerformanceVolumeManager.BuildVolumeMounts(_options, mountContext))
+            {
+                args.Add("-v");
+                args.Add($"{mount.HostPath}:{mount.ContainerPath}");
             }
 
             foreach (var (key, value) in mountContext.EnvironmentVariables)

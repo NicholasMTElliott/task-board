@@ -105,6 +105,7 @@ public sealed partial class GitHubCrossReferenceResolver(
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        ProcessRunner.ConfigureUtf8Io(psi);
 
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);

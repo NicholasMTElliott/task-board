@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using TaskBoard.Worker.Clients;
 
 namespace TaskBoard.Worker.Processing;
 
@@ -1287,6 +1288,7 @@ public sealed class GitWorkspaceManager(
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        ProcessRunner.ConfigureUtf8Io(startInfo);
 
         foreach (var arg in args)
             startInfo.ArgumentList.Add(arg);

@@ -204,7 +204,9 @@ Most operators will only edit a small subset of keys. A complete annotated examp
       "PromptMountPoint": "/mnt/aiboard/prompts",
       "CredentialPath": null,                    // auto-detect ~/.claude when null
       "CredentialMountPoint": null,
-      "AdditionalMounts": {}                     // operator-supplied static mounts
+      "AdditionalMounts": {},                    // operator-supplied static mounts
+      "PerformanceVolumes": [],                  // opt-in named-volume overlays for hot dependency/cache dirs
+      "PerformanceVolumeOwner": "agent:agent"    // owner applied on first volume init; empty disables chown
     },
 
     // Required when AgentExecutor=docker-opencode OR a role uses provider=docker-opencode
@@ -223,7 +225,9 @@ Most operators will only edit a small subset of keys. A complete annotated examp
       "StructurerTimeoutSeconds": 180,
       "PromptMountPoint": "/mnt/aiboard/prompts",
       "CliArguments": ["run"],
-      "RateLimitPatterns": []                    // operator-extensible stderr substrings
+      "RateLimitPatterns": [],                   // operator-extensible stderr substrings
+      "PerformanceVolumes": [],
+      "PerformanceVolumeOwner": "agent:agent"
     },
 
     // Required when AgentExecutor=docker-claude-qwen OR a role uses provider=docker-claude-qwen
@@ -238,7 +242,9 @@ Most operators will only edit a small subset of keys. A complete annotated examp
       "MaxBudgetUsd": 50.00,
       "TimeoutSeconds": 600,
       "DisableAttributionHeader": true,          // keeps llama.cpp prefix cache warm
-      "DisableNonessentialTraffic": true         // suppresses telemetry pings to api.anthropic.com
+      "DisableNonessentialTraffic": true,        // suppresses telemetry pings to api.anthropic.com
+      "PerformanceVolumes": [],
+      "PerformanceVolumeOwner": "agent:agent"
     }
   },
 
@@ -266,7 +272,10 @@ Most operators will only edit a small subset of keys. A complete annotated examp
 
 `StartupConfigValidator` flags inconsistencies before the host starts:
 - **Errors (exit)**: unknown `BoardProvider`; `BoardProvider=github` missing any of Owner/Repo/ProjectNumber; `BoardProvider=trello` missing any of ApiKey/ApiToken/BoardId.
+- **Errors (exit)**: unsafe Docker `ContainerUser=root|0`; invalid `DockerAgents:*:PerformanceVolumes` paths (absolute paths, `..`, `.git`, workspace root).
 - **Warnings (continue)**: GitHubProjects populated but provider≠github (and vice versa for Trello); both populated (winner is named); legacy `Docker` section in use (migrate to `DockerAgents:Claude`); unrecognized `AgentExecutor` value.
+
+`DockerAgents:*:PerformanceVolumes` is for hot, reproducible dependency/cache directories that should live on Docker's native Linux volume filesystem instead of the host worktree bind mount. Good examples: `node_modules`, `.pnpm-store`, `.gradle`, `target`, `.godot/imported`. Do not use it for source directories or generated artifacts that must be committed. Each path mounts as `/workspace/{path}` after the workspace bind mount, so it shadows that subdirectory. Volume names are deterministic per worktree/path and labeled `aiboard-perf=1`.
 
 ---
 
@@ -886,6 +895,8 @@ This is the canonical bootstrap flow. Follow it once when wiring AI Board to a n
 - `gh` CLI authenticated with `project` + `repo` scopes (`gh auth login`)
 - `claude` CLI authenticated (only required for `claude-cli` / `docker-claude-cli`)
 - A GitHub Project (v2) attached to the target repo
+
+On Windows, AI Board writes GitHub issue/comment bodies through UTF-8 temp files (`gh --body-file` / `gh api --input <file>`) and configures child process stdio as UTF-8. Do not reintroduce `gh --body ...` or `gh --input -` for user-authored or agent-authored body text; those paths can mojibake non-ASCII characters on legacy console code pages.
 
 ### 11.2 Place the binaries + config
 

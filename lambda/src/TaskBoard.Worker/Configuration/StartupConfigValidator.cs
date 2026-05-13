@@ -161,6 +161,12 @@ public static class StartupConfigValidator
         AddRootContainerUserFindings(findings, config, DockerCodexAgentOptions.SectionName);
         AddRootContainerUserFindings(findings, config, DockerOpenCodeAgentOptions.SectionName);
 
+        // ── Error 12: Docker performance volume paths must be workspace-local ─
+        AddPerformanceVolumeFindings(findings, config, DockerClaudeAgentOptions.SectionName);
+        AddPerformanceVolumeFindings(findings, config, DockerClaudeQwenAgentOptions.SectionName);
+        AddPerformanceVolumeFindings(findings, config, DockerCodexAgentOptions.SectionName);
+        AddPerformanceVolumeFindings(findings, config, DockerOpenCodeAgentOptions.SectionName);
+
         return findings;
     }
 
@@ -215,5 +221,26 @@ public static class StartupConfigValidator
 
         var userPart = value.Split(':', 2)[0].Trim();
         return userPart == "0";
+    }
+
+    private static void AddPerformanceVolumeFindings(
+        List<Finding> findings, IConfiguration config, string sectionName)
+    {
+        var section = config.GetSection($"{sectionName}:PerformanceVolumes");
+        foreach (var child in section.GetChildren())
+        {
+            if (string.IsNullOrWhiteSpace(child.Value))
+                continue;
+
+            try
+            {
+                DockerMountBuilderBase.NormalizePerformanceVolumePath(child.Value);
+            }
+            catch (ArgumentException ex)
+            {
+                findings.Add(new Finding(Severity.Error, child.Path,
+                    $"Invalid Docker performance volume path '{child.Value}'. {ex.Message}"));
+            }
+        }
     }
 }

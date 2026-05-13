@@ -575,13 +575,14 @@ if (boardProvider == "github")
 {
     try
     {
-        using var ghTokenProc = System.Diagnostics.Process.Start(
-            new System.Diagnostics.ProcessStartInfo("gh", "auth token")
-            {
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            });
+        var ghTokenPsi = new System.Diagnostics.ProcessStartInfo("gh", "auth token")
+        {
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        ProcessRunner.ConfigureUtf8Io(ghTokenPsi);
+        using var ghTokenProc = System.Diagnostics.Process.Start(ghTokenPsi);
         if (ghTokenProc is not null)
         {
             ghImageToken = (await ghTokenProc.StandardOutput.ReadToEndAsync()).Trim();

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using TaskBoard.Worker.Clients;
 
 namespace TaskBoard.Worker.Processing;
 
@@ -311,6 +312,7 @@ public sealed class InitRunner
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        ProcessRunner.ConfigureUtf8Io(psi);
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         using var proc = new Process { StartInfo = psi };

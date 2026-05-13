@@ -1,3 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+
 namespace TaskBoard.Worker.Clients;
 
 /// <summary>
@@ -181,6 +185,50 @@ public abstract class DockerMountBuilderBase
     /// </summary>
     internal static string NormalizeHostPath(string hostPath) =>
         hostPath.Replace('\\', '/');
+
+    internal static string PerformanceVolumeName(string worktreePath, string relativePath)
+    {
+        var normalizedRelPath = NormalizePerformanceVolumePath(relativePath);
+        using var sha = SHA256.Create();
+        var canonicalWorktreePath = Path.GetFullPath(worktreePath).ToLowerInvariant();
+        var hash = Convert.ToHexString(sha.ComputeHash(
+                Encoding.UTF8.GetBytes(canonicalWorktreePath)))
+            .Substring(0, 12)
+            .ToLowerInvariant();
+
+        var sanitizedPath = Regex.Replace(
+                normalizedRelPath.ToLowerInvariant(),
+                "[^a-z0-9_.-]+",
+                "-")
+            .Trim('-', '.', '_');
+        if (string.IsNullOrWhiteSpace(sanitizedPath))
+            sanitizedPath = "workspace";
+
+        return $"aiboard-perf-{hash}-{sanitizedPath}";
+    }
+
+    internal static string NormalizePerformanceVolumePath(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            throw new ArgumentException("Performance volume path must not be empty.", nameof(relativePath));
+
+        var normalized = relativePath.Trim().Replace('\\', '/').Trim('/');
+
+        if (string.IsNullOrWhiteSpace(normalized))
+            throw new ArgumentException("Performance volume path must not target the workspace root.", nameof(relativePath));
+
+        if (Path.IsPathRooted(relativePath) || normalized.Contains(':'))
+            throw new ArgumentException($"Performance volume path '{relativePath}' must be relative to the workspace.", nameof(relativePath));
+
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Any(s => s is "." or ".."))
+            throw new ArgumentException($"Performance volume path '{relativePath}' must not contain '.' or '..' segments.", nameof(relativePath));
+
+        if (string.Equals(segments[0], ".git", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Performance volume path must not shadow the workspace .git mount.", nameof(relativePath));
+
+        return string.Join('/', segments);
+    }
 
     protected static async Task<string> WriteTempFileAsync(string content, CancellationToken ct)
     {

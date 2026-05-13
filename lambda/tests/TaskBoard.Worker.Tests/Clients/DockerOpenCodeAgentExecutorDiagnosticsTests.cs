@@ -14,7 +14,8 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
         ProcessRunnerDelegate runner,
         int maxRetries = 0,
         bool enableStructurer = false,
-        string? structurerModelName = null) =>
+        string? structurerModelName = null,
+        List<string>? performanceVolumes = null) =>
         new(
             Options.Create(new DockerOpenCodeAgentOptions
             {
@@ -28,6 +29,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
                 EnableStructurer = enableStructurer,
                 StructurerModelName = structurerModelName ?? "qwen3.6-35b-a3b",
                 StructurerTimeoutSeconds = 5,
+                PerformanceVolumes = performanceVolumes ?? [],
             }),
             Helpers.TestTenant.Instance,
             NullLogger<DockerOpenCodeAgentExecutor>.Instance,
@@ -57,6 +59,20 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
             TaskPrompt: "do the thing",
             SystemPromptFilePath: prompt,
             Model: "qwen3.6-35b-a3b");
+
+    private static DockerMountContext MountContext(string worktreePath = "/tmp/workspace") =>
+        new(
+            [
+                new DockerMount
+                {
+                    HostPath = worktreePath,
+                    ContainerPath = DockerMountBuilderBase.WorkspaceMountPoint,
+                    ReadOnly = false,
+                },
+            ],
+            new Dictionary<string, string>(),
+            [(worktreePath, DockerMountBuilderBase.WorkspaceMountPoint)],
+            []);
 
     // ── Parser strategy 1: fenced JSON ────────────────────────────────────
 
@@ -502,6 +518,35 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
 
         Assert.Contains("aiboard-opencode-sandbox:latest", args);
         Assert.Contains("opencode", args);
+    }
+
+    [Fact]
+    public void BuildDockerArgumentList_PerformanceVolumes_ShadowWorkspaceMount()
+    {
+        const string worktree = "/tmp/aiboard/worktrees/54";
+        var executor = CreateExecutor(
+            (_, _, _, _, _, _, _, _, _) => Task.FromResult((0, "", "")),
+            performanceVolumes: ["node_modules", ".pnpm-store"]);
+
+        var args = executor.BuildDockerArgumentList(
+            containerName: "aiboard-oc-test",
+            hostPromptDir: "",
+            openCodeArgs: new[] { "run" },
+            mountContext: MountContext(worktree));
+
+        var volumeSpecs = args
+            .Select((arg, idx) => (arg, idx))
+            .Where(x => x.arg == "-v")
+            .Select(x => args[x.idx + 1])
+            .ToArray();
+        var workspaceIdx = Array.IndexOf(volumeSpecs, $"{worktree}:{DockerMountBuilderBase.WorkspaceMountPoint}");
+        var nodeVolume = $"{DockerMountBuilderBase.PerformanceVolumeName(worktree, "node_modules")}:/workspace/node_modules";
+        var storeVolume = $"{DockerMountBuilderBase.PerformanceVolumeName(worktree, ".pnpm-store")}:/workspace/.pnpm-store";
+
+        Assert.Contains(nodeVolume, volumeSpecs);
+        Assert.Contains(storeVolume, volumeSpecs);
+        Assert.True(Array.IndexOf(volumeSpecs, nodeVolume) > workspaceIdx);
+        Assert.True(Array.IndexOf(volumeSpecs, storeVolume) > workspaceIdx);
     }
 
     [Fact]

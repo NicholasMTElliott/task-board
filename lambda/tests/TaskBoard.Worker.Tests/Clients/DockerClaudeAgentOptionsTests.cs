@@ -5,8 +5,6 @@ namespace TaskBoard.Worker.Tests.Clients;
 
 public class DockerClaudeAgentOptionsTests
 {
-    // ── Default values ───────────────────────────────────────────────────────
-
     [Fact]
     public void DockerClaudeAgentOptions_Defaults_AreCorrect()
     {
@@ -29,6 +27,8 @@ public class DockerClaudeAgentOptionsTests
         Assert.Equal("/var/run/docker.sock", opts.HostDockerSocketPath);
         Assert.Equal("/var/run/docker.sock", opts.ContainerDockerSocketPath);
         Assert.Empty(opts.AdditionalMounts);
+        Assert.Empty(opts.PerformanceVolumes);
+        Assert.Equal("agent:agent", opts.PerformanceVolumeOwner);
     }
 
     [Fact]
@@ -42,8 +42,6 @@ public class DockerClaudeAgentOptionsTests
     {
         Assert.Equal("Docker", DockerClaudeAgentOptions.LegacySectionName);
     }
-
-    // ── Config binding (new section) ─────────────────────────────────────────
 
     [Fact]
     public void DockerClaudeAgentOptions_BindsAllScalarPropertiesFromConfiguration()
@@ -61,6 +59,7 @@ public class DockerClaudeAgentOptionsTests
             ["DockerAgents:Claude:HostDockerSocketPath"] = "/custom/docker.sock",
             ["DockerAgents:Claude:ContainerDockerSocketPath"] = "/run/docker.sock",
             ["DockerAgents:Claude:CredentialPath"] = "/home/user/.claude",
+            ["DockerAgents:Claude:PerformanceVolumeOwner"] = "1001:1001",
         };
 
         var config = new ConfigurationBuilder()
@@ -80,6 +79,26 @@ public class DockerClaudeAgentOptionsTests
         Assert.Equal("/custom/docker.sock", opts.HostDockerSocketPath);
         Assert.Equal("/run/docker.sock", opts.ContainerDockerSocketPath);
         Assert.Equal("/home/user/.claude", opts.CredentialPath);
+        Assert.Equal("1001:1001", opts.PerformanceVolumeOwner);
+    }
+
+    [Fact]
+    public void DockerClaudeAgentOptions_PerformanceVolumes_BindsListFromConfiguration()
+    {
+        var configValues = new Dictionary<string, string?>
+        {
+            ["DockerAgents:Claude:PerformanceVolumes:0"] = "node_modules",
+            ["DockerAgents:Claude:PerformanceVolumes:1"] = ".pnpm-store",
+        };
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(configValues)
+            .Build();
+
+        var opts = new DockerClaudeAgentOptions();
+        config.GetSection(DockerClaudeAgentOptions.SectionName).Bind(opts);
+
+        Assert.Equal(["node_modules", ".pnpm-store"], opts.PerformanceVolumes);
     }
 
     [Fact]
@@ -152,7 +171,6 @@ public class DockerClaudeAgentOptionsTests
     [Fact]
     public void DockerClaudeAgentOptions_PartialConfig_PreservesDefaults()
     {
-        // Only override NetworkMode; other fields should retain defaults
         var configValues = new Dictionary<string, string?>
         {
             ["DockerAgents:Claude:NetworkMode"] = "none",
@@ -168,8 +186,6 @@ public class DockerClaudeAgentOptionsTests
         Assert.Equal("aiboard-agent-sandbox:latest", opts.ImageName);
         Assert.Equal("none", opts.NetworkMode);
     }
-
-    // ── Legacy section still works ───────────────────────────────────────────
 
     [Fact]
     public void DockerClaudeAgentOptions_LegacyDockerSection_StillBinds()
@@ -194,7 +210,6 @@ public class DockerClaudeAgentOptionsTests
     [Fact]
     public void DockerClaudeAgentOptions_NewSectionOverridesLegacy()
     {
-        // Simulate the Program.cs dual-bind sequence: legacy first, new second.
         var configValues = new Dictionary<string, string?>
         {
             ["Docker:ImageName"] = "legacy-sandbox:1.0",
@@ -210,9 +225,7 @@ public class DockerClaudeAgentOptionsTests
         config.GetSection(DockerClaudeAgentOptions.LegacySectionName).Bind(opts);
         config.GetSection(DockerClaudeAgentOptions.SectionName).Bind(opts);
 
-        // New section wins on ImageName
         Assert.Equal("new-sandbox:2.0", opts.ImageName);
-        // Legacy survives where new is unset
         Assert.Equal("legacy-network", opts.NetworkMode);
     }
 }

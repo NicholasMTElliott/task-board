@@ -84,7 +84,8 @@ The `AttributionHeader=off` and `NonessentialTraffic=off` lines confirm the cach
       "MaxBudgetUsd": 50.00,
       "TimeoutSeconds": 600,
       "DisableAttributionHeader": true,
-      "DisableNonessentialTraffic": true
+      "DisableNonessentialTraffic": true,
+      "PerformanceVolumes": []
     }
   }
 }
@@ -106,6 +107,10 @@ The `AttributionHeader=off` and `NonessentialTraffic=off` lines confirm the cach
 | `DisableNonessentialTraffic` | `true` | Sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` so the CLI doesn't ping `api.anthropic.com` for telemetry / feature flags. |
 | `ContainerNamePrefix` | `aiboard-cq` | Prefix on container names: `aiboard-cq-{tenantHash}-{cardId}-{rand}`. |
 | `RateLimitPatterns` | `[]` | Operator-extensible stderr substrings, merged with the built-in Anthropic patterns. |
+| `PerformanceVolumes` | `[]` | Workspace-relative dependency/cache directories to shadow with Docker named volumes. Use only for reproducible folders such as `node_modules`, `.pnpm-store`, `.gradle`, `target`, or `.godot/imported`. |
+| `PerformanceVolumeOwner` | `agent:agent` | Owner applied the first time a performance volume is initialized. Empty skips ownership initialization. |
+
+Performance volumes are opt-in and deterministic per worktree/path. They help when a project's tests traverse large dependency trees through Docker Desktop's Windows bind-mount layer; source files and commit-required build outputs should stay on the normal worktree bind mount.
 
 ### How the credential staging works
 

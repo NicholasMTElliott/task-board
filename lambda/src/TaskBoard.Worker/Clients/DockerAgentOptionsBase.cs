@@ -89,6 +89,22 @@ public abstract class DockerAgentOptionsBase
     /// Key: a human-readable label for logging; value: mount details.
     /// </summary>
     public Dictionary<string, DockerMount> AdditionalMounts { get; set; } = [];
+
+    /// <summary>
+    /// Container-relative workspace paths to back with Docker named volumes
+    /// instead of the host bind mount. Use only for reproducible dependency or
+    /// cache directories such as <c>node_modules</c>, <c>.pnpm-store</c>,
+    /// <c>.gradle</c>, or <c>target</c>. Empty by default, preserving current
+    /// mount behaviour.
+    /// </summary>
+    public List<string> PerformanceVolumes { get; set; } = [];
+
+    /// <summary>
+    /// Owner applied when a performance volume is first initialized. Empty skips
+    /// ownership initialization. Defaults to the non-root user baked into the
+    /// bundled sandbox images.
+    /// </summary>
+    public string PerformanceVolumeOwner { get; set; } = "agent:agent";
 }
 
 /// <summary>A volume mount entry for <c>docker run -v {host}:{container}[:ro]</c>.</summary>

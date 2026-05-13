@@ -131,7 +131,8 @@ Both patterns above support per-step `providerParams` to override the executor's
       "FullAuto": false,
       "Sandbox": null,
       "CredentialPath": null,
-      "CredentialMountPoint": null
+      "CredentialMountPoint": null,
+      "PerformanceVolumes": []
     }
   }
 }
@@ -152,6 +153,10 @@ Both patterns above support per-step `providerParams` to override the executor's
 | `Sandbox` | `null` | `read-only` / `workspace-write` / `danger-full-access` — only when `Yolo=false` |
 | `CredentialPath` | auto-detect `~/.codex` | Override if Codex auth lives elsewhere |
 | `CredentialMountPoint` | `/home/agent/.codex` | Container-side parent dir for per-file credential mounts (each top-level file is mounted RO at `{CredentialMountPoint}/{filename}`) |
+| `PerformanceVolumes` | `[]` | Workspace-relative dependency/cache directories to shadow with Docker named volumes. Good for `node_modules`, `.pnpm-store`, `.gradle`, `target`, `.godot/imported`. Do not use for source or commit-required artifacts. |
+| `PerformanceVolumeOwner` | `agent:agent` | Owner applied the first time a performance volume is initialized. Empty skips ownership initialization. |
+
+Performance volumes are useful on Docker Desktop Windows when test tools read thousands of small files through the worktree bind mount. They are opt-in and deterministic per worktree/path, so a card's repeated agent passes reuse a warm cache without sharing it with other worktrees.
 
 ---
 

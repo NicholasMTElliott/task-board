@@ -110,6 +110,8 @@ Provider-agnostic interface for all board operations:
 Implementations: `GitHubProjectsClient` (via `gh` CLI), `TrelloClient` (HTTP), `StubTaskBoardClient` (testing).
 Selection via `BOARD_PROVIDER` env var: `github`, `trello`, or default `stub`.
 
+**GitHub body encoding invariant:** `GitHubProjectsClient` must not send issue/comment/PR body text through `gh --body ...` or stdin (`--input -`) on Windows. All body writes use UTF-8 no-BOM temp files (`--body-file` or `gh api --input <file>`). `ProcessRunner.ConfigureUtf8Io` sets redirected stdin/stdout/stderr encoding to UTF-8 and injects `PYTHONIOENCODING=utf-8`, `DOTNET_SYSTEM_CONSOLE_UTF8IO=1` for child tools. Rationale: Windows OEM code pages can transcode non-ASCII (`→`, `—`, `✓`, CJK) into mojibake when piped to `gh`, and repeated edits compound corruption.
+
 ### Agent Contract
 The agent executor (`ClaudeAgentExecutor`) uses `--json-schema` to enforce structured output:
 ```json
@@ -200,6 +202,7 @@ Agent executors are registered via `AgentExecutorResolver` which resolves by pro
 - Workspace/credential mounts built by `DockerClaudeMountBuilder` (inherits from `DockerMountBuilderBase` for the shared worktree/`.git` mount construction; injected optionally); workspace mounts and env vars passed to `docker run` args and `SessionRequest`
 - Host Docker socket passthrough (`MountHostDockerSocket=true`) adds writable `-v {HostDockerSocketPath}:{ContainerDockerSocketPath}` before `AdditionalMounts`; default both paths `/var/run/docker.sock`. Requires Docker CLI/Compose inside the image. Grants host-Docker control. If socket permissions block UID 1000, operator keeps `ContainerUser` unset and sets `GroupAdd` to the socket group id. `ContainerUser=root` is startup-invalid: Claude CLI rejects bypass-permissions under root/sudo; other CLIs can drift HOME/credential lookup to `/root`.
 - Extensible static mounts (`DockerClaudeAgentOptions.AdditionalMounts` dictionary — inherited from the base) — operator-supplied overrides beyond the standard workspace/credential set
+- Performance volume overlays (`DockerAgentOptionsBase.PerformanceVolumes`) — opt-in workspace-relative paths mounted as Docker named volumes after the `/workspace` bind mount. Intended for reproducible dependency/cache dirs (`node_modules`, `.pnpm-store`, `.gradle`, `target`, `.godot/imported`) so Docker Desktop Windows avoids slow host-bind small-file reads. Invalid paths (absolute, `..`, `.git`, root) are startup-invalid. Volume name = deterministic per `(worktreePath, relPath)` via SHA-256 prefix; label `aiboard-perf=1`; first init runs as root in the configured image and applies `PerformanceVolumeOwner` (default `agent:agent`) once via sentinel.
 - Registered automatically when Docker daemon is detected at startup (`PrerequisiteValidator.IsDockerAvailableAsync` runs `docker info`)
 
 ### Container Session Reuse (IAgentExecutorSession)
@@ -235,6 +238,8 @@ To avoid per-step container startup overhead, executors that support Docker can 
 - `CredentialPath` (string, default: `""`) — host path to Claude CLI credentials; auto-detected from `~/.claude` if empty; used by `DockerClaudeMountBuilder`
 - `CredentialMountPoint` (string?, default: `null`) — container path for credentials; defaults to `/home/agent/.claude` (matches `agent` user home in sandbox image)
 - `AdditionalMounts` (Dictionary, default: `{}`) — operator-supplied static volume mounts (beyond standard workspace/credential set)
+- `PerformanceVolumes` (List, default: `[]`) — Docker named-volume overlays for dependency/cache paths under `/workspace`; all Docker executors honour it.
+- `PerformanceVolumeOwner` (String, default: `agent:agent`) — owner used during first volume init; empty skips chown.
 
 **Fallback strategy:** If `TryCreateSessionAsync` returns `null` (image not found, Docker unavailable), the run proceeds without a session — all steps use `executor.ExecuteAsync` directly.
 
