@@ -137,10 +137,15 @@ public sealed partial class AgentRunner(
 
             // 4a. Merge main branch for existing branches (skip for discard states — changes are thrown away)
             string? mergePromptAugmentation = null;
+            // Set when the merge step pulled (or began pulling) mainline into the
+            // card branch — the merged mainline SHA, which is the new merge-base
+            // and therefore the gate-check diff base (Approach D).
+            string? mergedMainSha = null;
             if (isExistingBranch && gitBehavior != "discard")
             {
                 var mergeOutcome = await HandleMergeStepAsync(
                     worktreePath, branchName, cardId, targetCard, state, cancellationToken);
+                mergedMainSha = mergeOutcome.MergedMainSha;
 
                 switch (mergeOutcome.Action)
                 {
@@ -177,20 +182,30 @@ public sealed partial class AgentRunner(
             var runStartCanonicalSha = await gitWorkspaceManager.GetCurrentShaAsync(
                 worktreePath, cancellationToken);
 
-            // 4c. Resolve state-entry canonical SHA (rerun redesign Problem 3).
-            // The state-entry SHA represents the codebase as of the FIRST run
-            // for this (tenant, card, state). Re-runs (Questions answered,
-            // gate fail, etc.) inherit it so the gate-check diff base shows
-            // CUMULATIVE work across runs, not just this run's possibly-empty
-            // diff. First run captures runStartCanonicalSha. Subsequent runs
-            // copy forward the earliest stored value. The column already
-            // exists on agent_run (V24); SetStateEntryShaAsync is idempotent.
-            //
-            // The actual UPDATE is deferred until AFTER CreateRunAsync below —
+            // 4c. Resolve state-entry canonical SHA (rerun redesign Problem 3 +
+            // Approach D). The state-entry SHA is the gate-check diff base: the
+            // commit the gate diffs the worktree HEAD against. It should be the
+            // merge-base between the card branch and mainline, so the gate sees
+            // the card's own committed work (and any merge-conflict resolutions)
+            // but NOT mainline's progress that was merged in along the way.
+            //   • First run for (tenant, card, state): runStartCanonicalSha
+            //     (HEAD after the optional merge step) — equals the merge-base
+            //     when the branch was freshly cut from mainline.
+            //   • Re-runs (Questions answered, gate fail, etc.): copy forward
+            //     the earliest stored value so the gate sees CUMULATIVE work
+            //     across runs, not just this run's possibly-empty diff.
+            //   • Whenever this run merged mainline into the branch (Approach
+            //     D): override with the merged mainline SHA — that IS the new
+            //     merge-base, and the prior stored value is now stale (predates
+            //     the just-merged mainline commits, so diffing against it would
+            //     surface all of mainline's progress as "unrequested changes").
+            // The column already exists on agent_run (V24). The persisting
+            // UPDATE is deferred until AFTER CreateRunAsync below —
             // SetStateEntryShaAsync targets a row keyed by runId and would no-op
             // if invoked here.
             string? stateEntrySha = null;
             bool stateEntryCarriedForward = false;
+            bool stateEntryAdvancedByMerge = false;
             try
             {
                 var priorStateEntry = await runStore.GetEarliestStateEntryShaAsync(
@@ -210,6 +225,16 @@ public sealed partial class AgentRunner(
                 logger.LogWarning(ex,
                     "Failed to resolve state-entry SHA for card {CardId} state {State}; gate diff will fall back to runStartCanonicalSha",
                     cardId, state.Name);
+            }
+
+            // Approach D: a mainline merge this run advances the merge-base.
+            // Override any carried-forward (now stale) value with it.
+            if (mergedMainSha is not null
+                && !string.Equals(mergedMainSha, stateEntrySha, StringComparison.Ordinal))
+            {
+                stateEntrySha = mergedMainSha;
+                stateEntryCarriedForward = false;
+                stateEntryAdvancedByMerge = true;
             }
 
             // 5. Fetch comments (used for both cross-references and comments file)
@@ -333,10 +358,24 @@ public sealed partial class AgentRunner(
                 try
                 {
                     await runStore.SetStateEntryShaAsync(runId, stateEntrySha, cancellationToken);
+
+                    // Approach D: when a mainline merge advanced the merge-base
+                    // this run, broadcast the new SHA to EVERY run row for this
+                    // (card, state) so a later re-run that doesn't itself merge
+                    // still carries the up-to-date base forward via
+                    // GetEarliestStateEntryShaAsync (which otherwise returns the
+                    // now-stale first run's value).
+                    if (stateEntryAdvancedByMerge)
+                    {
+                        await runStore.UpdateStateEntryShaForCardStateAsync(
+                            cardId, state.Name, stateEntrySha, cancellationToken);
+                    }
+
                     logger.LogDebug(
                         "State-entry SHA for card {CardId} state {State}: {Sha} ({Origin})",
                         cardId, state.Name, stateEntrySha,
-                        stateEntryCarriedForward ? "carried-forward" : "captured-now");
+                        stateEntryAdvancedByMerge ? "advanced-by-merge"
+                            : stateEntryCarriedForward ? "carried-forward" : "captured-now");
                 }
                 catch (Exception ex)
                 {
@@ -1158,12 +1197,12 @@ public sealed partial class AgentRunner(
             }
 
             // 7. Run gate check if configured.
-            // Diff base (rerun redesign Problem 3): prefer state_entry_canonical_sha
-            // (cumulative work across runs in this state) over runStartCanonicalSha
-            // (this run only). On first entry to a state, both values are equal so
-            // there's no behavioural change. On a re-run, the gate sees committed
-            // work from prior runs that runStartCanonicalSha would have hidden
-            // behind an empty HEAD diff.
+            // Diff base: state_entry_canonical_sha — the merge-base between the
+            // card branch and mainline (rerun redesign Problem 3 + Approach D).
+            // It already accounts for cumulative work across re-runs (carried
+            // forward) and for mainline merges into the branch (advanced to the
+            // merged mainline SHA above). Falls back to runStartCanonicalSha
+            // only if resolution failed entirely (DB unavailable, etc.).
             var gateDiffBase = stateEntrySha ?? runStartCanonicalSha;
             var gateCheckResult = await RunGateCheckAsync(
                 session, state, lastResult!, worktreePath, targetCard, currentBody, cardId, runId,
@@ -2728,7 +2767,13 @@ public sealed partial class AgentRunner(
         MergeStepAction Action,
         string? PromptAugmentation = null,
         string? KickBackComment = null,
-        TransitionTarget? KickBackTarget = null);
+        TransitionTarget? KickBackTarget = null,
+        // Set when this run merged (or began merging, in the conflict-context
+        // case) origin/{defaultBranch} into the card branch. Carries the
+        // mainline SHA that was merged so the gate-check diff base can advance
+        // to it (Approach D). Null when no merge happened (fetch failed,
+        // up-to-date with no SHA resolved, or the merge was aborted/kicked back).
+        string? MergedMainSha = null);
 
     private async Task<MergeStepOutcome> HandleMergeStepAsync(
         string worktreePath,
@@ -2778,7 +2823,11 @@ public sealed partial class AgentRunner(
         if (mergeResult.Status == MergeMainStatus.UpToDate)
         {
             logger.LogInformation("Branch {Branch} is up to date with origin/{Default}", branchName, defaultBranch);
-            return new MergeStepOutcome(MergeStepAction.Proceed);
+            // Even when nothing was merged, origin/{defaultBranch} is fully
+            // contained in the branch's history, so it IS the merge-base —
+            // surfacing it lets a re-run advance a stale gate diff base to the
+            // true merge-base without having to merge anything.
+            return new MergeStepOutcome(MergeStepAction.Proceed, MergedMainSha: mergeResult.MergedMainSha);
         }
 
         logger.LogInformation("Merge from origin/{Default}: status={Status}, {ChangedCount} changed, {ConflictCount} conflicts",
@@ -2795,13 +2844,16 @@ public sealed partial class AgentRunner(
                 // Clean merge — commit directly
                 await gitWorkspaceManager.CommitMergeAsync(worktreePath, defaultBranch, branchName, cancellationToken);
                 logger.LogInformation("Committed clean merge of origin/{Default} into {Branch}", defaultBranch, branchName);
-                return new MergeStepOutcome(MergeStepAction.Proceed);
+                return new MergeStepOutcome(MergeStepAction.Proceed, MergedMainSha: mergeResult.MergedMainSha);
             }
             else
             {
-                // Conflicts — leave them for the implementing agent
+                // Conflicts — leave them for the implementing agent. The agent
+                // resolves and commits the merge, so origin/{defaultBranch}
+                // still becomes the merge-base; surface its SHA for the gate
+                // diff base.
                 var conflictContext = BuildConflictPromptAugmentation(mergeResult);
-                return new MergeStepOutcome(MergeStepAction.ProceedWithConflictContext, PromptAugmentation: conflictContext);
+                return new MergeStepOutcome(MergeStepAction.ProceedWithConflictContext, PromptAugmentation: conflictContext, MergedMainSha: mergeResult.MergedMainSha);
             }
         }
         else
@@ -2823,7 +2875,7 @@ public sealed partial class AgentRunner(
                 }
 
                 logger.LogInformation("Merge validated and committed for {Branch}", branchName);
-                return new MergeStepOutcome(MergeStepAction.Proceed);
+                return new MergeStepOutcome(MergeStepAction.Proceed, MergedMainSha: mergeResult.MergedMainSha);
             }
             else
             {

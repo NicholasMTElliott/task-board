@@ -83,13 +83,19 @@ public interface IRunStore
 
     /// <summary>
     /// Returns the earliest non-null <c>state_entry_canonical_sha</c> across
-    /// every <c>agent_run</c> row for <c>(tenant, card, state)</c> — the SHA
-    /// captured the FIRST time this card entered this state. Subsequent runs
-    /// in the same state copy it forward so the gate-check diff base
-    /// (Problem 3) shows cumulative committed work across re-runs, not just
-    /// this run's possibly-empty diff. Returns null when no prior run has
-    /// captured a SHA yet (the caller should capture one for the current
-    /// run via <see cref="SetStateEntryShaAsync"/>).
+    /// every <c>agent_run</c> row for <c>(tenant, card, state)</c> — the
+    /// gate-check diff base (the merge-base between the card branch and
+    /// mainline). Captured the FIRST time this card entered this state, then
+    /// copied forward by subsequent runs so the gate sees cumulative committed
+    /// work across re-runs, not just this run's possibly-empty diff.
+    /// <para>
+    /// When a re-run merges mainline into the card branch, that run advances
+    /// this value to the merged mainline SHA via
+    /// <see cref="UpdateStateEntryShaForCardStateAsync"/>, so "earliest" here
+    /// still tracks the current merge-base rather than a stale pre-merge SHA.
+    /// </para>
+    /// Returns null when no prior run has captured a SHA yet (the caller should
+    /// capture one for the current run via <see cref="SetStateEntryShaAsync"/>).
     /// </summary>
     Task<string?> GetEarliestStateEntryShaAsync(
         string cardId, string stateName, CancellationToken ct);
@@ -101,6 +107,17 @@ public interface IRunStore
     /// stored SHA).
     /// </summary>
     Task SetStateEntryShaAsync(string runId, string sha, CancellationToken ct);
+
+    /// <summary>
+    /// Sets <c>agent_run.state_entry_canonical_sha</c> to <paramref name="sha"/>
+    /// for EVERY <c>agent_run</c> row of <c>(tenant, card, state)</c>. Called
+    /// after a mainline merge advances the gate-check diff base (Approach D) so
+    /// later re-runs that don't themselves merge still carry the up-to-date base
+    /// forward via <see cref="GetEarliestStateEntryShaAsync"/> rather than the
+    /// now-stale first-run value. Best-effort: callers swallow failures.
+    /// </summary>
+    Task UpdateStateEntryShaForCardStateAsync(
+        string cardId, string stateName, string sha, CancellationToken ct);
 }
 
 /// <summary>

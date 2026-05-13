@@ -425,6 +425,20 @@ public sealed class GitWorkspaceManager(
     public async Task<MergeMainResult> MergeMainBranchAsync(
         string repoPath, string defaultBranch, CancellationToken cancellationToken)
     {
+        // Resolve the mainline SHA being merged. This becomes the new
+        // merge-base between the card branch and mainline once the merge
+        // commits, so the gate-check diff base advances to it (Approach D).
+        // Best-effort: a rev-parse failure just leaves the field null.
+        string? mergedMainSha = null;
+        try
+        {
+            var (_, shaOutput, _) = await RunGitAsync(repoPath,
+                ["rev-parse", $"origin/{defaultBranch}"], cancellationToken);
+            var sha = shaOutput.Trim();
+            mergedMainSha = string.IsNullOrEmpty(sha) ? null : sha;
+        }
+        catch (GitOperationException) { /* best effort */ }
+
         // Count commits to merge (for summary)
         var commitCount = 0;
         try
@@ -443,7 +457,7 @@ public sealed class GitWorkspaceManager(
                 ["merge", $"origin/{defaultBranch}", "--no-ff", "--no-commit"], cancellationToken);
 
             if (stdout.Contains("Already up to date"))
-                return new MergeMainResult(MergeMainStatus.UpToDate, defaultBranch, [], [], 0, "Already up to date");
+                return new MergeMainResult(MergeMainStatus.UpToDate, defaultBranch, [], [], 0, "Already up to date", mergedMainSha);
         }
         catch (GitOperationException ex) when (ex.ExitCode == 1)
         {
@@ -474,7 +488,7 @@ public sealed class GitWorkspaceManager(
             ? $"{conflictFiles.Count} conflict(s) in {changedFiles.Count} changed files"
             : $"{changedFiles.Count} files changed, {commitCount} commit(s) merged";
 
-        return new MergeMainResult(status, defaultBranch, changedFiles, conflictFiles, commitCount, summary);
+        return new MergeMainResult(status, defaultBranch, changedFiles, conflictFiles, commitCount, summary, mergedMainSha);
     }
 
     /// <summary>

@@ -1751,6 +1751,7 @@ public class AgentRunnerRerunRedesignTests : IDisposable
     {
         public List<string> CallOrder { get; } = [];
         public string? PersistedStateEntrySha { get; private set; }
+        public string? BroadcastedStateEntrySha { get; private set; }
 
         public Task CreateRunAsync(RunRecord run, CancellationToken ct)
         {
@@ -1762,6 +1763,13 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         {
             CallOrder.Add(nameof(SetStateEntryShaAsync));
             PersistedStateEntrySha = sha;
+            return Task.CompletedTask;
+        }
+
+        public Task UpdateStateEntryShaForCardStateAsync(string cardId, string stateName, string sha, CancellationToken ct)
+        {
+            CallOrder.Add(nameof(UpdateStateEntryShaForCardStateAsync));
+            BroadcastedStateEntrySha = sha;
             return Task.CompletedTask;
         }
 
@@ -1819,6 +1827,7 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         public Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct) => Task.FromResult(0);
         public Task<string?> GetEarliestStateEntryShaAsync(string cardId, string stateName, CancellationToken ct) => Task.FromResult<string?>(null);
         public Task SetStateEntryShaAsync(string runId, string sha, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateStateEntryShaForCardStateAsync(string cardId, string stateName, string sha, CancellationToken ct) => Task.CompletedTask;
     }
 
     /// <summary>
@@ -1937,5 +1946,6 @@ public class AgentRunnerRerunRedesignTests : IDisposable
         public Task<int> GetStepAttemptCountAsync(string cardId, string stateName, string stepName, CancellationToken ct) => Task.FromResult(0);
         public Task<string?> GetEarliestStateEntryShaAsync(string cardId, string stateName, CancellationToken ct) => Task.FromResult<string?>(null);
         public Task SetStateEntryShaAsync(string runId, string sha, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateStateEntryShaForCardStateAsync(string cardId, string stateName, string sha, CancellationToken ct) => Task.CompletedTask;
     }
 }

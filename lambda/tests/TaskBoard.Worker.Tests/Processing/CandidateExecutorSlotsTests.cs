@@ -734,6 +734,7 @@ public class CandidateExecutorSlotsTests : IDisposable
         public Task<CacheCandidateRecord?> GetMostRecentCompleteForStepAsync(string cardId, string stateName, string stepName, CancellationToken ct) => Task.FromResult<CacheCandidateRecord?>(null);
         public Task<string?> GetEarliestStateEntryShaAsync(string cardId, string stateName, CancellationToken ct) => Task.FromResult<string?>(null);
         public Task SetStateEntryShaAsync(string runId, string sha, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateStateEntryShaForCardStateAsync(string cardId, string stateName, string sha, CancellationToken ct) => Task.CompletedTask;
     }
 
     private sealed record RecordedVerdict(string RunId, Guid GroupId, int CandidateIndex, bool Selected, decimal? QualityScore, string? Reasoning);
