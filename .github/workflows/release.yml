@@ -107,7 +107,7 @@ jobs:
       # the release; subsequent jobs append their files to the same tag. This
       # eliminates the artifact-storage path entirely (which was eating the
       # account's quota and silently breaking v0.0.11/12/13 — see commit history).
-      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
+      - uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
         with:
           files: ${{ steps.name.outputs.file }}
           generate_release_notes: true
