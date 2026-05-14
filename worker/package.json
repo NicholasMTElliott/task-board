@@ -11,7 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^0.10.4"
+    "@neondatabase/serverless": "^1.1.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260218.0",
