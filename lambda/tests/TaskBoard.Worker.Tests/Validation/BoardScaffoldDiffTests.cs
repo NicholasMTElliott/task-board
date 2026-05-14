@@ -10,7 +10,7 @@ namespace TaskBoard.Worker.Tests.Validation;
 /// </summary>
 public class BoardScaffoldDiffTests
 {
-    private static WorkflowConfig MinimalKvaShape() => new(
+    private static WorkflowConfig MinimalExampleShape() => new(
         States: new()
         {
             ["design"] = new WorkflowState(
@@ -53,7 +53,7 @@ public class BoardScaffoldDiffTests
     [Fact]
     public void BoardAlreadyMatches_PlanIsEmpty()
     {
-        var config = MinimalKvaShape();
+        var config = MinimalExampleShape();
         var shape = new BoardShape(
             ColumnNames: ["Ready", "Done"],
             Fields:
@@ -85,7 +85,7 @@ public class BoardScaffoldDiffTests
     [Fact]
     public void EmptyBoard_PlanContainsEverythingNew()
     {
-        var config = MinimalKvaShape();
+        var config = MinimalExampleShape();
         var shape = new BoardShape(
             ColumnNames: ["Ready", "Done"],   // columns at least exist so we don't get column noise
             Fields: [],
@@ -111,7 +111,7 @@ public class BoardScaffoldDiffTests
     [Fact]
     public void FieldExistsButMissingOptions_GapNotMissingField()
     {
-        var config = MinimalKvaShape();
+        var config = MinimalExampleShape();
         var shape = new BoardShape(
             ColumnNames: ["Ready", "Done"],
             Fields:
@@ -180,7 +180,7 @@ public class BoardScaffoldDiffTests
     [Fact]
     public void EstimationConfig_AddsScaleOptionsToField()
     {
-        var config = MinimalKvaShape() with
+        var config = MinimalExampleShape() with
         {
             Estimation = new EstimationConfig(
                 CalibrationTicketId: "1",
@@ -200,7 +200,7 @@ public class BoardScaffoldDiffTests
     [Fact]
     public void CardTypeField_BecomesRequiredFieldWithTypeNamesAsOptions()
     {
-        var config = MinimalKvaShape() with { CardTypeField = "Type" };
+        var config = MinimalExampleShape() with { CardTypeField = "Type" };
         var shape = new BoardShape(["Ready", "Done"], [], []);
 
         var plan = BoardScaffoldDiff.Compute(config, shape);
@@ -233,7 +233,7 @@ public class BoardScaffoldDiffTests
     public void MissingColumn_FlaggedAsManualAction()
     {
         // Workflow references column 'Ready' but board only has 'Done'.
-        var config = MinimalKvaShape();
+        var config = MinimalExampleShape();
         var shape = new BoardShape(
             ColumnNames: ["Done"],
             Fields: [],
@@ -250,7 +250,7 @@ public class BoardScaffoldDiffTests
     {
         // The probe couldn't see the Status field (gh permissions). Don't
         // flag every workflow column as "missing" — that would be noise.
-        var config = MinimalKvaShape();
+        var config = MinimalExampleShape();
         var shape = new BoardShape(
             ColumnNames: [],   // probe returned no columns
             Fields: [],

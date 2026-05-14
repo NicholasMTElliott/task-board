@@ -298,7 +298,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
     [Fact]
     public async Task ExecuteAsync_NetworkHint502_ExitZeroProse_BailsBeforeRetry()
     {
-        // The original KvA failure shape: llama-server proxy returned
+        // The original reported failure shape: llama-server proxy returned
         // 502 mid-run; OpenCode CLI exited 0 with prose ("upstream unreachable")
         // and "502" in stderr. Without the bail, the retry-on-malformed-output
         // loop burned 3 × inactivity-timer (~60 min) before surfacing.
@@ -584,7 +584,7 @@ public class DockerOpenCodeAgentExecutorDiagnosticsTests
     [Fact]
     public async Task ExecuteAsync_StructurerEnabled_RecoversFromProseNarrative_NoRetry()
     {
-        // Headline scenario: the KvA failure shape — agent narrates
+        // Headline scenario: the reported failure shape — agent narrates
         // correct work in prose but skips the JSON envelope. Structurer takes
         // the narrative, returns parseable JSON. Executor returns recovered
         // result without consuming a retry attempt.

@@ -127,11 +127,8 @@ public sealed class UpdateFileProcessor(
                 }
 
                 // Unrecognized .md file. Most common case is a missing `new-`
-                // prefix on what was supposed to be a new-ticket file (KvA / eve
-                // failure shape: agent writes `apply-theme-class.md` instead
-                // of `new-apply-theme-class.md` and the regex silently rejects
-                // it). Detect that case and call it out specifically — it's a
-                // 99% chance to be the cause.
+                // prefix on what was supposed to be a new-ticket file.
+                // Detect that case and call it out specifically.
                 var likelyMissingNewPrefix = LooksLikeMissingNewPrefix(fileName);
                 if (likelyMissingNewPrefix)
                 {

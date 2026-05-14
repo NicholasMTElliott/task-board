@@ -451,7 +451,7 @@ public class DockerClaudeMountBuilderTests : IDisposable
             m => m.ContainerPath == DockerClaudeMountBuilder.DefaultCredentialMountPoint);
     }
 
-    // ── BuildAsync — ~/.claude.json mount (eve issue #9 regression guard) ───
+    // ── BuildAsync — ~/.claude.json mount (downstream issue #9 regression guard) ───
     //
     // Claude CLI 2.x looks for $HOME/.claude.json (a FILE at the home root,
     // sibling of the .claude/ directory). When this isn't mounted into the

@@ -200,9 +200,9 @@ public class CliDefinitionsTests
     }
 
     [Fact]
-    public void ValidateKnownFlags_KvAReproduction_SuggestsModeValidation()
+    public void ValidateKnownFlags_ModeValidationTypo_SuggestsModeValidation()
     {
-        // KvA's exact v0.0.15 typo: typed --validate, expected --mode validation.
+        // the exact v0.0.15 typo: typed --validate, expected --mode validation.
         var report = CliDefinitions.ValidateKnownFlags(["--validate"]);
         Assert.Contains("--validate", report.UnknownFlags);
         Assert.True(report.TypoHints.TryGetValue("--validate", out var hint));

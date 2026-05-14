@@ -205,7 +205,7 @@ public class DockerClaudeAgentExecutorTests
         // forwarded to children and zombies are reaped. Without it, agent-spawned
         // processes (e.g. test runners, GUI subprocesses like Godot) can outlive
         // the CLI exit and hold open file handles on bind-mounted worktree
-        // files, blocking host-side cleanup. Reported in the v0.0.16 KvA field run.
+        // files, blocking host-side cleanup. Reported in the v0.0.16 example-project field run.
         var executor = CreateExecutor();
         var dockerArgs = executor.BuildDockerArgumentList(
             "c1", "/host/prompts", ["--print"]);

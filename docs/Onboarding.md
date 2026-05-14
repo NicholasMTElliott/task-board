@@ -24,7 +24,7 @@ Pick one of three templates based on which AI provider you want every role to ru
 | `from-scratch-codex` | `codex` | gpt-5.5 / 5.4 / 5.4-mini / 5.3-codex tiered per role |
 | `from-scratch-opencode` | `docker-opencode` | Qwen3.6 (`-think` for design/QA, no-think for impl/gates) |
 
-All three produce the same KvA-shape workflow: one `Ready` column for the entire active pipeline, an `Activity` field (Design → Implementation → Review → Test → Merge) discriminating which state runs, and an **`assignee isEmpty` filter** that turns assignment into the work-in-progress lock.
+All three produce the same shared-column example workflow: one `Ready` column for the entire active pipeline, an `Activity` field (Design → Implementation → Review → Test → Merge) discriminating which state runs, and an **`assignee isEmpty` filter** that turns assignment into the work-in-progress lock.
 
 Interactive form (prompts for owner / repo / project number, auto-detects via `gh repo view`):
 
@@ -128,7 +128,7 @@ Polling skips cards where the `assignee isEmpty` filter fails — assignment is 
 
 Read-only triage. Output is structured: header (id / title / column / assignees / fields), then a single `Pickup result: ...` line with the verdict, then a "Most likely cause" hint when applicable.
 
-The headline failure mode this exists to catch is **"the card is assigned"**. On the KvA-shape workflow the `assignee isEmpty` filter is invisible to most operators. When a card sits in `Ready` with someone assigned, polling silently skips it. Diagnose surfaces this and prints the exact `gh issue edit N --remove-assignee @user` command to unstick it.
+The headline failure mode this exists to catch is **"the card is assigned"**. On the shared-column example workflow the `assignee isEmpty` filter is invisible to most operators. When a card sits in `Ready` with someone assigned, polling silently skips it. Diagnose surfaces this and prints the exact `gh issue edit N --remove-assignee @user` command to unstick it.
 
 Other branches:
 

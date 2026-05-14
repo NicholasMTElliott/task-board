@@ -400,7 +400,7 @@ public class AgentRunnerGateCheckTests : IDisposable
         Assert.Contains("NewFeature", capturedGateContext.TaskPrompt);
     }
 
-    // ── Regression guard for v0.0.20 KvA card #3: candidate-flow gate check ──
+    // ── Regression guard for v0.0.20 a downstream project card #3: candidate-flow gate check ──
 
     [Fact]
     public async Task GateCheck_CommitStage_SeesDiff_WhenHEADAdvancedDuringStep()

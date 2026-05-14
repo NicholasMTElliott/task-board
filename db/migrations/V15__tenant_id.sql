@@ -4,7 +4,7 @@
 -- share one Postgres instance without colliding or blending data.
 --
 -- Tenant ID format: "{provider}:{provider-specific-identifier}", e.g.
---   github:NicholasMTElliott/kva/4
+--   github:owner/repo/4
 --   trello:abc123def
 --   stub:test
 --

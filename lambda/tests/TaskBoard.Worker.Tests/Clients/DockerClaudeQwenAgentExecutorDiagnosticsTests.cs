@@ -235,7 +235,7 @@ public class DockerClaudeQwenAgentExecutorDiagnosticsTests
     /// Defensive parity with the real-Anthropic Claude executors. If the local
     /// proxy ever forwards an upstream Anthropic-shape <c>rate_limit_event</c> in
     /// stdout (some proxies do), we must classify it as RATE_LIMIT, not
-    /// AGENT_ERROR. Same root cause as the KvA cards-6/10/12 misclassification
+    /// AGENT_ERROR. Same root cause as the downstream cards 6/10/12 misclassification
     /// on the real-Anthropic path.
     /// </summary>
     [Fact]

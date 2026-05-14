@@ -1394,7 +1394,7 @@ public class UpdateFileProcessorTests : IDisposable
     public async Task ProcessUpdates_FileMissingNewPrefix_NotCreated_AndSurfacedAsUnrecognized()
     {
         var updatesDir = CreateUpdatesDir();
-        // The KvA / eve failure shape: agent forgets the `new-` prefix.
+        // The missing-new-prefix failure shape: agent forgets the `new-` prefix.
         File.WriteAllText(Path.Combine(updatesDir, "apply-theme-class.md"),
             "---\ntitle: Apply themeClass\n---\n\nbody");
 

@@ -1099,7 +1099,7 @@ public sealed class CandidateExecutor(
         // schema so winner_index is required when outcome=COMPLETE. Without
         // this, the LLM can pick a winner in prose but omit the structured
         // field, and the orchestrator silently cleans up all candidates with
-        // no winner promoted (KvA card #3 v0.0.15 reproduction). The variant
+        // no winner promoted (a downstream project card #3 v0.0.15 reproduction). The variant
         // matches the EVALUATOR-ATTEMPT'S provider — for fallback attempts
         // this is recomputed per attempt because primary may be Claude (if/then
         // schema) and fallback may be Codex (OpenAI shape). Build it inside the

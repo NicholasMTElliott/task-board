@@ -52,7 +52,7 @@ public sealed class ValidationRunner(
 
         // Pass 4: docker images for every docker-* provider referenced by the
         // workflow (roles AND candidate overrides). Catches the "workflow loads
-        // fine but runtime fails on missing image" case (KvA v0.0.15 with
+        // fine but runtime fails on missing image" case (the reported v0.0.15 with
         // docker-opencode candidates and no aiboard-opencode-sandbox built).
         try
         {

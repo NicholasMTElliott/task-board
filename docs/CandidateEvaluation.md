@@ -167,7 +167,7 @@ The evaluator returns the standard Agent Contract JSON (`outcome` + `detail`) ex
 ```
 
 - `outcome = COMPLETE` + a valid `winner_index` → winner promoted, candidate rows updated.
-- `outcome = COMPLETE` + missing/null `winner_index` → **schema violation**. The orchestrator overrides the result to `ERROR` with a diagnostic detail (instead of silently cleaning up with no winner promoted, which is the v0.0.15 KvA-reported bug). The evaluator schema (`AgentSchemas.EvaluatorOutcomeSchema`) makes `winner_index` required when `outcome = COMPLETE` via JSON Schema `if`/`then`; the OpenAI variant types it `["integer", "null"]` and relies on parser-side enforcement.
+- `outcome = COMPLETE` + missing/null `winner_index` → **schema violation**. The orchestrator overrides the result to `ERROR` with a diagnostic detail (instead of silently cleaning up with no winner promoted, which is the v0.0.15 example-project-reported bug). The evaluator schema (`AgentSchemas.EvaluatorOutcomeSchema`) makes `winner_index` required when `outcome = COMPLETE` via JSON Schema `if`/`then`; the OpenAI variant types it `["integer", "null"]` and relies on parser-side enforcement.
 - Evaluator `outcome = NEEDS_INFO` / `ERROR` → no winner; cleanup; AgentRunner follows the matching transition.
 - Candidate `outcome = NEEDS_INFO` is not a failure. It is eligible to win; if the evaluator selects it, its questions propagate and the step ends with `NEEDS_INFO`.
 

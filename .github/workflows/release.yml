@@ -4,12 +4,15 @@ on:
   push:
     tags: ['v*']
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5
         with:
           dotnet-version: '10.0.x'
       - run: dotnet restore task-board.sln
@@ -60,8 +63,8 @@ jobs:
             ext: tar.gz
             deployment: fdd
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5
         with:
           dotnet-version: '10.0.x'
       - name: Publish
@@ -104,7 +107,7 @@ jobs:
       # the release; subsequent jobs append their files to the same tag. This
       # eliminates the artifact-storage path entirely (which was eating the
       # account's quota and silently breaking v0.0.11/12/13 — see commit history).
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           files: ${{ steps.name.outputs.file }}
           generate_release_notes: true

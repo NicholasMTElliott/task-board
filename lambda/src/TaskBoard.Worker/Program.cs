@@ -101,7 +101,7 @@ configSources.Add($"  cli    command-line arguments  [{(args.Length == 0 ? "none
 
 // Reject unknown CLI flags loudly. AddCommandLine silently ignores anything
 // that doesn't match SwitchMappings, which means a typo like `--validate`
-// falls through to whatever Mode is set in appsettings.user.json. KvA hit
+// falls through to whatever Mode is set in appsettings.user.json. example-project hit
 // exactly this on v0.0.15 (typed --validate, ran in polling mode). Bail
 // before doing anything else so the operator sees the typo and can fix it.
 {

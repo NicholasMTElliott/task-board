@@ -44,7 +44,7 @@ public class ScaffoldBoardRunnerTests
         }
     }
 
-    private static WorkflowConfig MinimalKva() => new(
+    private static WorkflowConfig MinimalExample() => new(
         States: new()
         {
             ["design"] = new WorkflowState(
@@ -70,7 +70,7 @@ public class ScaffoldBoardRunnerTests
     [Fact]
     public async Task BoardMatches_PlanIsEmpty_ReturnsZeroNoApplyNeeded()
     {
-        var workflow = MinimalKva();
+        var workflow = MinimalExample();
         var shape = new BoardShape(
             ColumnNames: ["Ready"],
             Fields:
@@ -99,7 +99,7 @@ public class ScaffoldBoardRunnerTests
     [Fact]
     public async Task DryRunByDefault_ListsActionsButDoesNotApply()
     {
-        var workflow = MinimalKva();
+        var workflow = MinimalExample();
         var shape = new BoardShape(["Ready"], [], []);   // empty board
         var applier = new RecordingApplier();
         var stdout = new StringWriter();
@@ -125,7 +125,7 @@ public class ScaffoldBoardRunnerTests
     [Fact]
     public async Task ApplyMode_CreatesFieldsAndLabels()
     {
-        var workflow = MinimalKva();
+        var workflow = MinimalExample();
         var shape = new BoardShape(["Ready"], [], []);
         var applier = new RecordingApplier();
         var stdout = new StringWriter();
@@ -151,7 +151,7 @@ public class ScaffoldBoardRunnerTests
     [Fact]
     public async Task ApplyMode_AlreadyExistsOutcome_TreatedAsSuccess()
     {
-        var workflow = MinimalKva();
+        var workflow = MinimalExample();
         var shape = new BoardShape(["Ready"], [], []);
         // Applier reports everything as already-exists (idempotent re-run).
         var applier = new RecordingApplier
@@ -172,7 +172,7 @@ public class ScaffoldBoardRunnerTests
     [Fact]
     public async Task ApplyMode_AnyFailure_ReturnsExitOne()
     {
-        var workflow = MinimalKva();
+        var workflow = MinimalExample();
         var shape = new BoardShape(["Ready"], [], []);
         var applier = new RecordingApplier { FieldOutcome = ApplyOutcome.Failed };
         var stdout = new StringWriter();
@@ -189,7 +189,7 @@ public class ScaffoldBoardRunnerTests
     public async Task DryRun_ManualOnlyPlan_HintsManualActionRequired()
     {
         // Existing field with missing options → field-option gap (manual).
-        var workflow = MinimalKva();
+        var workflow = MinimalExample();
         var shape = new BoardShape(
             ColumnNames: ["Ready"],
             Fields:
@@ -222,7 +222,7 @@ public class ScaffoldBoardRunnerTests
     [Fact]
     public async Task ApplyMode_OnlyManualActions_NoApplyButReturnsZero()
     {
-        var workflow = MinimalKva();
+        var workflow = MinimalExample();
         // Existing fields/labels — only thing missing is options on existing field.
         var shape = new BoardShape(
             ColumnNames: ["Ready"],
@@ -252,7 +252,7 @@ public class ScaffoldBoardRunnerTests
     public async Task ProbeReturnsNull_ProviderUnsupportedReturnsExitOne()
     {
         var runner = new ScaffoldBoardRunner(
-            MinimalKva(), new CannedProbe(null), new RecordingApplier(),
+            MinimalExample(), new CannedProbe(null), new RecordingApplier(),
             NullLogger.Instance, new StringWriter());
 
         var exit = await runner.RunAsync("123", apply: false, CancellationToken.None);
@@ -264,7 +264,7 @@ public class ScaffoldBoardRunnerTests
     public async Task ProbeThrows_ReturnsExitOne()
     {
         var runner = new ScaffoldBoardRunner(
-            MinimalKva(),
+            MinimalExample(),
             new CannedProbe(null, new InvalidOperationException("gh not authenticated")),
             new RecordingApplier(),
             NullLogger.Instance,
@@ -278,7 +278,7 @@ public class ScaffoldBoardRunnerTests
     [Fact]
     public async Task ApplyMode_NoApplier_ReturnsExitOne()
     {
-        var workflow = MinimalKva();
+        var workflow = MinimalExample();
         var shape = new BoardShape(["Ready"], [], []);
         var nullApplier = new NullBoardShapeApplier();
         var stdout = new StringWriter();

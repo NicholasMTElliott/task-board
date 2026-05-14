@@ -13,7 +13,7 @@ public sealed record DockerImageCheck(
 /// Probe that checks whether the Docker images referenced by docker-* providers
 /// in a workflow are pullable / present locally. Used by ValidationRunner to
 /// catch the "workflow validates fine but runtime fails on missing image" case
-/// (KvA v0.0.15: docker-opencode candidates registered but
+/// (the reported v0.0.15: docker-opencode candidates registered but
 /// aiboard-opencode-sandbox:latest never built).
 /// </summary>
 public interface IDockerImageProbe

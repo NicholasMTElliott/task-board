@@ -14,11 +14,11 @@ namespace TaskBoard.Worker.Tests.Processing;
 public class DiagnoseRunnerTests
 {
     /// <summary>
-    /// Builds a KvA-style workflow with single Ready column + Activity field +
+    /// Builds a shared-column workflow with single Ready column + Activity field +
     /// assignee-isEmpty filter. Mirrors the from-scratch templates so tests
     /// pin the same shape new projects will run against.
     /// </summary>
-    private static WorkflowConfig BuildKvaShapeWorkflow() => new(
+    private static WorkflowConfig BuildSharedColumnWorkflow() => new(
         States: new()
         {
             ["backlog"] = new WorkflowState(
@@ -135,7 +135,7 @@ public class DiagnoseRunnerTests
             Metadata: new Dictionary<string, string> { ["Activity"] = "Design" },
             Assignees: []);
 
-        var output = await RunDiagnose(card, BuildKvaShapeWorkflow());
+        var output = await RunDiagnose(card, BuildSharedColumnWorkflow());
 
         Assert.Contains("Resolved state: Design", output);
         Assert.Contains("ELIGIBLE", output);
@@ -152,7 +152,7 @@ public class DiagnoseRunnerTests
             Metadata: new Dictionary<string, string> { ["Activity"] = "Design" },
             Assignees: ["nicholas"]);
 
-        var output = await RunDiagnose(card, BuildKvaShapeWorkflow());
+        var output = await RunDiagnose(card, BuildSharedColumnWorkflow());
 
         Assert.Contains("SKIPPED", output);
         Assert.Contains("assigned to @nicholas", output);
@@ -174,7 +174,7 @@ public class DiagnoseRunnerTests
             Metadata: new Dictionary<string, string>(),
             Assignees: []);
 
-        var output = await RunDiagnose(card, BuildKvaShapeWorkflow());
+        var output = await RunDiagnose(card, BuildSharedColumnWorkflow());
 
         Assert.Contains("SKIPPED", output);
         Assert.Contains("field Activity = 'Design' ✗ is (unset)", output);
@@ -189,7 +189,7 @@ public class DiagnoseRunnerTests
             Metadata: new Dictionary<string, string> { ["Activity"] = "Implementation" },
             Assignees: []);
 
-        var output = await RunDiagnose(card, BuildKvaShapeWorkflow());
+        var output = await RunDiagnose(card, BuildSharedColumnWorkflow());
 
         // 'implementation' state matches Activity=Implementation; this card should
         // actually resolve cleanly. Confirm so.
@@ -205,7 +205,7 @@ public class DiagnoseRunnerTests
             Metadata: new Dictionary<string, string>(),
             Assignees: []);
 
-        var output = await RunDiagnose(card, BuildKvaShapeWorkflow());
+        var output = await RunDiagnose(card, BuildSharedColumnWorkflow());
 
         Assert.Contains("HOLDING", output);
         Assert.Contains("Questions", output);
@@ -219,7 +219,7 @@ public class DiagnoseRunnerTests
             Metadata: new Dictionary<string, string>(),
             Assignees: []);
 
-        var output = await RunDiagnose(card, BuildKvaShapeWorkflow());
+        var output = await RunDiagnose(card, BuildSharedColumnWorkflow());
 
         Assert.Contains("DONE", output);
         Assert.Contains("Resolved state: Done", output);
@@ -233,7 +233,7 @@ public class DiagnoseRunnerTests
             Metadata: new Dictionary<string, string>(),
             Assignees: []);
 
-        var output = await RunDiagnose(card, BuildKvaShapeWorkflow());
+        var output = await RunDiagnose(card, BuildSharedColumnWorkflow());
 
         Assert.Contains("ENTRY", output);
         // Should advise moving to a Ready column.
@@ -248,7 +248,7 @@ public class DiagnoseRunnerTests
             Metadata: new Dictionary<string, string>(),
             Assignees: []);
 
-        var output = await RunDiagnose(card, BuildKvaShapeWorkflow());
+        var output = await RunDiagnose(card, BuildSharedColumnWorkflow());
 
         Assert.Contains("NOT IN WORKFLOW", output);
         Assert.Contains("'Lost in Space'", output);
@@ -264,7 +264,7 @@ public class DiagnoseRunnerTests
             Metadata: new Dictionary<string, string>(),
             Assignees: ["agent-bot"]);
 
-        var output = await RunDiagnose(card, BuildKvaShapeWorkflow());
+        var output = await RunDiagnose(card, BuildSharedColumnWorkflow());
 
         Assert.Contains("IN PROGRESS", output);
         Assert.Contains("Resolved state: In progress", output);
@@ -352,7 +352,7 @@ public class DiagnoseRunnerTests
             Labels: ["type:task"],
             Assignees: ["alice", "bob"]);
 
-        var output = await RunDiagnose(card, BuildKvaShapeWorkflow());
+        var output = await RunDiagnose(card, BuildSharedColumnWorkflow());
 
         Assert.Contains("Card 1: T", output);
         Assert.Contains("Column:    Ready", output);
@@ -375,7 +375,7 @@ public class DiagnoseRunnerTests
             Metadata: new Dictionary<string, string> { ["Activity"] = "Implementation" },
             Assignees: ["nicholas"]);
 
-        var output = await RunDiagnose(card, BuildKvaShapeWorkflow());
+        var output = await RunDiagnose(card, BuildSharedColumnWorkflow());
 
         // Headline must be the assignee fix, NOT field-mismatch, even though
         // the implementation state's assignee filter also fails.
@@ -409,7 +409,7 @@ public class DiagnoseRunnerTests
         // dependency policy is enabled and the blocker (#5) is not in a
         // satisfied column. Pre-fix, diagnose would say ELIGIBLE — confusing
         // because polling silently skips the card.
-        var workflow = BuildKvaShapeWorkflow() with
+        var workflow = BuildSharedColumnWorkflow() with
         {
             DependencyPolicy = new DependencyPolicy(
                 Enabled: true,
@@ -447,7 +447,7 @@ public class DiagnoseRunnerTests
     {
         // Diagnose is read-only. DependencyGuard.CheckAsync's blocked-comment
         // upsert and waitStore write must NOT fire from the diagnose path.
-        var workflow = BuildKvaShapeWorkflow() with
+        var workflow = BuildSharedColumnWorkflow() with
         {
             DependencyPolicy = new DependencyPolicy(
                 Enabled: true,
@@ -522,7 +522,7 @@ public class DiagnoseRunnerTests
         // (We can't easily cover this with the canned stub; use a tiny
         // throw-style stub that mimics 'card vanished'.)
         var board = new ThrowingBoard();
-        var workflow = BuildKvaShapeWorkflow();
+        var workflow = BuildSharedColumnWorkflow();
         var stdout = new StringWriter();
         var runner = new DiagnoseRunner(board, workflow, NullLogger.Instance, stdout);
 

@@ -292,7 +292,7 @@ public class CandidateExecutorFlowTests : IDisposable
         // under a "post-flight git diagnostics" rationale that nothing
         // actually used; over many runs this accumulated hundreds of
         // aiboard-cand/... branches in the operator's repo (the v0.0.22
-        // KvA field-report symptom). Splitting this from HappyPath keeps
+        // field-report symptom). Splitting this from HappyPath keeps
         // the failure-to-pinpoint clean: a break here means cleanup
         // regressed; a break in HappyPath means promotion regressed.
         var candidateExecutor = BuildExecutor(

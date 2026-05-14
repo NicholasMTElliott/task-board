@@ -12,7 +12,7 @@ Each subdirectory is a fresh-start scaffold for a new project. `aiboard --mode i
 
 ## What every template includes
 
-A KvA-shape workflow (single "Ready" column with an `Activity` field discriminator and an `assignee isEmpty` lock) running this pipeline:
+A shared-column example workflow (single "Ready" column with an `Activity` field discriminator and an `assignee isEmpty` lock) running this pipeline:
 
 ```
 Backlog → Ready[Design] → Ready[Implementation] → Ready[Review] → Ready[Test] → Ready[Merge] → Done
@@ -25,7 +25,7 @@ Each state runs **one agent per step** (no candidate-evaluation fan-out). The pr
 ## What's deliberately not in these templates
 
 - **Multi-candidate evaluation.** Useful for benchmarking models head-to-head but expensive. Add `candidates` + `evaluator` per step manually if you want it. See `docs/CandidateEvaluation.md`.
-- **Story decomposition (Tasking).** The KvA pipeline doesn't include a Ready-for-Tasking phase. If you want stories to spawn child tasks automatically (parent story → children → roll-up estimate / event-driven completion), see `workflow.story-decomposition.example.json` next to `aiboard.exe` for a complete worked pipeline. Diff it against your current `workflow.json` and merge the Tasking + Waiting-for-Tasks states, the `cardTypes` block, the `updateParentSum` / `completeParentIfReady` transition actions, and the type-label filters.
+- **Story decomposition (Tasking).** The default pipeline doesn't include a Ready-for-Tasking phase. If you want stories to spawn child tasks automatically (parent story → children → roll-up estimate / event-driven completion), see `workflow.story-decomposition.example.json` next to `aiboard.exe` for a complete worked pipeline. Diff it against your current `workflow.json` and merge the Tasking + Waiting-for-Tasks states, the `cardTypes` block, the `updateParentSum` / `completeParentIfReady` transition actions, and the type-label filters.
 - **Trello.** All three from-scratch templates assume GitHub Projects. Trello operators should hand-author or extend.
 
 ## Canonical `.gitignore` for `.aiboard/`

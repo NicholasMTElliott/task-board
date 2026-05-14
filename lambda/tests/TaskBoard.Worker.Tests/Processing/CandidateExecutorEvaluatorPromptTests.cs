@@ -255,7 +255,7 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
         // The evaluator's AgentExecutionContext must set SchemaOverride to
         // EvaluatorOutcomeSchema (or the OpenAI variant for codex). Without
         // this, the LLM uses the generic outcome schema and can omit
-        // winner_index — the v0.0.15 KvA bug.
+        // winner_index — the v0.0.15 example-project bug.
         var capturingEvaluator = new CapturingExecutor(AgentOutcome.COMPLETE,
             """
             ```json
@@ -374,7 +374,7 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
     {
         // v0.0.18 prose fallback. The model wrote a clear verdict in markdown
         // ("**Verdict: Candidate 1 wins**" + scoreboard with "**Winner.**") but
-        // skipped the structured winner_index field — the exact shape KvA card
+        // skipped the structured winner_index field — the exact shape example-project card
         // #3's v0.0.17 retry produced. Without the prose fallback this would
         // override to ERROR and lose the verdict; with it, candidate 1 is
         // recovered and promoted.
@@ -460,7 +460,7 @@ public class CandidateExecutorEvaluatorPromptTests : IDisposable
     [Fact]
     public async Task CommitMode_EvaluatorPromptContainsEachCandidateDiff_NotEmpty()
     {
-        // Regression guard for the v0.0.20 KvA card #3 bug. In commit-mode
+        // Regression guard for the v0.0.20 a downstream project card #3 bug. In commit-mode
         // candidate groups, the orchestrator commits each candidate's work
         // onto its own branch BEFORE the evaluator runs. So `git diff HEAD`
         // in the candidate worktree returns empty even though real work was

@@ -59,7 +59,7 @@ public class DockerCodexMountBuilderTests : IDisposable
     public async Task BuildAsync_CredPathExists_CreatesPerFileRoMounts_NotDirectoryRwMount()
     {
         // The headline regression guard: a single dir-level mount at
-        // /home/agent/.codex (RW) was the KvA failure shape — Codex
+        // /home/agent/.codex (RW) was the reported failure shape — Codex
         // CLI could not mkdir sessions/ inside it on Docker Desktop Windows.
         // The fix is per-file RO mounts.
         var hostCredDir = Path.Combine(_tempDir, ".codex");
@@ -374,10 +374,10 @@ public class DockerCodexMountBuilderTests : IDisposable
     }
 
     [Fact]
-    public async Task BuildAsync_KvAFailureShape_RegressionGuard()
+    public async Task BuildAsync_CodexCredentialMountFailureShape_RegressionGuard()
     {
         // Reproduces the exact set of files observed in the failing
-        // ~/.codex/ staging dir from the v0.0.22→v0.0.23 KvA report
+        // ~/.codex/ staging dir from the v0.0.22→v0.0.23 field report
         // (card 4 polling run). Pre-fix, every file shown here was
         // mounted RO, and Codex CLI's startup write to models_cache.json
         // and state_5.sqlite failed with "Read-only file system (os error 30)".

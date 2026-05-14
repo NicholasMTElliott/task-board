@@ -86,7 +86,7 @@ public class StartupConfigValidatorTests
     [Fact]
     public void GithubSectionPopulated_WithoutProviderSet_ProducesError()
     {
-        // KvA-class footgun: GitHubProjects:* set without BoardProvider=github
+        // known footgun: GitHubProjects:* set without BoardProvider=github
         // would silently become dead weight. Promoted to Error so operator must
         // explicitly resolve the contradiction at startup.
         var findings = StartupConfigValidator.Validate(Build(
@@ -224,7 +224,7 @@ public class StartupConfigValidatorTests
     [Fact]
     public void LegacyDockerSection_Populated_ProducesError()
     {
-        // KvA-class footgun: legacy Docker section ONLY binds to Claude executor.
+        // known footgun: legacy Docker section ONLY binds to Claude executor.
         // An operator who sets Docker:ImageName expecting it to apply to all
         // Docker executors gets a silently-partial result. Force migration.
         var findings = StartupConfigValidator.Validate(Build(
@@ -348,12 +348,12 @@ public class StartupConfigValidatorTests
         Assert.DoesNotContain(findings, f => f.Key.StartsWith("DockerAgents:Claude:PerformanceVolumes"));
     }
 
-    // ── Cross-cutting: KvA exact reproduction ────────────────────────────────
+    // ── Cross-cutting: legacy Docker config reproduction ────────────────────────────────
 
     [Fact]
-    public void KvAExactConfig_LegacyDockerWithDockerAgents_FailsStartup()
+    public void LegacyDockerConfig_LegacyDockerWithDockerAgents_FailsStartup()
     {
-        // The exact KvA setup that was the trigger for promoting these to errors:
+        // The exact legacy Docker setup that was the trigger for promoting these to errors:
         // legacy Docker.ImageName + DockerAgents:Claude/OpenCode/ClaudeQwen all set,
         // BoardProvider=github, AgentExecutor=docker-claude-cli.
         // Pre-fix: one warning that scrolled away in polling startup.
@@ -365,8 +365,8 @@ public class StartupConfigValidatorTests
             ("DockerAgents:Claude:TimeoutSeconds", "1800"),
             ("DockerAgents:OpenCode:TimeoutSeconds", "3600"),
             ("DockerAgents:ClaudeQwen:TimeoutSeconds", "3600"),
-            ("GitHubProjects:Owner", "NicholasMTElliott"),
-            ("GitHubProjects:Repo", "NicholasMTElliott/kva"),
+            ("GitHubProjects:Owner", "owner"),
+            ("GitHubProjects:Repo", "owner/repo"),
             ("GitHubProjects:ProjectNumber", "4")));
 
         Assert.False(StartupConfigValidator.LogAndMaybeExit(

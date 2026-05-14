@@ -595,7 +595,7 @@ public class PrerequisiteValidatorTests
     {
         // Future operator-managed aiboard-* containers (or typos) must NOT be
         // treated as orphans. This is the regression guard for the original
-        // KvA bug: aiboard-grafana / aiboard-postgres flagged as orphans.
+        // example-project bug: aiboard-grafana / aiboard-postgres flagged as orphans.
         const string rawOutput =
             "aiboard-prometheus\n" +
             "aiboard-some-future-service\n";

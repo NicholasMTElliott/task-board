@@ -9,7 +9,7 @@ namespace TaskBoard.Worker.Processing;
 /// first mismatch in plain English.
 ///
 /// <para>
-/// Targets the most-asked operator question on the simplified KvA-shape
+/// Targets the most-asked operator question on the simplified shared-column example
 /// workflow: card sitting in <c>Ready</c> with someone still assigned to it,
 /// or with the wrong <c>Activity</c> field value, or in a holding column the
 /// operator forgot about.

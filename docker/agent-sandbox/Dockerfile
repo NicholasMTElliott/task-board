@@ -13,7 +13,7 @@
 #                        validated against — bleeding-edge defaults bit us
 #                        repeatedly with silent wire-shape changes (see
 #                        memory-bank/systemPatterns.md "Codex Executor Defensive
-#                        Diagnostics" and the eve issue #9 ~/.claude.json
+#                        Diagnostics" and the downstream issue #9 ~/.claude.json
 #                        regression). Bumping requires the version-pin dance
 #                        documented in docs/CliVersionTesting.md: capture
 #                        fixture, run parser-corpus tests, bump

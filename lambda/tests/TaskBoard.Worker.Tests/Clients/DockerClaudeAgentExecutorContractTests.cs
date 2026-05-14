@@ -49,7 +49,7 @@ public class DockerClaudeAgentExecutorContractTests : AgentExecutorContractTests
 
     /// <summary>
     /// Claude CLI 2.1.x emits its rate-limit signal in stdout NDJSON, NOT stderr.
-    /// Production failure shape from KvA project (cards 6/10/12, 2026-05-10): exit
+    /// Production failure shape from example-project project (cards 6/10/12, 2026-05-10): exit
     /// code 1, empty stderr, only init + rejected rate_limit_event in stdout.
     /// Pre-fix this got classified as AGENT_ERROR; this test pins the corrected
     /// classification to RATE_LIMIT.

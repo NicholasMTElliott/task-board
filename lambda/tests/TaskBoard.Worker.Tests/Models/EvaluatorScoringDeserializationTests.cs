@@ -10,7 +10,7 @@ namespace TaskBoard.Worker.Tests.Models;
 /// <c>"WinnerWithScores"</c> with
 /// <c>JsonException: The JSON value could not be converted to EvaluatorScoring</c> —
 /// despite every Agent.md and docs/CandidateEvaluation.md example using the
-/// string spelling. KvA hit this on a real workflow config and crashed at
+/// string spelling. example-project hit this on a real workflow config and crashed at
 /// load time.
 /// </summary>
 public class EvaluatorScoringDeserializationTests
@@ -58,7 +58,7 @@ public class EvaluatorScoringDeserializationTests
     [InlineData("WinnerWithScores", EvaluatorScoring.WinnerWithScores)]
     [InlineData("WinnerOnly",       EvaluatorScoring.WinnerOnly)]
     // Case-insensitive matching is the default for JsonStringEnumConverter,
-    // so all of these must round-trip too. KvA experimented with multiple
+    // so all of these must round-trip too. example-project experimented with multiple
     // casings to debug the original crash; this pins that behavior.
     [InlineData("winnerWithScores", EvaluatorScoring.WinnerWithScores)]
     [InlineData("winneronly",       EvaluatorScoring.WinnerOnly)]

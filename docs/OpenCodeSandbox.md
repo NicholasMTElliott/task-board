@@ -224,7 +224,7 @@ This is guidance, not enforcement — the executor will run any role you point a
 
 When the stderr signature detector fires with one of the **fatal categories** — `Network`, `Auth`, `Config`, `Path` — the retry-on-malformed-output loop is bypassed. The executor immediately throws `CliInfrastructureException` (recorded as `INFRASTRUCTURE` failure-reason in `agent_run.failure_reason`).
 
-Why: re-prompting cannot recover an unreachable upstream, a rejected token, a missing provider key, or a wire-path mismatch. Without this, a single 502 from llama-server during a polling run could burn 3 × the inactivity timer (~60 min on default settings) before surfacing — a real cost observed in the v0.0.22 KvA run that prompted this fix.
+Why: re-prompting cannot recover an unreachable upstream, a rejected token, a missing provider key, or a wire-path mismatch. Without this, a single 502 from llama-server during a polling run could burn 3 × the inactivity timer (~60 min on default settings) before surfacing — a real cost observed in the v0.0.22 example-project run that prompted this fix.
 
 `Model` (e.g. "model not found") is intentionally NOT in the fatal list, since a model could be loaded mid-run on a slow-starting llama-server. Retries continue for that case.
 

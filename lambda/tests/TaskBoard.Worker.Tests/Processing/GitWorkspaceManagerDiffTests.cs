@@ -8,7 +8,7 @@ namespace TaskBoard.Worker.Tests.Processing;
 /// Pins the contract that <see cref="GitWorkspaceManager.GetDiffSummaryAsync"/>
 /// can diff against an arbitrary base ref instead of always against HEAD.
 ///
-/// Headline regression target: the v0.0.20 KvA card #3 bug where a candidate
+/// Headline regression target: the v0.0.20 a downstream project card #3 bug where a candidate
 /// group's evaluator received empty diffs despite each candidate having
 /// committed real work. Same root cause hits the gate check after a candidate
 /// promotion's <c>git reset --hard</c> resets the canonical working tree to

@@ -154,7 +154,7 @@ internal static class AgentSchemas
     /// <c>winner_index</c> is always required and typed <c>["integer", "null"]</c>
     /// — a strictly stronger constraint than the prior <c>if</c>/<c>then</c>
     /// formulation, which Claude CLI's <c>--json-schema</c> treated as a soft
-    /// hint rather than enforcing at the wire level (KvA v0.0.16 field report).
+    /// hint rather than enforcing at the wire level (example-project v0.0.16 field report).
     /// "Always required" is reliably honoured across providers; "required when X"
     /// is not. Parser-side defense in
     /// <see cref="TaskBoard.Worker.Processing.CandidateExecutor"/> rejects

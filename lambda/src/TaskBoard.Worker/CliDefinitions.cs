@@ -173,7 +173,7 @@ internal static class CliDefinitions
     /// or the help-flag set. AddCommandLine silently ignores unknown flags,
     /// which means a typo like <c>--validate</c> falls through to whatever
     /// <c>Mode</c> is set in appsettings.user.json (e.g. polling mode), which
-    /// is exactly the v0.0.15 surprise KvA hit. Call this immediately after
+    /// is exactly the v0.0.15 surprise example-project hit. Call this immediately after
     /// AddCommandLine and exit early on a non-empty report.
     /// </summary>
     public static UnknownFlagsReport ValidateKnownFlags(string[] args)

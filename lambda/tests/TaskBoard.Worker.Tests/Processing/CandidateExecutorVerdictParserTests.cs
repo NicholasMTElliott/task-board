@@ -12,7 +12,7 @@ namespace TaskBoard.Worker.Tests.Processing;
 /// (3) prose patterns in detail markdown.
 ///
 /// <para>
-/// The whole reason this exists: KvA card #3 v0.0.16/17 evaluator runs
+/// The whole reason this exists: a downstream project card #3 v0.0.16/17 evaluator runs
 /// produced clear verdicts in markdown ("Candidate 1 wins", scoreboard
 /// with "**Winner.**") but skipped the structured winner_index field,
 /// and the orchestrator routed to ERROR because it only knew how to
@@ -99,7 +99,7 @@ public class CandidateExecutorVerdictParserTests
     [Fact]
     public void ProseExtractor_RecoversWinnerFromScoreboardWinnerMarker()
     {
-        // The exact shape KvA card #3's v0.0.17 evaluator produced.
+        // The exact shape a downstream project card #3's v0.0.17 evaluator produced.
         var detail =
             "## Verdict\n\n" +
             "Candidate 1 had the better implementation map.\n\n" +

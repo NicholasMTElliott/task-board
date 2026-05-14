@@ -151,7 +151,7 @@ public class ValidationRunnerTests
     public async Task DockerProbeReportsMissingImage_EmitsWarning_NotError()
     {
         // A workflow that registers docker-opencode in candidates but the
-        // image isn't built locally — KvA's v0.0.15 reproduction. Validation
+        // image isn't built locally — example-project's v0.0.15 reproduction. Validation
         // should warn (not error) so the operator sees the problem before
         // running a card.
         var cfg = new WorkflowConfig(

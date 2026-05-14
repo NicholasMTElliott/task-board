@@ -878,7 +878,7 @@ public class AgentRunnerRerunRedesignTests : IDisposable
     [Fact]
     public async Task CandidateGroup_NeedsInfoWinner_RoutesToQuestions_WithoutFallbackSlot()
     {
-        // Regression guard for KvA #6: NEEDS_INFO candidates are successful
+        // Regression guard for example-project #6: NEEDS_INFO candidates are successful
         // candidates for evaluator ranking. If the evaluator picks one, the
         // AgentRunner slot loop must surface NEEDS_INFO and stop; it must NOT
         // treat the slot as failed and fall through to a fallback slot.

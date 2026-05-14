@@ -7,7 +7,7 @@ namespace TaskBoard.Worker.Tests.Processing;
 /// <summary>
 /// Pins the <c>.aiboard/git-mode-changes.txt</c> manifest contract.
 ///
-/// Motivating case: KvA issue #13 (CRLF line endings in shell scripts).
+/// Motivating case: the executable-bit issue (CRLF line endings in shell scripts).
 /// The implementer agent ran inside Docker (Linux) and chmod-ed scripts
 /// executable, but the orchestrator's <c>git add . &amp;&amp; git commit</c>
 /// runs on the Windows host where NTFS doesn't store the executable bit
@@ -55,7 +55,7 @@ public class GitWorkspaceManagerModeManifestTests : IDisposable
     [Fact]
     public async Task CommitAsync_WithPlusXManifest_SetsExecutableBitInIndex()
     {
-        // Headline regression target: the KvA #13 failure mode.
+        // Headline regression target: the the executable-bit failure mode.
         File.WriteAllText(Path.Combine(_repoRoot, "script.sh"), "#!/usr/bin/env bash\necho hi\n");
         WriteManifest("+x script.sh\n");
 

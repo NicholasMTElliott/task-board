@@ -129,7 +129,7 @@ public class CodexAgentExecutorDiagnosticsTests
     [Fact]
     public async Task ExecuteAsync_NonZeroExitWithParseableStdout_ReturnsParsedResult()
     {
-        // KvA card #3 v0.0.17 retry: a Codex candidate produced clean structured
+        // a downstream project card #3 v0.0.17 retry: a Codex candidate produced clean structured
         // output (outcome=COMPLETE, all tests passed) but the CLI exited
         // non-zero because of a transient network blip in a side request. The
         // old executor threw the run away despite the good stdout. v0.0.18:
@@ -226,7 +226,7 @@ public class CodexAgentExecutorDiagnosticsTests
         var (workspace, promptFile) = NewWorkspace();
         try
         {
-            // Reproduces the v0.0.16 KvA field-report shape: a typical Codex run
+            // Reproduces the v0.0.16 field-report shape: a typical Codex run
             // emits thread.started, several reasoning item.completed events, and
             // a final item.completed agent_message carrying the JSON.
             var outcomeJson = """{"outcome":"COMPLETE","detail":"All checks passed."}""";
