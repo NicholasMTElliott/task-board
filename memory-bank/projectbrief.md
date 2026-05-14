@@ -21,14 +21,13 @@ A single founder/operator can place a card in a "Ready for" column on their kanb
 - Gate checks after design, implementation, and test steps
 - Optional specialist-reviewer steps triggered by gate checks
 - Blocking dependencies between tickets; blocked cards are skipped/refused until blockers are satisfied
-- Single board, single operator
+- Multi-agent candidate evaluation: parallel candidate branches per step with evaluator-selected promotion
+- Single active board per worker process; multi-tenant DB partitioning lets multiple projects share one Postgres instance
 
 ### Out of Scope (v1)
 - Webhook-triggered automation (currently manual CLI invocation or polling)
-- Parallel agent branches
 - SLA timers / retry policies
 - State replay
-- Multi-board / multi-tenant support
 - Mission Control dashboard
 - Complex RBAC
 - Autonomous production deployment

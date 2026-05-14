@@ -65,7 +65,8 @@ Example (in `appsettings.user.json`):
       "ReuseContainer": true,
       "NetworkMode": "host",
       "MountHostDockerSocket": false,
-      "TimeoutSeconds": 900,
+      "TimeoutSeconds": 7200,
+      "InactivityTimeoutSeconds": 1200,
       "MaxBudgetUsd": 10.00,
       "PerformanceVolumes": []
     }
@@ -88,7 +89,8 @@ Example (in `appsettings.user.json`):
 | `CredentialPath` | *(auto `~/.claude`)* | Source for the per-run staged RW copy mounted into the container (so the Claude CLI can create `session-env/` at runtime). Host `~/.claude/` is never written to by the agent. Large subdirs (`projects`, `shell-snapshots`, `todos`, `history`) are skipped during the copy. |
 | `CredentialMountPoint` | `/home/agent/.claude` | Container-side target for the staged credentials. Matches the `agent` user's home directory in the default sandbox image. |
 | `PromptMountPoint` | `/mnt/aiboard/prompts` | Read-only mount for system-prompt files. |
-| `TimeoutSeconds` | `900` | Kill container after N seconds |
+| `TimeoutSeconds` | `7200` | Hard wall-clock cap |
+| `InactivityTimeoutSeconds` | `1200` | Stuck detector; kills the process when no stdout/stderr has appeared for N seconds. Set null to disable. |
 | `MaxBudgetUsd` | `10.00` | Per-invocation Claude CLI budget |
 | `AdditionalMounts` | `{}` | Extra `-v host:container[:ro]` mounts |
 | `PerformanceVolumes` | `[]` | Workspace-relative dependency/cache directories to shadow with Docker named volumes. Use for reproducible hot paths such as `node_modules`, `.pnpm-store`, `.gradle`, `target`, or `.godot/imported`. Do not use for source or generated artifacts that must be committed. |

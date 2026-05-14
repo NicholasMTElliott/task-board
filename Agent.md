@@ -180,7 +180,8 @@ Most operators will only edit a small subset of keys. A complete annotated examp
   // (auto-resolved if "claude" is on PATH).
   "ClaudeCli": {
     "ExecutablePath": "claude",                  // auto-detected: claude.cmd → claude.exe
-    "TimeoutSeconds": 900,
+    "TimeoutSeconds": 7200,                      // hard cap; inactivity is the normal stuck detector
+    "InactivityTimeoutSeconds": 1200,
     "MaxBudgetUsd": 10.00,
     "MaxTurns": 0                                // 0 = unlimited (preferred)
   },
@@ -191,7 +192,8 @@ Most operators will only edit a small subset of keys. A complete annotated examp
       "ImageName": "aiboard-agent-sandbox:latest",
       "ContainerNamePrefix": "aiboard-run",
       "ReuseContainer": true,                    // session-reuse across steps (faster)
-      "TimeoutSeconds": 900,
+      "TimeoutSeconds": 7200,
+      "InactivityTimeoutSeconds": 1200,
       "MaxBudgetUsd": 10.00,
       "NetworkMode": "host",                     // host | llm-net | task-board_default | <other>
       "MemoryLimit": null,                       // e.g. "4g"
@@ -218,7 +220,8 @@ Most operators will only edit a small subset of keys. A complete annotated examp
       "ProviderBaseUrl": "http://llama-server:8080/v1",  // /v1 suffix REQUIRED
       "AuthToken": "local",                      // dummy; llama.cpp validates nothing
       "ModelName": "qwen3.6-35b-a3b",            // default; per-role model overrides this
-      "TimeoutSeconds": 600,
+      "TimeoutSeconds": 7200,
+      "InactivityTimeoutSeconds": 1200,
       "MaxRetriesOnMalformedOutput": 2,
       "EnableStructurer": true,                  // v0.0.22+: one-shot no-think structurer fallback on parse failure
       "StructurerModelName": "qwen3.6-35b-a3b",  // structurer always uses no-think (mechanical extraction)
@@ -240,7 +243,8 @@ Most operators will only edit a small subset of keys. A complete annotated examp
       "AuthToken": "local",
       "ModelName": "qwen3.6-35b-a3b",
       "MaxBudgetUsd": 50.00,
-      "TimeoutSeconds": 600,
+      "TimeoutSeconds": 7200,
+      "InactivityTimeoutSeconds": 1200,
       "DisableAttributionHeader": true,          // keeps llama.cpp prefix cache warm
       "DisableNonessentialTraffic": true,        // suppresses telemetry pings to api.anthropic.com
       "PerformanceVolumes": [],
@@ -251,7 +255,8 @@ Most operators will only edit a small subset of keys. A complete annotated examp
   // Required only when a role uses provider=codex (legacy/secondary path)
   "CodexCli": {
     "ExecutablePath": "codex",
-    "TimeoutSeconds": 900,
+    "TimeoutSeconds": 7200,
+    "InactivityTimeoutSeconds": 1200,
     "FullAuto": true,
     "Sandbox": null,                             // workspace-write | read-only | docker-network | null
     "Yolo": false,
@@ -622,8 +627,8 @@ Both executors target the same llama.cpp proxy (`local-llm` sibling project) via
 
 **Honest caveats** (from the `local-llm/Qwen-3.6.md` model card):
 - Below Claude Opus on architecture reasoning (SWE-Bench 73.4% vs 80.8%). Don't use for irreversible architectural calls without human review.
-- First request after `docker compose up` or long idle takes 30–120s (cold prefix cache). `TimeoutSeconds: 600` is sized for this.
-- Single concurrent slot — `local-llm`'s `llama-server` runs `--parallel 1`. Two agents hitting it concurrently destroy each other's prefix caches. Polling mode runs one card at a time, which matches.
+- First request after `docker compose up` or long idle takes 30–120s (cold prefix cache). Defaults are `TimeoutSeconds: 7200` hard cap plus `InactivityTimeoutSeconds: 1200` stuck detection.
+- Single concurrent slot — `local-llm`'s `llama-server` runs `--parallel 1`. Use the `local-llm` resource pool (§10.3) when multiple providers can hit it concurrently.
 - Occasional hallucinated identifiers in the `-think` mode. Verify before code-gen acts on names.
 
 ---
@@ -810,25 +815,25 @@ The single `candidates[]` + `evaluator` shape (above) is now also available as a
 
 When a card returns from a Questions column for a re-run, every step in the state would re-execute from scratch by default — including ones that already completed successfully on the first pass. For multi-step states (design has 4 steps; impl has 2; test has 2), that wastes minutes and tokens on cycles that have nothing new to add.
 
-The runtime detects re-runs automatically and prepends a "RE-RUN; bail with COMPLETE if nothing relevant changed" preamble to the agent's task prompt. The agent reads its prior output (embedded in the preamble) and the latest comments (which include the user's clarification), then either:
+The runtime detects unchanged completed steps mechanically before invoking the agent. `RerunCacheGate` hashes the operator-authored input bundle and the step's managed section, compares those hashes to the most recent canonical `COMPLETE` `step_result`, then either:
 
-- Confirms with `outcome: COMPLETE` and `detail: "Confirmed prior output remains accurate."` in seconds, or
-- Produces a refreshed output that incorporates the new context.
+- Skips the LLM call, reuses the prior output summary, records `execution_kind = "cache_hit"`, and posts a `kind:cache_hit` aiboard-log comment, or
+- Runs the step normally and records fresh hashes for future re-runs.
 
-**No config knobs.** This is automatic for every step type — single-agent steps, candidate groups, gate checks, optional specialist reviewers, and the evaluator itself. The agent decides what's relevant; the orchestrator just frames the question.
+**No config knobs.** This is automatic for single-agent steps and candidate-group steps. The orchestrator decides from hashes; the deleted `RerunPreambleBuilder` LLM-judgment path is no longer used.
 
 **Detection criteria (both must hold):**
 
-1. The step's marker is on the card (e.g. `<!-- agent-step:create_design -->`, `<!-- gate-check:Ready for Design -->`, `<!-- agent-step:optional:security_review -->`).
-2. The most recent `step_result` row for this `(card, state, step)` from a *prior* run (excluding the in-flight one) has `outcome = COMPLETE`. Prior `NEEDS_INFO` or `ERROR` outcomes don't qualify — those need to re-run normally.
+1. The most recent canonical `step_result` row for this `(card, state, step)` has `outcome = COMPLETE`.
+2. The current input-bundle hash and managed-section hash match the stored `input_hash` and `section_output_hash`.
 
-**Force a fresh re-run.** Delete the step's comment from the card before moving the card back to "Ready for X". With the marker gone, the preamble is suppressed and the step runs from scratch. This is operator-controllable per-step: keep the comments for steps that don't need refreshing, delete the ones that should re-evaluate.
+**Force a fresh re-run.** Edit an operator-authored input that participates in the hash: the description prefix before managed sections, a non-`aiboard-log` comment, workflow JSON, system prompt file, task prompt file, or the step's managed section. Deleting an agent-generated `aiboard-log` comment does not invalidate the cache.
 
-**The previously-NEEDS_INFO step always runs fully.** The step that asked the questions in the prior run gets no fast-path preamble — it needs to consider the operator's answers from scratch.
+**The previously-NEEDS_INFO step always runs fully.** Prior `NEEDS_INFO` rows do not qualify for cache reuse, so the step re-runs after the operator answers.
 
-**Logged signals.** Look for `Re-run preamble injected for step '...' on card N` (Information level) to verify the fast-path is firing. Absence of the log line on a re-run means: marker not found on card, OR prior outcome wasn't COMPLETE, OR DB drift (also logs a Warning in the last case).
+**Logged signals.** Cache hits post a `kind:cache_hit` aiboard-log comment and surface in `v_cache_hit_rate` / `--mode metrics`.
 
-**No re-run preamble for first runs.** When there's no prior comment marker on the card, the step runs identically to today. The fast-path is purely additive.
+**No cache hit for first runs.** When no prior canonical `COMPLETE` row exists, the step runs normally.
 
 ---
 
@@ -878,7 +883,7 @@ Local-LLM rows (e.g. `docker-opencode`, `docker-claude-qwen`) have null cost (no
 Two new sections supplement this:
 
 - **Evaluator Reliability** — per-`(evaluator-role, provider)` regression rate. When a candidate winner fails the same run's gate check, it's flagged `winner_regressed = true`; the rate column is the share of evaluator verdicts whose pick didn't survive scrutiny.
-- **Re-run Fast-Path Hit Rate** — per-`(state, step, role, provider)` share of re-run preamble injections that actually short-circuited (agent returned COMPLETE without redoing work).
+- **Cache Hit Rate** — per-`(state, step, role, provider)` share of step invocations skipped by the deterministic re-run cache (`execution_kind = "cache_hit"`).
 
 Sections are suppressed when their underlying tables are empty.
 
@@ -1074,7 +1079,7 @@ Use the per-(role, provider) data to refine routing. If a role's win rate drops,
 | Flyway migration aborts with "cannot change name of view column" | A `CREATE OR REPLACE VIEW` is reordering columns. | Add `DROP VIEW IF EXISTS <name>;` immediately before it. |
 | Card stuck in "Designing" / "Implementing" after a crash | Orchestrator died between IN_PROGRESS and COMPLETE. | Manually drag back to the "Ready for X" column to retry. |
 | `ApplicationException: rate limited` then retry | Rate limit detected from CLI stderr (`AgentCli`) or board API (`BoardApi`). | Wait — `PollingRunner` backs off 30 min for CLI, 2 min for board. |
-| Qwen first request takes 60+ seconds | Cold prefix cache. Normal. | `TimeoutSeconds: 600` in DockerAgents:OpenCode / DockerAgents:ClaudeQwen. |
+| Qwen first request takes 60+ seconds | Cold prefix cache. Normal. | Defaults are `TimeoutSeconds: 7200` hard cap and `InactivityTimeoutSeconds: 1200` stuck detection in DockerAgents:OpenCode / DockerAgents:ClaudeQwen. |
 | Two concurrent candidates against Qwen are slow / time out | `local-llm` server is `--parallel 1`. Concurrent calls bust the prefix cache; the second waits and may hit the inactivity timer. | Configure the `local-llm` resource pool (§10.3) and tag both `docker-opencode` and `docker-claude-qwen` to it. With `MaxConcurrent: 1`, the second candidate waits cleanly on the semaphore. **Required** for any project that pairs both Qwen-target providers in a candidate slot. |
 | OpenCode keeps returning ERROR with raw stdout | Model isn't producing parseable JSON; bounded retry exhausted. **Check the structurer ran** — startup logs `Docker/OpenCode invoking structurer for card N` on first parse failure (v0.0.22+). If the structurer also failed, look for `falling through to retry loop` followed by `OpenCode CLI produced no parseable Agent Contract JSON after N attempts`. | Check `CliFailureHintDetector.OpenCodeSignatures` matches in logs. May indicate model misconfiguration or upstream rate-limit on the proxy. If the agent's narrative looks correct but doesn't end with JSON, the structurer should be recovering it — verify `EnableStructurer: true` in `DockerAgents:OpenCode`. |
 | `Schema validation` stderr from Claude / Codex | Schema mismatch between the CLI version and what `AgentSchemas.OutcomeSchema` expects. | Update the CLI image; check schema SHA in startup logs. |

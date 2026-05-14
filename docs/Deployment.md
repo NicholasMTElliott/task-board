@@ -367,5 +367,5 @@ dotnet run --project lambda/src/TaskBoard.Worker -- --help
 - Check that migrations V1-V11 are all applied.
 
 **Agent process hangs or times out**
-- Default agent timeout is 1800s (30 min). Check `ClaudeCli__TimeoutSeconds`.
+- Default hard timeout is 7200s (2h); default inactivity timeout is 1200s (20 min). Check `ClaudeCli__TimeoutSeconds` and `ClaudeCli__InactivityTimeoutSeconds`.
 - Ensure `claude` CLI is installed and authenticated: `claude --version`.

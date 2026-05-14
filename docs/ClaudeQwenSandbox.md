@@ -82,7 +82,8 @@ The `AttributionHeader=off` and `NonessentialTraffic=off` lines confirm the cach
       "AuthToken": "local",
       "ModelName": "qwen3.6-35b-a3b",
       "MaxBudgetUsd": 50.00,
-      "TimeoutSeconds": 600,
+      "TimeoutSeconds": 7200,
+      "InactivityTimeoutSeconds": 1200,
       "DisableAttributionHeader": true,
       "DisableNonessentialTraffic": true,
       "PerformanceVolumes": []
@@ -102,7 +103,8 @@ The `AttributionHeader=off` and `NonessentialTraffic=off` lines confirm the cach
 | `AuthToken` | `local` | llama.cpp accepts any non-empty token; this is a local dummy. |
 | `ModelName` | `qwen3.6-35b-a3b` | **Default** model when the workflow role doesn't pin one. Per-role `model` overrides this. |
 | `MaxBudgetUsd` | `50.00` | Per-call cost ceiling forwarded as `--max-budget-usd`. Generous since Qwen is free; the flag is still set so we exercise the same code path as real-Anthropic runs. |
-| `TimeoutSeconds` | `600` | Cold prefix cache on first request can take 1–2 min. |
+| `TimeoutSeconds` | `7200` | Hard wall-clock cap. The inactivity timer is the normal stuck detector. |
+| `InactivityTimeoutSeconds` | `1200` | Stuck detector; kills the process when no stdout/stderr has appeared for N seconds. Set null to disable. |
 | `DisableAttributionHeader` | `true` | Sets `CLAUDE_CODE_ATTRIBUTION_HEADER=0` so the CLI doesn't change request headers per call (which busts the prefix cache). Recommended on per the model card. |
 | `DisableNonessentialTraffic` | `true` | Sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` so the CLI doesn't ping `api.anthropic.com` for telemetry / feature flags. |
 | `ContainerNamePrefix` | `aiboard-cq` | Prefix on container names: `aiboard-cq-{tenantHash}-{cardId}-{rand}`. |
@@ -168,7 +170,17 @@ The evaluator picks a winner per run; per-(role, provider) win rate, average qua
 
 See [docs/CandidateEvaluation.md](CandidateEvaluation.md) for the full mechanics.
 
-**A note on serialisation**: both candidates target the same `llama-server`, which runs with `--parallel 1`. The candidate executor runs candidates sequentially (not in parallel) per step, so this is fine — but if you ever change that, two concurrent candidate calls would destroy each other's prefix caches and force full prompt reprocessing on every turn.
+**A note on shared local LLM capacity**: candidate execution is fully parallel for all providers via one `Task.WhenAll`. Because `docker-opencode` and `docker-claude-qwen` can target the same `llama-server`, protect that backend with the named-resource pool instead of relying on provider ordering:
+
+```json
+"ResourcePool": {
+  "Pools": { "local-llm": { "MaxConcurrent": 1 } },
+  "ProviderResources": {
+    "docker-opencode": ["local-llm"],
+    "docker-claude-qwen": ["local-llm"]
+  }
+}
+```
 
 ---
 
@@ -183,7 +195,7 @@ See [docs/CandidateEvaluation.md](CandidateEvaluation.md) for the full mechanics
 
 ## 6. Known limitations
 
-- **Single-slot server.** `local-llm`'s `llama-server` runs with `--parallel 1`. Two concurrent agent invocations against the same server will destroy each other's prefix caches. The candidate executor serialises calls per step; orchestrator polling runs one card at a time.
+- **Single-slot server.** `local-llm`'s `llama-server` runs with `--parallel 1`. Candidate execution still starts all candidates in parallel; configure `ResourcePool` with `local-llm` / `MaxConcurrent: 1` to serialize only the shared backend calls. Orchestrator polling runs one card at a time.
 - **128K context ceiling.** llama.cpp is configured for 128K. Oversized prompts fail at the server boundary (stderr hint category `Model`).
 - **Claude CLI version drift.** The CLI evolves; flag changes between versions are caught by stderr-signature category `VersionDrift`. If you see this, the CLI image needs rebuilding against the same Claude CLI version your real-Anthropic `docker-claude-cli` runs on, so the two stay aligned.
 - **No session reuse (yet).** The real-Anthropic `docker-claude-cli` supports `IAgentExecutorSession` for multi-step container reuse; this Qwen-target variant does not. Each step spawns a new container. Reasonable for the candidate-evaluation use case (each candidate uses a different worktree mount anyway), but if you route this executor to non-candidate workflow roles you'll pay a fresh container startup per step. Add it if the latency matters.

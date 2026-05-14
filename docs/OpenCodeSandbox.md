@@ -81,7 +81,8 @@ Having the executor registered is not the same as using it — nothing routes to
       "ProviderBaseUrl": "http://llama-server:8080/v1",
       "AuthToken": "local",
       "ModelName": "qwen3.6-35b-a3b",
-      "TimeoutSeconds": 600,
+      "TimeoutSeconds": 7200,
+      "InactivityTimeoutSeconds": 1200,
       "MaxRetriesOnMalformedOutput": 2,
       "PerformanceVolumes": []
     }
@@ -99,7 +100,8 @@ Having the executor registered is not the same as using it — nothing routes to
 | `ProviderBaseUrl` | `http://llama-server:8080/v1` | OpenAI-compatible endpoint exposed by the local llama.cpp proxy. The `/v1` suffix is required — the OpenCode `@ai-sdk/openai-compatible` adapter appends `/chat/completions` to this prefix. |
 | `AuthToken` | `local` | Dummy token — llama.cpp validates nothing. Any non-empty string works. |
 | `ModelName` | `qwen3.6-35b-a3b` | **Default** model alias when a workflow role doesn't pin one. Both Qwen3.6 variants (`qwen3.6-35b-a3b` and `qwen3.6-35b-a3b-think`) are registered in the sandbox image; per-role `model` overrides this default. |
-| `TimeoutSeconds` | `600` | Cold prefix cache on first request can take 1–2 min. Keep the timeout generous. |
+| `TimeoutSeconds` | `7200` | Hard wall-clock cap. The inactivity timer is the normal stuck detector. |
+| `InactivityTimeoutSeconds` | `1200` | Stuck detector; kills the process when no stdout/stderr has appeared for N seconds. Set null to disable. |
 | `MaxRetriesOnMalformedOutput` | `2` | Retry budget when the model response doesn't parse as Agent Contract JSON. After the final attempt, the executor returns `outcome: ERROR` with raw output in detail rather than throwing. **Bypassed for fatal stderr hints** — see "Fatal-hint short-circuit" below. **Preceded by a one-shot structurer call** on the first parse failure — see "No-think structurer fallback" below. |
 | `EnableStructurer` | `true` | When the agent's first invocation produces non-empty output that fails to parse as the Agent Contract JSON, run a one-shot follow-up call against `StructurerModelName` (no-think Qwen by default) asking it to extract the outcome from the prior narrative. Set to `false` to revert to the v0.0.22 behaviour: re-prompt the same model with a stricter instruction block. |
 | `StructurerModelName` | `qwen3.6-35b-a3b` | Model alias used by the recovery structurer. Defaults to the no-think variant — structuring is a fast mechanical extraction task where chain-of-thought is unhelpful. |
@@ -205,7 +207,7 @@ Two Qwen3.6 variants are exposed by the local-llm proxy as separate model aliase
 
 - Qwen3.6 is below Claude Opus on architecture reasoning (SWE-Bench 73.4% vs 80.8%). Don't use it for irreversible architectural calls without human review.
 - The `-think` variant occasionally hallucinates identifier names (e.g. invents `TowerNode` when the actual class is `Tower`). Verify before code-gen acts on these.
-- First request after `docker compose up` or long idle takes 30–120s (cold prefix cache). `TimeoutSeconds: 600` is sized for this.
+- First request after `docker compose up` or long idle takes 30–120s (cold prefix cache). Defaults are `TimeoutSeconds: 7200` hard cap plus `InactivityTimeoutSeconds: 1200` stuck detection.
 
 This is guidance, not enforcement — the executor will run any role you point at it. The multi-agent candidate evaluation feature ([docs/CandidateEvaluation.md](CandidateEvaluation.md)) is the data-driven path to replacing this table with measured win rates per (role, provider).
 
@@ -255,7 +257,7 @@ The structurer fires **only on the first parse failure**, never on subsequent re
 
 ## 8. Known limitations
 
-- **Single-slot server.** `local-llm`'s `llama-server` runs with `--parallel 1`. Two concurrent agent invocations against the same server will destroy each other's prefix caches and force full prompt reprocessing (~1–2 min). `--mode polling` runs one card at a time, which matches. For parallel loads, add a second `llama-server` on a different port and route explicitly.
+- **Single-slot server.** `local-llm`'s `llama-server` runs with `--parallel 1`. Candidate execution can start multiple Qwen-target providers in parallel; configure the `local-llm` named-resource pool with `MaxConcurrent: 1` when providers share the same backend. For true parallel local loads, add a second `llama-server` on a different port and route explicitly.
 - **Schema enforcement is prompt-engineered, not wire-enforced (today).** llama.cpp itself supports `response_format: {"type":"json_schema", ...}` server-side (per the model card), but the OpenCode CLI doesn't expose a flag to thread it through, so this executor relies on a schema instruction block in the prompt + client-side validation by `OpenCodeOutputParser` + bounded retry. This is less strict than Claude's `--json-schema` enforcement; if you see frequent parse failures on a specific role, the long-term fix is to extend OpenCode's CLI surface (or call llama.cpp directly) rather than scale the retry budget.
 - **128K context ceiling.** Local llama.cpp is configured for 128K. Oversized prompts fail at the server boundary (stderr hint `context length`).
 - **No credential staging.** Unlike the Claude sandbox, no host directory is mounted into the container — the connection detail is just env vars passed through to the entrypoint.

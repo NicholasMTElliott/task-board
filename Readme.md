@@ -446,9 +446,7 @@ Idle cost: $0. Costs scale only when an agent executes (LLM tokens are the prima
 
 - Webhook-triggered automation (currently manual CLI or polling)
 - PR creation automation
-- Parallel agent branches
 - SLA timers / retry policies
-- Multi-board / multi-tenant support
 - Visual dashboard
 
 ---

@@ -141,7 +141,7 @@ Every setting can be provided via any of the following (highest priority wins):
 | `--github-project <number>` | GitHub project number | from config |
 | `--claude-path <path>` | Path to Claude CLI executable | `claude` |
 | `--claude-max-budget <usd>` | Max budget in USD per invocation | `10.00` |
-| `--claude-timeout <secs>` | Claude CLI timeout in seconds | `900` |
+| `--claude-timeout <secs>` | Claude CLI hard wall-clock timeout in seconds | `7200` |
 
 ## Running multiple projects
 
