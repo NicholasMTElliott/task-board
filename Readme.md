@@ -301,7 +301,7 @@ See [QUICKSTART.md](QUICKSTART.md) for what to do after extracting.
 docker compose up -d
 ```
 
-This launches PostgreSQL on `localhost:5432`, runs Flyway migrations automatically, and starts a Grafana instance on `http://localhost:3000` (admin/admin) with a pre-provisioned metrics dashboard.
+This launches PostgreSQL on `localhost:5432`, runs Flyway migrations automatically, and starts a Grafana instance on `http://localhost:3000` (admin/admin) with a pre-provisioned metrics dashboard. Both ports are published on `127.0.0.1` only, so these default credentials are not reachable from other machines.
 The default connection string in `appsettings.json` connects to this local instance.
 
 ### Build the agent sandbox image (optional)
