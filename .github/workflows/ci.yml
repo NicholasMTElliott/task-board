@@ -1,15 +1,18 @@
 name: CI
 
+# PR branches are covered by pull_request; push is limited to mainline so a
+# same-repo PR branch doesn't run CI twice.
 on:
   push:
+    branches: [mainline]
   pull_request:
     branches: [mainline]
 
 permissions:
   contents: read
 
-# One run per PR (or per pushed ref). A new push to a PR cancels that PR's
-# stale run; push-triggered runs (including mainline) are never cancelled.
+# One group per PR, plus one for mainline pushes. A new push to a PR cancels
+# that PR's stale run; mainline push runs are never cancelled.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
