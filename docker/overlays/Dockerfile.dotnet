@@ -31,7 +31,9 @@ USER root
 ARG DOTNET_CHANNEL=10.0
 
 # libicu runtime is a hard requirement for the .NET runtime's globalization
-# layer. Bookworm (debian-slim ancestor of node:22-slim) ships libicu72.
+# layer. The sandbox images are pinned to node:24-bookworm-slim, and Debian
+# bookworm ships libicu72. The package name follows the Debian release: moving
+# the base to trixie means changing this to libicu76.
 # The dotnet-install.sh script does NOT pull OS-level dependencies, so we
 # install libicu before invoking it.
 RUN apt-get update \

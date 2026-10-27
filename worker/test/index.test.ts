@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { GenericContainer, type StartedTestContainer } from "testcontainers";
+import { GenericContainer, Wait, type StartedTestContainer } from "testcontainers";
 import { Client, types as pgTypes } from "pg";
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import {
   verifyTrelloWebhook,
@@ -25,9 +25,80 @@ pgTypes.setTypeParser(20, (val: string) => Number(val));
 
 const MIGRATIONS_DIR = join(__dirname, "..", "..", "db", "migrations");
 
-/** Read a migration SQL file by filename. */
-const readMigration = (filename: string): string =>
-  readFileSync(join(MIGRATIONS_DIR, filename), "utf-8");
+// Match the Postgres major used by docker-compose.yml.
+const POSTGRES_IMAGE = "postgres:17";
+
+/**
+ * All Flyway migrations (V<n>__name.sql) in version order. Sorted numerically,
+ * as Flyway does, so V10 runs after V9 rather than after V1.
+ *
+ * Any other .sql file fails loudly: Flyway also accepts names such as
+ * V1_1__x.sql, V1.1__x.sql and R__x.sql, and silently skipping one here would
+ * test a schema that differs from the deployed one. Teach this loader the new
+ * form before adding such a file.
+ */
+const listMigrations = (): string[] => {
+  const sqlFiles = readdirSync(MIGRATIONS_DIR).filter(name => /\.sql$/i.test(name));
+  const parsed = sqlFiles.map(name => ({ name, match: /^V(\d+)__.+\.sql$/.exec(name) }));
+  const unsupported = parsed.filter(m => m.match === null).map(m => m.name);
+  if (unsupported.length > 0) {
+    throw new Error(
+      `Unsupported migration file name(s) in ${MIGRATIONS_DIR}: ${unsupported.join(", ")}. ` +
+        "The test loader only understands V<integer>__<description>.sql."
+    );
+  }
+  return parsed
+    .sort((a, b) => Number(a.match![1]) - Number(b.match![1]))
+    .map(m => m.name);
+};
+
+interface TestDatabase {
+  container: StartedTestContainer;
+  client: Client;
+}
+
+/** Start Postgres, connect, and apply every migration in db/migrations. */
+async function startMigratedPostgres(): Promise<TestDatabase> {
+  const container = await new GenericContainer(POSTGRES_IMAGE)
+    .withExposedPorts(5432)
+    .withEnvironment({
+      POSTGRES_USER: "test",
+      POSTGRES_PASSWORD: "test",
+      POSTGRES_DB: "test",
+    })
+    // The entrypoint starts a temporary server for initdb, stops it, then
+    // starts the real one: only the second "ready" line means it's usable.
+    .withWaitStrategy(
+      Wait.forLogMessage(/database system is ready to accept connections/, 2)
+    )
+    .withStartupTimeout(120_000)
+    .start();
+
+  const client = new Client({
+    host: container.getHost(),
+    port: container.getMappedPort(5432),
+    user: "test",
+    password: "test",
+    database: "test",
+  });
+  await client.connect();
+
+  const migrations = listMigrations();
+  if (migrations.length === 0) {
+    throw new Error(`No migrations found in ${MIGRATIONS_DIR}`);
+  }
+  for (const migration of migrations) {
+    try {
+      await client.query(readFileSync(join(MIGRATIONS_DIR, migration), "utf-8"));
+    } catch (error) {
+      throw new Error(
+        `Migration ${migration} failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  return { container, client };
+}
 
 /**
  * Build a tagged-template SQL function backed by a real pg Client.
@@ -175,29 +246,7 @@ describe("enqueueWebhookEvent (real Postgres)", () => {
   let sql: SqlFunction;
 
   beforeAll(async () => {
-    container = await new GenericContainer("postgres:16")
-      .withExposedPorts(5432)
-      .withEnvironment({
-        POSTGRES_USER: "test",
-        POSTGRES_PASSWORD: "test",
-        POSTGRES_DB: "test",
-      })
-      .start();
-
-    client = new Client({
-      host: container.getHost(),
-      port: container.getMappedPort(5432),
-      user: "test",
-      password: "test",
-      database: "test",
-    });
-
-    await client.connect();
-
-    // Apply migrations needed for PGMQ
-    await client.query(readMigration("V1__processed_events.sql"));
-    await client.query(readMigration("V2__pgmq_core.sql"));
-    await client.query(readMigration("V3__pgmq_create_events_queue.sql"));
+    ({ container, client } = await startMigratedPostgres());
 
     sql = buildSqlFunction(client);
   });
@@ -369,27 +418,7 @@ describe("HTTP handler (integration)", () => {
   let handler: { fetch: (request: Request, env: Env) => Promise<Response> };
 
   beforeAll(async () => {
-    container = await new GenericContainer("postgres:16")
-      .withExposedPorts(5432)
-      .withEnvironment({
-        POSTGRES_USER: "test",
-        POSTGRES_PASSWORD: "test",
-        POSTGRES_DB: "test",
-      })
-      .start();
-
-    client = new Client({
-      host: container.getHost(),
-      port: container.getMappedPort(5432),
-      user: "test",
-      password: "test",
-      database: "test",
-    });
-
-    await client.connect();
-    await client.query(readMigration("V1__processed_events.sql"));
-    await client.query(readMigration("V2__pgmq_core.sql"));
-    await client.query(readMigration("V3__pgmq_create_events_queue.sql"));
+    ({ container, client } = await startMigratedPostgres());
 
     neonState.setSql(buildSqlFunction(client));
 
@@ -437,8 +466,8 @@ describe("HTTP handler (integration)", () => {
     expect(res.status).toBe(200);
   });
 
-  it("POST with valid card webhook returns 200 and enqueues", async () => {
-    // Stub fetch for Lambda kick (no kick URL configured, so it won't fire)
+  it("POST with valid card webhook returns 200 and enqueues a ping", async () => {
+    // No LAMBDA_KICK_URL configured, so no kick fires.
     const env = makeEnv();
     const body = JSON.stringify({
       action: { id: "int_act_1", data: { card: { id: "int_card_1" } } },
@@ -451,11 +480,14 @@ describe("HTTP handler (integration)", () => {
     expect(res.status).toBe(200);
     expect(json).toMatchObject({ accepted: true, actionId: "int_act_1" });
 
-    // Verify the message landed in the queue
+    // The handler enqueues a lightweight ping (not the full payload) on the
+    // pings queue (V7 migration); the consumer re-queries the board.
     const dbResult = await client.query(
-      `SELECT message FROM pgmq.q_events ORDER BY msg_id DESC LIMIT 1`
+      `SELECT message FROM pgmq.q_pings ORDER BY msg_id DESC LIMIT 1`
     );
-    expect(dbResult.rows[0].message.actionId).toBe("int_act_1");
+    expect(dbResult.rows).toHaveLength(1);
+    expect(dbResult.rows[0].message).toHaveProperty("source", "trello");
+    expect(dbResult.rows[0].message).toHaveProperty("ts");
   });
 
   it("POST with invalid signature returns 401", async () => {

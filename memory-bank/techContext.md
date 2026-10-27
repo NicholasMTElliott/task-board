@@ -15,7 +15,7 @@
 | Board provider (primary) | GitHub Projects v2 | `GitHubProjectsClient` via `gh` CLI (GraphQL + REST) |
 | Board provider (legacy) | Trello | `TrelloClient` via REST API |
 | Git isolation | Git worktrees | `GitWorkspaceManager` |
-| Agent sandbox image | `docker/agent-sandbox/Dockerfile` | node:22-slim + Claude CLI + git + ripgrep + curl + ca-certificates; non-root `agent`; base image / UID/GID configurable via build args |
+| Agent sandbox image | `docker/agent-sandbox/Dockerfile` | node:24-bookworm-slim + Claude CLI + git + ripgrep + curl + ca-certificates; non-root `agent`; base image / UID/GID configurable via build args |
 | Image download | `ImageDownloader` + named HttpClient | Bearer auth via `gh auth token` for GitHub user-attachment URLs |
 | Workflow config | `workflow.github.json` | File-based, selected via `WORKFLOW_CONFIG_PATH` |
 | Example workflow configs | `workflow.github.example.json`, `workflow.simple.example.json`, `workflow.story-decomposition.example.json` | Ship at install root via csproj `<Content Include>` |
@@ -23,7 +23,7 @@
 ### Edge / Ingestion (Legacy Queue Path)
 | Layer | Technology | Notes |
 |-------|------------|-------|
-| Webhook receiver | Cloudflare Worker (TypeScript) | Cost-first prototype ingress |
+| Webhook receiver | Cloudflare Worker (TypeScript) | Cost-first prototype ingress. `worker/`: Node 24 (`.nvmrc`; engines >=22.22), TypeScript 6.0, `@neondatabase/serverless` 1.x (HTTP `neon()` is tagged-template only). CI job `worker`: `npm ci` → `tsc --noEmit` → vitest (testcontainers `postgres:17`, applies every `db/migrations/V*__*.sql` in version order) → `wrangler deploy --dry-run` |
 | Event queue | PGMQ on Neon Postgres | SQL-only install |
 | Compute | AWS Lambda | C#/.NET runtime |
 

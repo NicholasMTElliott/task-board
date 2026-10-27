@@ -19,7 +19,7 @@ public sealed class DockerClaudeAgentOptions : DockerAgentOptionsBase
 
     public DockerClaudeAgentOptions()
     {
-        // Default image is the aiboard-agent-sandbox (node:22-slim + Claude CLI).
+        // Default image is the aiboard-agent-sandbox (node:24-bookworm-slim + Claude CLI).
         ImageName = "aiboard-agent-sandbox:latest";
     }
 

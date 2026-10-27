@@ -283,7 +283,7 @@ async function handleTrelloWebhook(
     return jsonResponse(200, { accepted: false, reason: "no_card", actionId });
   }
 
-  const sql = neon(env.NEON_DATABASE_URL) as SqlFunction;
+  const sql: SqlFunction = neon(env.NEON_DATABASE_URL);
 
   // Enqueue lightweight ping to the pings queue
   const pingQueue = env.PGMQ_PING_QUEUE_NAME ?? "pings";
@@ -372,7 +372,7 @@ async function handleGitHubWebhook(
     return jsonResponse(200, { accepted: false, reason: "non_edit_action", eventType, action });
   }
 
-  const sql = neon(env.NEON_DATABASE_URL) as SqlFunction;
+  const sql: SqlFunction = neon(env.NEON_DATABASE_URL);
   const pingQueue = env.PGMQ_PING_QUEUE_NAME ?? "pings";
 
   try {

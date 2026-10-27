@@ -11,7 +11,7 @@
     Docker bridge network).
 
 .PARAMETER BaseImage
-    Base Docker image to use. Defaults to node:22-slim.
+    Base Docker image to use. Defaults to node:24-bookworm-slim.
 
 .PARAMETER AgentUid
     UID for the non-root agent user inside the container. Defaults to 1000.
@@ -35,7 +35,7 @@
     .\scripts\build-opencode-sandbox.ps1 -BaseImage node:20-slim -Tag dev -NoCache
 #>
 param(
-    [string]$BaseImage = "node:22-slim",
+    [string]$BaseImage = "node:24-bookworm-slim",
     [int]$AgentUid = 1000,
     [int]$AgentGid = 1000,
     # Default mirrors the Dockerfile's ARG OPENCODE_CLI_VERSION pin.

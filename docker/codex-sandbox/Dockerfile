@@ -15,7 +15,7 @@
 # operator's session without ever mutating the host directory.
 #
 # Build args:
-#   BASE_IMAGE         - Base Docker image (default: node:22-slim)
+#   BASE_IMAGE         - Base Docker image (default: node:24-bookworm-slim)
 #   AGENT_UID          - UID for the non-root agent user (default: 1000)
 #   AGENT_GID          - GID for the non-root agent group (default: 1000)
 #   CODEX_CLI_VERSION  - npm version spec for @openai/codex.
@@ -24,7 +24,7 @@
 #                        DockerfilePolicyDriftTests fails CI if this
 #                        default exceeds CliVersionPolicy.MaxKnown.
 
-ARG BASE_IMAGE=node:22-slim
+ARG BASE_IMAGE=node:24-bookworm-slim
 FROM ${BASE_IMAGE}
 
 ARG AGENT_UID=1000
@@ -47,7 +47,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Remove any existing user at the target UID/GID to avoid conflicts.
-# node:22-slim ships a `node` user at UID 1000; delete it before
+# node:24-bookworm-slim ships a `node` user at UID 1000; delete it before
 # creating the `agent` user so the default args work without adjustment.
 RUN EXISTING_USER=$(getent passwd "${AGENT_UID}" | cut -d: -f1) \
     && if [ -n "${EXISTING_USER}" ]; then userdel -r "${EXISTING_USER}" 2>/dev/null || true; fi \

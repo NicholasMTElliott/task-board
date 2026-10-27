@@ -1,21 +1,54 @@
 name: CI
 
+# PR branches are covered by pull_request; push is limited to mainline so a
+# same-repo PR branch doesn't run CI twice.
 on:
   push:
+    branches: [mainline]
   pull_request:
     branches: [mainline]
 
 permissions:
   contents: read
 
+# One group per PR, plus one for mainline pushes. A new push to a PR cancels
+# that PR's stale run; mainline push runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
-      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           dotnet-version: '10.0.x'
       - run: dotnet restore task-board.sln
       - run: dotnet build task-board.sln --configuration Release --no-restore
       - run: dotnet test task-board.sln --configuration Release --no-restore --no-build --verbosity normal
+
+  # Cloudflare webhook worker (worker/). The integration tests start
+  # postgres:17 through testcontainers on the runner's Docker daemon.
+  worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version-file: worker/.nvmrc
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # Bundles the worker with esbuild as a deploy would, without uploading
+      # anything (needs no Cloudflare credentials).
+      - name: Bundle (dry run)
+        run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/worker-bundle"
