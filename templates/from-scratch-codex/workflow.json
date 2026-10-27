@@ -16,7 +16,7 @@
         { "type": "field",    "operator": "equals",  "field": "Activity", "value": "Design" },
         { "type": "assignee", "operator": "isEmpty" }
       ],
-      "providerParams": { "fullAuto": "true", "sandbox": "read-only" },
+      "providerParams": { "fullAuto": "true" },
       "steps": [
         {
           "name": "review_related_tickets",
@@ -140,7 +140,7 @@
         { "type": "field",    "operator": "equals",  "field": "Activity", "value": "Review" },
         { "type": "assignee", "operator": "isEmpty" }
       ],
-      "providerParams": { "fullAuto": "true", "sandbox": "read-only" },
+      "providerParams": { "fullAuto": "true" },
       "steps": [
         {
           "name": "code_review",

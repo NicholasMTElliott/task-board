@@ -71,8 +71,9 @@ public sealed class DockerCodexAgentOptions : DockerAgentOptionsBase
     public bool Yolo { get; set; } = true;
 
     /// <summary>
-    /// When true and <see cref="Yolo"/> is false, passes <c>--full-auto</c>.
-    /// Workspace-write sandbox + on-request approvals. Has no effect when
+    /// When true, <see cref="Yolo"/> is false and <see cref="Sandbox"/> is
+    /// unset, passes <c>--sandbox workspace-write</c> (what the removed
+    /// <c>--full-auto</c> flag meant for <c>codex exec</c>). Has no effect when
     /// <see cref="Yolo"/> is true (yolo supersedes).
     /// </summary>
     public bool FullAuto { get; set; }
@@ -80,7 +81,8 @@ public sealed class DockerCodexAgentOptions : DockerAgentOptionsBase
     /// <summary>
     /// Sandbox policy passed to <c>--sandbox</c> (e.g. "read-only",
     /// "workspace-write", "danger-full-access") when <see cref="Yolo"/> is
-    /// false. Null = use whatever <see cref="FullAuto"/> implies.
+    /// false. Takes precedence over <see cref="FullAuto"/>. Null = use
+    /// whatever <see cref="FullAuto"/> implies.
     /// </summary>
     public string? Sandbox { get; set; }
 

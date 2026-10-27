@@ -134,6 +134,19 @@ public class DockerCodexAgentExecutorTests
     }
 
     [Fact]
+    public void BuildCodexArgumentList_FullAutoWithoutYolo_EmitsWorkspaceWriteSandbox()
+    {
+        var executor = CreateExecutor(yolo: false, fullAuto: true);
+        var args = executor.BuildCodexArgumentList(CreateContext(), "/tmp/s.json");
+
+        Assert.DoesNotContain("--yolo", args);
+        Assert.DoesNotContain("--full-auto", args);
+        var idx = Array.IndexOf(args, "--sandbox");
+        Assert.True(idx >= 0);
+        Assert.Equal("workspace-write", args[idx + 1]);
+    }
+
+    [Fact]
     public void BuildCodexArgumentList_ProviderParamsOverrideYolo_False()
     {
         var executor = CreateExecutor(yolo: true);

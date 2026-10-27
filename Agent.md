@@ -257,8 +257,8 @@ Most operators will only edit a small subset of keys. A complete annotated examp
     "ExecutablePath": "codex",
     "TimeoutSeconds": 7200,
     "InactivityTimeoutSeconds": 1200,
-    "FullAuto": true,
-    "Sandbox": null,                             // workspace-write | read-only | docker-network | null
+    "FullAuto": true,                            // = --sandbox workspace-write when Sandbox is null
+    "Sandbox": null,                             // read-only | workspace-write | danger-full-access | null (wins over FullAuto)
     "Yolo": false,
     "RateLimitPatterns": [],
     "EnvVarsToRemove": []
@@ -606,8 +606,8 @@ Codex CLI accepts an explicit `--model` arg. The runtime passes it from the role
 | `gpt-5.3-codex` | Coding-tuned | Implementation tasks where you want a coding-specialised pretrain over generality |
 
 `providerParams` exposed for Codex execution:
-- `sandbox: workspace-write | read-only | docker-network` — sandbox policy (auto-warned if neither set)
-- `fullAuto: true | false` — full autonomy
+- `sandbox: read-only | workspace-write | danger-full-access` — sandbox policy passed as `--sandbox`; wins over `fullAuto`
+- `fullAuto: true | false` — shorthand for `sandbox: workspace-write` when `sandbox` is unset (codex-cli removed the `--full-auto` flag; task-board emits `--sandbox workspace-write` instead)
 - `yolo: true | false` — bypass all safety prompts (overrides `fullAuto` and `sandbox`)
 
 Workflow roles using `provider=codex` should pin one of `sandbox` / `yolo` / `fullAuto` in their `providerParams` — the workflow validator emits a warning otherwise.
@@ -651,7 +651,7 @@ If you copy `workflow.github.example.json` and adjust, you start with these role
 | `merge_resolver` | `claude-sonnet-4-6` | `claude-cli` | Merge conflict resolution | (none) |
 | `evaluator` | `claude-opus-4-6` | `claude-cli` | Picks winner in a multi-agent candidate group | (none) |
 
-> **`board_analyst` vs `senior_engineer` for `review_related_tickets`**: prior to v0.0.19 this step used `senior_engineer`, whose "design + testing" system-prompt context primed agents (especially Codex with `--full-auto`) to interrogate the codebase, run tests, and exercise the application during what should be a board-only scan. Real downstream runs took 8–12 minutes and one timed out. The dedicated `board_analyst` role pairs a haiku model with a system prompt that explicitly forbids code reading and subprocess execution; the same step now runs in well under a minute. **If you're using the candidate-evaluation feature for this step, also pin `"providerParams": { "sandbox": "read-only" }` on Codex candidates** — the role-level system prompt is advisory; the sandbox flag is enforced by the CLI.
+> **`board_analyst` vs `senior_engineer` for `review_related_tickets`**: prior to v0.0.19 this step used `senior_engineer`, whose "design + testing" system-prompt context primed agents (especially Codex with `fullAuto`) to interrogate the codebase, run tests, and exercise the application during what should be a board-only scan. Real downstream runs took 8–12 minutes and one timed out. The dedicated `board_analyst` role pairs a haiku model with a system prompt that explicitly forbids code reading and subprocess execution; the same step now runs in well under a minute. **If you're using the candidate-evaluation feature for this step, also pin `"providerParams": { "sandbox": "read-only" }` on Codex candidates** — the role-level system prompt is advisory; the sandbox flag is enforced by the CLI.
 
 **Adapt for cost / local routing**: swap `provider` values per the §7 table. Common patterns:
 

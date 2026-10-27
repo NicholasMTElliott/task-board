@@ -73,21 +73,26 @@ public class CodexAgentExecutorTests
     }
 
     [Fact]
-    public void BuildArgumentList_ContainsFullAutoFlag_WhenEnabled()
+    public void BuildArgumentList_FullAuto_EmitsWorkspaceWriteSandbox()
     {
         var executor = CreateExecutor(fullAuto: true);
         var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json");
 
-        Assert.Contains("--full-auto", args);
+        // codex-cli 0.156 rejects --full-auto; the replacement is --sandbox workspace-write.
+        Assert.DoesNotContain("--full-auto", args);
+        var idx = Array.IndexOf(args, "--sandbox");
+        Assert.True(idx >= 0, "Expected --sandbox flag");
+        Assert.Equal("workspace-write", args[idx + 1]);
     }
 
     [Fact]
-    public void BuildArgumentList_OmitsFullAutoFlag_WhenDisabled()
+    public void BuildArgumentList_OmitsSandboxFlag_WhenFullAutoDisabledAndNoSandbox()
     {
         var executor = CreateExecutor(fullAuto: false);
         var args = executor.BuildArgumentList(CreateContext(), "/tmp/schema.json");
 
         Assert.DoesNotContain("--full-auto", args);
+        Assert.DoesNotContain("--sandbox", args);
     }
 
     [Fact]
@@ -101,6 +106,39 @@ public class CodexAgentExecutorTests
         var args = executor.BuildArgumentList(context, "/tmp/schema.json");
 
         Assert.DoesNotContain("--full-auto", args);
+        Assert.DoesNotContain("--sandbox", args);
+    }
+
+    [Fact]
+    public void BuildArgumentList_FullAutoViaProviderParams_EmitsWorkspaceWriteSandbox()
+    {
+        var executor = CreateExecutor(fullAuto: false);
+        var context = CreateContext(providerParams: new Dictionary<string, string>
+        {
+            ["fullAuto"] = "true"
+        });
+        var args = executor.BuildArgumentList(context, "/tmp/schema.json");
+
+        var idx = Array.IndexOf(args, "--sandbox");
+        Assert.True(idx >= 0, "Expected --sandbox flag");
+        Assert.Equal("workspace-write", args[idx + 1]);
+    }
+
+    [Fact]
+    public void BuildArgumentList_ExplicitSandboxWinsOverFullAuto_SingleSandboxFlag()
+    {
+        var executor = CreateExecutor(fullAuto: true);
+        var context = CreateContext(providerParams: new Dictionary<string, string>
+        {
+            ["fullAuto"] = "true",
+            ["sandbox"] = "read-only",
+        });
+        var args = executor.BuildArgumentList(context, "/tmp/schema.json");
+
+        Assert.DoesNotContain("--full-auto", args);
+        Assert.Equal(1, args.Count(a => a == "--sandbox"));
+        var idx = Array.IndexOf(args, "--sandbox");
+        Assert.Equal("read-only", args[idx + 1]);
     }
 
     [Fact]

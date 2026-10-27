@@ -35,3 +35,6 @@ worker/.env.*
 # Claude Code per-project state (settings.local.json, scheduled_tasks.lock,
 # worktrees/, etc.) — generated locally by the assistant; not source-of-truth.
 .claude/
+
+# Visual Studio per-user project settings
+*.user

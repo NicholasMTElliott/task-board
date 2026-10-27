@@ -500,6 +500,26 @@ public class CodexAgentExecutorDiagnosticsTests
     }
 
     [Fact]
+    public void BuildArgumentList_LogsFullAutoAsSandboxSource()
+    {
+        var logger = new CapturingLogger<CodexAgentExecutor>();
+        var executor = new CodexAgentExecutor(
+            Options.Create(new CodexCliLlmOptions { FullAuto = true }),
+            logger);
+
+        var context = new AgentExecutionContext(
+            TargetCardId: "1", TargetCardTitle: "T",
+            WorkspacePath: "/tmp", TaskPrompt: "p",
+            SystemPromptFilePath: "/tmp/s.md", Model: "codex-mini-latest");
+
+        executor.BuildArgumentList(context, "/tmp/schema.json");
+
+        Assert.Contains(logger.Messages,
+            m => m.Contains("sandbox=workspace-write (fullAuto/config)",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void BuildArgumentList_YoloWithConflictingFlags_WarnsAboutIneffectiveFlags()
     {
         var logger = new CapturingLogger<CodexAgentExecutor>();
