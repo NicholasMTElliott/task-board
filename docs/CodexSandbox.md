@@ -31,7 +31,7 @@ One-time, and whenever `docker/codex-sandbox/` changes:
 
 Build args (all optional):
 
-- `-BaseImage` (default: `node:22-slim`)
+- `-BaseImage` (default: `node:24-bookworm-slim`)
 - `-CodexCliVersion` (default: `latest`; pin a specific version like `0.125.0` for reproducibility)
 - `-AgentUid` / `-AgentGid` (default: `1000`)
 - `-Tag` (default: `latest`)

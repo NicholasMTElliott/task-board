@@ -58,7 +58,7 @@ services:
       context: ./docker/agent-sandbox
       dockerfile: Dockerfile
       args:
-        BASE_IMAGE: node:22-slim
+        BASE_IMAGE: node:24-bookworm-slim
         AGENT_UID: 1000
         AGENT_GID: 1000
         CLAUDE_CLI_VERSION: latest
@@ -74,7 +74,7 @@ services:
       context: ./docker/opencode-sandbox
       dockerfile: Dockerfile
       args:
-        BASE_IMAGE: node:22-slim
+        BASE_IMAGE: node:24-bookworm-slim
         AGENT_UID: 1000
         AGENT_GID: 1000
         OPENCODE_CLI_VERSION: latest
