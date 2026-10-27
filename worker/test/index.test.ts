@@ -31,13 +31,26 @@ const POSTGRES_IMAGE = "postgres:17";
 /**
  * All Flyway migrations (V<n>__name.sql) in version order. Sorted numerically,
  * as Flyway does, so V10 runs after V9 rather than after V1.
+ *
+ * Any other .sql file fails loudly: Flyway also accepts names such as
+ * V1_1__x.sql, V1.1__x.sql and R__x.sql, and silently skipping one here would
+ * test a schema that differs from the deployed one. Teach this loader the new
+ * form before adding such a file.
  */
-const listMigrations = (): string[] =>
-  readdirSync(MIGRATIONS_DIR)
-    .map(name => ({ name, match: /^V(\d+)__.+\.sql$/.exec(name) }))
-    .filter((m): m is { name: string; match: RegExpExecArray } => m.match !== null)
-    .sort((a, b) => Number(a.match[1]) - Number(b.match[1]))
+const listMigrations = (): string[] => {
+  const sqlFiles = readdirSync(MIGRATIONS_DIR).filter(name => /\.sql$/i.test(name));
+  const parsed = sqlFiles.map(name => ({ name, match: /^V(\d+)__.+\.sql$/.exec(name) }));
+  const unsupported = parsed.filter(m => m.match === null).map(m => m.name);
+  if (unsupported.length > 0) {
+    throw new Error(
+      `Unsupported migration file name(s) in ${MIGRATIONS_DIR}: ${unsupported.join(", ")}. ` +
+        "The test loader only understands V<integer>__<description>.sql."
+    );
+  }
+  return parsed
+    .sort((a, b) => Number(a.match![1]) - Number(b.match![1]))
     .map(m => m.name);
+};
 
 interface TestDatabase {
   container: StartedTestContainer;
