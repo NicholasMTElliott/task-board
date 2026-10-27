@@ -149,8 +149,8 @@ Both patterns above support per-step `providerParams` to override the executor's
 | `TimeoutSeconds` | `7200` | Hard wall-clock cap |
 | `InactivityTimeoutSeconds` | `1200` | "Stuck" detection threshold; null disables |
 | `Yolo` | `true` | Container is the sandbox, so default is permissive — see "Why yolo by default" below |
-| `FullAuto` | `false` | Only relevant when `Yolo=false` |
-| `Sandbox` | `null` | `read-only` / `workspace-write` / `danger-full-access` — only when `Yolo=false` |
+| `FullAuto` | `false` | Only relevant when `Yolo=false` and `Sandbox` is unset; passes `--sandbox workspace-write` (codex-cli removed the old `--full-auto` flag) |
+| `Sandbox` | `null` | `read-only` / `workspace-write` / `danger-full-access` — only when `Yolo=false`; wins over `FullAuto` |
 | `CredentialPath` | auto-detect `~/.codex` | Override if Codex auth lives elsewhere |
 | `CredentialMountPoint` | `/home/agent/.codex` | Container-side parent dir for per-file credential mounts (each top-level file is mounted RO at `{CredentialMountPoint}/{filename}`) |
 | `PerformanceVolumes` | `[]` | Workspace-relative dependency/cache directories to shadow with Docker named volumes. Good for `node_modules`, `.pnpm-store`, `.gradle`, `target`, `.godot/imported`. Do not use for source or commit-required artifacts. |

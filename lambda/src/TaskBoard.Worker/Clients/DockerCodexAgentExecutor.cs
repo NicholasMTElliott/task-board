@@ -511,11 +511,6 @@ public sealed class DockerCodexAgentExecutor(
             fullAutoSource = "config";
         }
 
-        if (!useYolo && useFullAuto)
-        {
-            args.Add("--full-auto");
-        }
-
         string? sandbox;
         string sandboxSource;
         if (context.ProviderParams is not null
@@ -528,6 +523,17 @@ public sealed class DockerCodexAgentExecutor(
         {
             sandbox = _options.Sandbox;
             sandboxSource = string.IsNullOrWhiteSpace(_options.Sandbox) ? "(none)" : "config";
+        }
+
+        // fullAuto keeps its name for config compatibility, but codex-cli deprecated the
+        // --full-auto flag (0.128 warns "use --sandbox workspace-write instead"; 0.156
+        // rejects it). In `codex exec` it only ever selected the workspace-write sandbox
+        // (exec forces approval_policy=never), so emit that directly. An explicit
+        // sandbox wins over the preset.
+        if (string.IsNullOrWhiteSpace(sandbox) && useFullAuto)
+        {
+            sandbox = "workspace-write";
+            sandboxSource = $"fullAuto/{fullAutoSource}";
         }
 
         if (!useYolo && !string.IsNullOrWhiteSpace(sandbox))
@@ -544,7 +550,7 @@ public sealed class DockerCodexAgentExecutor(
         if (useYolo && (useFullAuto || !string.IsNullOrWhiteSpace(sandbox)))
         {
             logger.LogWarning(
-                "Docker/Codex --yolo is enabled; --full-auto and --sandbox flags will be omitted. " +
+                "Docker/Codex --yolo is enabled; fullAuto and sandbox settings are ignored (no --sandbox flag is passed). " +
                 "Configured fullAuto={FullAuto}, sandbox={Sandbox} have no effect in yolo mode.",
                 useFullAuto, sandbox ?? "(unset)");
         }

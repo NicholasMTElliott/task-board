@@ -20,15 +20,18 @@ public sealed class CodexCliLlmOptions
     public int? InactivityTimeoutSeconds { get; set; } = 1200;
 
     /// <summary>
-    /// When true, passes --full-auto to codex exec (workspace-write sandbox, on-request approvals).
-    /// When false, codex runs in its default read-only mode.
+    /// When true and <see cref="Sandbox"/> is unset, passes <c>--sandbox workspace-write</c>
+    /// to codex exec. (The name predates codex-cli's removal of <c>--full-auto</c>, which
+    /// meant the same thing for <c>codex exec</c>.) When false, codex uses its default
+    /// sandbox (read-only unless <c>~/.codex/config.toml</c> says otherwise).
     /// </summary>
     public bool FullAuto { get; set; } = true;
 
     /// <summary>
     /// Sandbox policy passed to codex --sandbox.
     /// Valid values: "read-only", "workspace-write", "danger-full-access".
-    /// Null means use the codex default (or the --full-auto preset).
+    /// Takes precedence over <see cref="FullAuto"/>. Null means use the <see cref="FullAuto"/>
+    /// preset if enabled, otherwise the codex default.
     /// </summary>
     public string? Sandbox { get; set; }
 
