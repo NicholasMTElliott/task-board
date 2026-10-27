@@ -23,7 +23,7 @@
 ### Edge / Ingestion (Legacy Queue Path)
 | Layer | Technology | Notes |
 |-------|------------|-------|
-| Webhook receiver | Cloudflare Worker (TypeScript) | Cost-first prototype ingress |
+| Webhook receiver | Cloudflare Worker (TypeScript) | Cost-first prototype ingress. `worker/`: Node 24 (`.nvmrc`; engines >=22.22), TypeScript 6.0, `@neondatabase/serverless` 1.x (HTTP `neon()` is tagged-template only). CI job `worker`: `npm ci` → `tsc --noEmit` → vitest (testcontainers `postgres:17`, applies every `db/migrations/V*__*.sql` in version order) → `wrangler deploy --dry-run` |
 | Event queue | PGMQ on Neon Postgres | SQL-only install |
 | Compute | AWS Lambda | C#/.NET runtime |
 
