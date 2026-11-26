@@ -14,16 +14,16 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^1.2.0"
+    "@neondatabase/serverless": "^1.2.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260702.1",
     "@types/pg": "^8.23.1",
     "pg": "^8.23.1",
-    "testcontainers": "^12.2.1",
+    "testcontainers": "^12.2.2",
     "typescript": "~6.0.3",
     "vitest": "^4.1.12",
-    "wrangler": "~4.107.1"
+    "wrangler": "~4.166.0"
   },
   "overrides": {
     "miniflare": {
